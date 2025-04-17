@@ -1,0 +1,74 @@
+#pragma once
+
+//#include <cuda_runtime.h>
+//#include <thrust/device_vector.h>
+//#include <iostream>
+#include "DeviceVector.h"
+#include "DeviceObjectArray.h"
+#include "DofMapper_d.h"
+#include <Eigen/Core>
+
+__global__ inline
+void getDofsSizeKernel(int* d_size, DeviceObjectArray<DofMapper_d>* d_mappers)
+{ 
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < d_mappers->size())
+    {
+        //printf("getDofsSizeKernel: %d\n", idx);
+        //(*d_mappers)[idx].getDofs().print();
+        d_size[idx] = (*d_mappers)[idx].getDofs().size();
+        //printf("getDofsSizeKernel: %d, %d\n", idx, d_size[idx]);
+    }
+}
+
+__global__ inline
+void getDofsKernel(int index, int size, int* d_dofs, 
+                   DeviceObjectArray<DofMapper_d>* d_mappers)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size) 
+        d_dofs[idx] = (*d_mappers)[index].getDofs().data()[idx];
+}
+
+class SparseSystem
+{
+private:
+    DeviceObjectArray<DofMapper_d> m_mappers;
+    
+    DeviceMatrix<double> m_matrix;
+    DeviceVector<double> m_RHS;
+
+    DeviceVector<int> m_row;
+    DeviceVector<int> m_col;
+    DeviceVector<int> m_rstr;
+    DeviceVector<int> m_cstr;
+    DeviceVector<int> m_cvar;
+    DeviceVector<int> m_dims;
+
+public:
+    __host__ __device__
+    SparseSystem() = default;
+
+    __host__
+    SparseSystem(const std::vector<DofMapper>& mappers, 
+                 const Eigen::VectorXi& dims);
+
+    __device__
+    DeviceVector<int> mapColIndices(const DeviceVector<int>& actives,
+                                    const int patchIndex,
+                                    const int c = 0) const
+    { return m_mappers[m_col(c)].getGlobalIndices(actives, patchIndex); }
+    
+
+    __device__
+    const DofMapper_d& colMapper(int c) const { return m_mappers[m_col[c]]; }
+
+    #if 0
+    __host__
+    const DofMapper_d& colMapper_h(int c) const;
+    #endif
+
+    __host__
+    DeviceObjectArray<int> getDofs(int c) const;
+    
+};

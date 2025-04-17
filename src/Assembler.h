@@ -1,0 +1,52 @@
+#pragma once
+
+#include "MultiPatch.h"
+#include "MultiPatchData.h"
+#include "MultiBasis.h"
+#include "BoundaryCondition.h"
+//#include "DeviceVector.h"
+#include "SparseSystem.h"
+
+class Assembler
+{
+public:
+    Assembler(const MultiPatch& multiPatch, const MultiBasis& multiBasis, 
+              const BoundaryConditions& bc);
+    ~Assembler()=default;
+
+    int getNumPatches() const;
+
+    void assemble();
+    void assembleNeumannBCs();
+
+    void computeDirichletDofs(int unk_, const std::vector<DofMapper> &mappers);
+
+    int getBoundaryData_Neumann(thrust::device_vector<int>& sizes, 
+                                thrust::device_vector<int>& starts,
+                                thrust::device_vector<int> &PatchIdxs,
+                                thrust::device_vector<int> &sides,
+                                thrust::device_vector<double> &values) const;
+
+private:
+    //MultiPatchData m_multiPatchData;
+    MultiPatch m_multiPatch;
+    MultiBasis m_multiBasis;
+    //std::vector<DofMapper> m_dofMappers;
+    BoundaryConditions m_boundaryConditions;
+    std::vector<std::vector<int>> m_ddof;
+    SparseSystem m_sparseSystem;
+
+#if 0
+    thrust::device_vector<double> m_matrix;
+    int m_matRows;
+    int m_matCols;
+    thrust::device_vector<double> m_RHS;
+
+    thrust::device_vector<int> m_row;
+    thrust::device_vector<int> m_col;
+    thrust::device_vector<int> m_rstr;
+    thrust::device_vector<int> m_cstr;
+    thrust::device_vector<int> m_cvar;
+    thrust::device_vector<int> m_dims;
+#endif
+};
