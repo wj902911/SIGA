@@ -401,7 +401,7 @@ public:
     }
 
     __device__
-    int upperBound(int direction, double value)
+    int upperBound(int direction, double value) const
     {
         return m_knotVectors[direction].upperBound(value);
     }
@@ -491,6 +491,155 @@ public:
                 }
             }
         }
+    }
+
+    __device__
+    //void evalAllDers_into(int dir, double u, int n, 
+    //                      DeviceObjectArray<DeviceVector<double>>& result) const
+    DeviceObjectArray<DeviceVector<double>> 
+    evalAllDers_into(int dir, double u, int n) const
+    {
+        int p = m_knotVectors[dir].getOrder();
+        int p1 = p + 1;
+        DeviceObjectArray<double> ndu(p1 * p1);
+        DeviceObjectArray<double> left(p1);
+        DeviceObjectArray<double> right(p1);
+        DeviceObjectArray<double> a(2 * p1);
+        //result.resize(n+1);
+        //printf("1111\n");
+        DeviceObjectArray<DeviceVector<double>> result(n+1);
+        for(int k=0; k<=n; k++)
+            result[k].resize(p1);
+        
+        if (!m_knotVectors[dir].inDomain(u))
+        {
+            for(int k=0; k<=n; k++)
+                result[k].setZero();
+            return;
+        }
+        int span = upperBound(dir, u) - 1;
+        ndu[0] = 1.0;
+        for (int j = 1; j <= p; ++j)
+        {
+            left[j] = u - m_knotVectors[dir][span + 1 - j];
+            right[j] = m_knotVectors[dir][span + j] - u;
+            double saved = 0.0;
+            for (int r = 0; r < j; ++r) {
+                ndu[j * p1 + r] = right[r + 1] + left[j - r];
+                double temp = ndu[r * p1 + j - 1] / ndu[j * p1 + r];
+                ndu[r * p1 + j] = saved + right[r + 1] * temp;
+                saved = left[j - r] * temp;
+            }
+            ndu[j * p1 + j] = saved;
+        }
+
+        for(int j = 0; j <= p; j++)
+            result[0](j) = ndu[j * p1 + p];
+
+        for (int r = 0; r <= p; r++)
+        {
+            double* a1 = &a[0];
+            double* a2 = &a[p1];
+
+            a1[0] = 1.0;
+
+            for(int k = 1; k <= n; k++)
+            {
+                int rk,pk,j1,j2 ;
+                double der(0);
+                rk = r-k ; pk = p-k ;
+                if(r >= k)
+                {
+                    a2[0] = a1[0] / ndu[ (pk+1)*p1 + rk] ;
+                    der = a2[0] * ndu[rk*p1 + pk] ;
+                }
+                j1 = ( rk >= -1  ? 1   : -rk   );
+                j2 = ( r-1 <= pk ? k-1 : p - r );
+                for(int j = j1; j <= j2; j++)
+                {
+                    a2[j] = (a1[j] - a1[j-1]) / ndu[ (pk+1)*p1 + rk+j ] ;
+                    der += a2[j] * ndu[ (rk+j)*p1 + pk ] ;
+                }
+
+                if(r <= pk)
+                {
+                    a2[k] = -a1[k-1] / ndu[ (pk+1)*p1 + r ] ;
+                    der += a2[k] * ndu[ r*p1 + pk ] ;
+                }
+                result[k](r) = der;
+                double* temp = a1;
+                a1 = a2;
+                a2 = temp;
+            }
+        }
+
+        int r = p;
+        for(int k=1; k<=n; k++)
+        {
+            result[k] = result[k] * double(r);
+            r *= p - k;
+        }
+
+        return result;
+    }
+
+    __device__
+    void evalAllDers_into(const DeviceVector<double>& u, int n, 
+                          DeviceObjectArray<DeviceVector<double>>& result) const
+    {
+        //DeviceObjectArray<DeviceVector<double>>* values = 
+        //new DeviceObjectArray<DeviceVector<double>>[m_dim];
+        //DeviceObjectArray<DeviceVector<double>> values[3];
+        DeviceObjectArray<DeviceObjectArray<DeviceVector<double>>> values(m_dim);
+        DeviceVector<int> v(m_dim), nb_cwise(m_dim);
+        result.resize(n+1);
+        int nb = 1;
+        for(int i = 0; i < m_dim; i++)
+        {
+            //evalAllDers_into(i, u(i), n, values[i]);
+            //printf("evalAllDers_into: %d, %f\n", i, u(i));
+            values[i] = evalAllDers_into(i, u(i), n);
+            const int num_i = values[i][0].size();
+            nb_cwise(i) = num_i;
+            nb *= num_i;
+        }
+        //values[0][0].print();
+        v.setZero();
+        result[0].resize(nb);
+        int r = 0;
+        do
+        {
+            result[0](r) = values[0][0](v(0));
+            for ( int i=1; i!=m_dim; ++i)
+                result[0](r) *= values[i][0](v(i));
+            r++;
+        } while (nextLexicographic_d(v, nb_cwise));
+
+        if ( n>=1)
+        {
+            result[1].resize(m_dim*nb);
+            v.setZero();
+            r = 0;
+            do
+            {
+                for ( int k=0; k<m_dim; ++k)
+                {
+                    result[1](r) = values[k][1](v(k));
+                    for ( int i=0; i<k; ++i)
+                        result[1](r) *= values[i][0](v(i));
+                    for ( int i=k+1; i<m_dim; ++i)
+                        result[1](r) *= values[i][0](v(i));
+                    r++;
+                }
+            } while (nextLexicographic_d(v, nb_cwise));
+        }
+
+        if (n>1)
+        {
+
+        }
+
+        //delete[] values;
     }
 
     __device__

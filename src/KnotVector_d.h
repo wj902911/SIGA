@@ -105,7 +105,7 @@ public:
     int getNumControlPoints() const { return m_knots.size() - m_order - 1; }
 
     __device__
-    int upperBound(double value)
+    int upperBound(double value) const
     {
         int low = m_order - 1;
         int high = m_knots.size();;
@@ -129,6 +129,38 @@ public:
 
     __host__ __device__
     int getNumKnots() const { return m_knots.size(); }
+
+    __device__
+    double domainBegin() const { return m_knots[m_order]; }
+    
+    __device__
+    double domainEnd() const { return m_knots[m_knots.size() - m_order - 1]; }
+
+    __device__
+    bool inDomain(double u) const
+    { return u >= domainBegin() && u <= domainEnd(); }
+
+    __device__
+	const double& operator[](int i) const
+    {
+        if (i < 0 || i >= m_knots.size())
+        {
+            printf("Error: KnotVector_d::operator[] - index out of range.\n");
+            return m_knots[0];
+        }
+        return m_knots[i];
+    }
+
+    __device__
+    void print() const
+    {
+        printf("KnotVector_d: order = %d, knots = ", m_order);
+        for (int i = 0; i < m_knots.size(); ++i)
+        {
+            printf("%f ", m_knots[i]);
+        }
+        printf("\n");
+    }
 
 private:
     int m_order = 0;

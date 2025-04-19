@@ -37,6 +37,13 @@ public:
     {
     }
 
+    // copy constructor
+    __host__ __device__
+    DeviceVector(const DeviceVector& other)
+        : DeviceMatrix<T>(other.rows(), 1, other.data())
+    {
+    }
+
     template <typename Derived>
     __host__ __device__
     DeviceVector(const DeviceMatrixBase<Derived, T>& m)

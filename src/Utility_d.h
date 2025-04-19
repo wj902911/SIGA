@@ -2,6 +2,7 @@
 
 #include <cuda_runtime.h>
 #include <thrust/device_vector.h>
+//#include <DeviceVector.h>
 //#include "Matrix.h"
 
 __host__ __device__
@@ -58,6 +59,28 @@ inline bool nextLexicographic(int dim, int* cur, int* start, int* end)
     }
     printf("Error: nextLexicographic\n");
     return false;
+}
+
+template<class Vec>
+__device__
+bool nextLexicographic_d(Vec& cur, const Vec& size)
+{
+    const int d = cur.size();
+    assert(d == size.size() && "cur and size must have the same size.");
+
+    for (int i = 0; i < d; i++)
+    {
+        if (++cur(i) == size(i))
+        {
+            if (i == d - 1)
+                return false;
+            else
+                cur(i) = 0;
+        }
+        else
+            return true;
+    }
+    printf("Error: nextLexicographic\n");
 }
 
 // A templated helper function to print an element with the correct format.

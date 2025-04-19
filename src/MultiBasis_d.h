@@ -117,15 +117,11 @@ public:
 
     __device__
     DeviceVector<double> lowerElementSupport(int patch, int idx) const
-    {
-        return m_bases[patch].lowerElementSupport(idx);
-    }
+    { return m_bases[patch].lowerElementSupport(idx); }
 
     __device__
     DeviceVector<double> upperElementSupport(int patch, int idx) const
-    {
-        return m_bases[patch].upperElementSupport(idx);
-    }
+    { return m_bases[patch].upperElementSupport(idx); }
 
     __device__
     void elementSupport(int idx, DeviceVector<double>& lower, 
@@ -139,9 +135,7 @@ public:
     __device__
     double gsPoint(int idx, int patch, const GaussPoints_d& gps,
                       DeviceVector<double>& result) const
-    {
-        return m_bases[patch].gsPoint(idx, gps, result);
-    }
+    { return m_bases[patch].gsPoint(idx, gps, result); }
 
     __device__
     double gsPoint(int idx, const DeviceObjectArray<GaussPoints_d>& gps,
@@ -151,6 +145,18 @@ public:
         int point_idx = threadPatch(idx, patch);
         return gsPoint(point_idx, patch, gps[patch], result);
     }
+
+    __device__
+    //void evalAllDers_into(int patch, int dir, double u, int n, 
+                          //DeviceObjectArray<DeviceVector<double>>& result) const
+    DeviceObjectArray<DeviceVector<double>> 
+    evalAllDers_into(int patch, int dir, double u, int n) const
+    { return m_bases[patch].evalAllDers_into(dir, u, n); }
+
+    __device__
+    void evalAllDers_into(int patch, const DeviceVector<double>& u, int n, 
+                          DeviceObjectArray<DeviceVector<double>>& result) const
+    { m_bases[patch].evalAllDers_into(u, n, result); }
 
 #if 0
     __device__

@@ -210,11 +210,17 @@ void assembleDomain(int totalGPs, MultiBasis_d* bases, MultiPatch_d* patches,
     for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
         idx < totalGPs; idx += blockDim.x * gridDim.x)
     {
+        int patch(0);
+        int point_idx = bases->threadPatch(idx, patch);
         DeviceVector<double> pt;
-        double wt = bases->gsPoint(idx,*gaussPoints,pt);
-        printf("Gauss point %d:\n", idx);
-        pt.print();
-        printf("Weight: %f\n", wt);
+        double wt = bases->gsPoint(point_idx, patch, (*gaussPoints)[patch], pt);
+        DeviceObjectArray<DeviceVector<double>> values;
+        bases->evalAllDers_into(patch, pt, 1, values);
+        printf("patch %d, point %d:\n", patch, point_idx);
+        printf("values:\n");
+        values[0].print();
+        printf("derivative:\n");
+        values[1].print();
     }
 }
 
