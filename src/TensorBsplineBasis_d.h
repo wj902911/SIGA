@@ -584,6 +584,48 @@ public:
     }
 
     __device__
+    void deriv2_tp(const DeviceObjectArray<DeviceObjectArray<DeviceVector<double>>>& values,
+    const DeviceVector<int>& nb_cwise, DeviceVector<double>& result) const
+    {
+        const unsigned nb = nb_cwise.prod();
+        const unsigned stride = m_dim + m_dim*(m_dim-1)/2;
+
+        result.resize(stride*nb);
+
+        DeviceVector<int> v(m_dim);
+        v.setZero();
+        unsigned r = 0;
+        do
+        {
+            unsigned m = m_dim;
+            for ( int k=0; k<m_dim; ++k)
+            {
+                int cur = r + k;
+                result(cur) = values[k][2](v(k));
+                for ( int i=0; i<k; ++i)
+                    result(cur) *= values[i][0](v(i));
+                for ( int i=k+1; i<m_dim; ++i)
+                    result(cur) *= values[i][0](v(i));
+                for ( int l=k+1; l<m_dim; ++l)
+                {
+                    cur = r + m;
+                    result(cur) = values[k][1](v(k)) * values[l][1](v(l));
+                    for ( int i=0; i<k; ++i)
+                        result(cur) *= values[i][0](v(i));
+                    for ( int i=k+1; i<l; ++i)
+                        result(cur) *= values[i][0](v(i));
+                    for ( int i=l+1; i<m_dim; ++i)
+                        result(cur) *= values[i][0](v(i));
+                    m++;
+                }
+            }
+
+            r+= stride;
+        } while (nextLexicographic_d(v, nb_cwise));
+        
+    }
+
+    __device__
     void evalAllDers_into(const DeviceVector<double>& u, int n, 
                           DeviceObjectArray<DeviceVector<double>>& result) const
     {
@@ -636,10 +678,23 @@ public:
 
         if (n>1)
         {
+            deriv2_tp( values, nb_cwise, result[2] );
+            DeviceVector<int> cc(m_dim);
+            for (int i = 3; i <=n; ++i)
+            {
+                result[i].resize( nb*numCompositions(i, m_dim) );
+                v.setZero();
 
+                r = 0;
+                do
+                {
+                    result[i](r) = values[0][cc[0]](v(0));
+                    for (int k = 1; k!=m_dim; ++k)
+                        result[i](r) = values[k][cc[k]](v(k));
+                    ++r;
+                } while (nextLexicographic_d(v, nb_cwise));
+            }
         }
-
-        //delete[] values;
     }
 
     __device__
