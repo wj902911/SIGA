@@ -147,11 +147,15 @@ public:
     }
 
     __device__
-    //void evalAllDers_into(int patch, int dir, double u, int n, 
-                          //DeviceObjectArray<DeviceVector<double>>& result) const
+#if 1
+    void evalAllDers_into(int patch, int dir, double u, int n, 
+                          DeviceObjectArray<DeviceVector<double>>& result) const
+    { m_bases[patch].evalAllDers_into(dir, u, n, result); }
+#else
     DeviceObjectArray<DeviceVector<double>> 
     evalAllDers_into(int patch, int dir, double u, int n) const
     { return m_bases[patch].evalAllDers_into(dir, u, n); }
+#endif
 
     __device__
     void evalAllDers_into(int patch, const DeviceVector<double>& u, int n, 

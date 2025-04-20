@@ -972,6 +972,26 @@ class Row : public Block
         DeviceMatrixBase<DeviceMatrix<T>, T>::setZero();
     }
 
+    __device__
+    T prod() const
+    {
+        T prod = 1;
+        for (int i = 0; i < m_rows; i++)
+            for (int j = 0; j < m_cols; j++)
+                prod *= (*this)(i, j);
+        return prod;
+    }
+
+    __device__
+    T sum() const
+    {
+        T sum = 0;
+        for (int i = 0; i < m_rows; i++)
+            for (int j = 0; j < m_cols; j++)
+                sum += (*this)(i, j);
+        return sum;
+    }
+
 private:
     int m_rows = 0;
     int m_cols = 0;

@@ -764,6 +764,11 @@ void Assembler::assemble()
     cudaMemcpy(d_gaussPoints, &gaussPoints, sizeof(DeviceObjectArray<GaussPoints_d>), 
                cudaMemcpyHostToDevice);
 
+    //size_t curr, limit;
+    //cudaDeviceGetLimit(&limit, cudaLimitStackSize);
+    //printf("StackSize limit = %zu bytes\n", limit);
+    cudaDeviceSetLimit(cudaLimitStackSize, 2*1024);
+
     assembleDomain<<<1, 1>>>(totalGPs, d_bases, d_patches, d_gaussPoints);
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess)

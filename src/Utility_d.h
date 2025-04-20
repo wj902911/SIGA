@@ -62,7 +62,7 @@ inline bool nextLexicographic(int dim, int* cur, int* start, int* end)
 }
 
 template<class Vec>
-__device__
+__device__ inline
 bool nextLexicographic_d(Vec& cur, const Vec& size)
 {
     const int d = cur.size();
@@ -81,6 +81,64 @@ bool nextLexicographic_d(Vec& cur, const Vec& size)
             return true;
     }
     printf("Error: nextLexicographic\n");
+}
+
+template <typename T>
+__host__ __device__ 
+inline T min(T a, T b) 
+{ return (a < b) ? a : b; }
+
+template <typename Z>
+__device__
+inline Z binomial(const Z n, const Z r)
+{
+    assert(r>=0);
+    const Z diff = min(n - r, r);
+    int result = 1;
+    for (Z i=0;i < diff;)
+    {
+        result *= n-i;
+        result /= ++i;
+    }
+    return result;
+}
+
+__device__
+inline unsigned numCompositions(int sum, int dim)
+{
+    return binomial(sum+dim-1,dim-1);
+}
+
+template<class Vec>
+__device__
+void firstComposition(int sum, int dim, Vec& res)
+{
+    res.resize(dim);
+    res.setZero();
+    res(0) = sum;
+}
+
+template<class Vec>
+__device__
+inline bool nextComposition(Vec & v)
+{
+    const int k = v.size() - 1;
+
+    if (v(k) != v.sum())
+    {
+        for (int i = 0; i <= k; ++i)
+        {
+            if ( v(i)!=0 )
+            {
+                const int t = v(i);
+                v(i) = 0;
+                v(0) = t - 1;
+                v(i+1) += 1;
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 // A templated helper function to print an element with the correct format.

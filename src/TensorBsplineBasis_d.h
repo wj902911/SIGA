@@ -494,10 +494,10 @@ public:
     }
 
     __device__
-    //void evalAllDers_into(int dir, double u, int n, 
-    //                      DeviceObjectArray<DeviceVector<double>>& result) const
-    DeviceObjectArray<DeviceVector<double>> 
-    evalAllDers_into(int dir, double u, int n) const
+    void evalAllDers_into(int dir, double u, int n, 
+                          DeviceObjectArray<DeviceVector<double>>& result) const
+    //DeviceObjectArray<DeviceVector<double>> 
+    //evalAllDers_into(int dir, double u, int n) const
     {
         int p = m_knotVectors[dir].getOrder();
         int p1 = p + 1;
@@ -505,9 +505,9 @@ public:
         DeviceObjectArray<double> left(p1);
         DeviceObjectArray<double> right(p1);
         DeviceObjectArray<double> a(2 * p1);
-        //result.resize(n+1);
+        result.resize(n+1);
         //printf("1111\n");
-        DeviceObjectArray<DeviceVector<double>> result(n+1);
+        //DeviceObjectArray<DeviceVector<double>> result(n+1);
         for(int k=0; k<=n; k++)
             result[k].resize(p1);
         
@@ -580,11 +580,11 @@ public:
             r *= p - k;
         }
 
-        return result;
+        //return result;
     }
 
     __device__
-    void deriv2_tp(const DeviceObjectArray<DeviceObjectArray<DeviceVector<double>>>& values,
+    void deriv2_tp(const DeviceObjectArray<DeviceVector<double>> values[],
     const DeviceVector<int>& nb_cwise, DeviceVector<double>& result) const
     {
         const unsigned nb = nb_cwise.prod();
@@ -638,9 +638,9 @@ public:
         int nb = 1;
         for(int i = 0; i < m_dim; i++)
         {
-            //evalAllDers_into(i, u(i), n, values[i]);
+            evalAllDers_into(i, u(i), n, values[i]);
             //printf("evalAllDers_into: %d, %f\n", i, u(i));
-            values[i] = evalAllDers_into(i, u(i), n);
+            //values[i] = evalAllDers_into(i, u(i), n);
             const int num_i = values[i][0].size();
             nb_cwise(i) = num_i;
             nb *= num_i;
@@ -678,20 +678,24 @@ public:
 
         if (n>1)
         {
-            deriv2_tp( values, nb_cwise, result[2] );
+            deriv2_tp( values.data(), nb_cwise, result[2] );
             DeviceVector<int> cc(m_dim);
             for (int i = 3; i <=n; ++i)
             {
                 result[i].resize( nb*numCompositions(i, m_dim) );
                 v.setZero();
-
+            
                 r = 0;
                 do
                 {
-                    result[i](r) = values[0][cc[0]](v(0));
-                    for (int k = 1; k!=m_dim; ++k)
-                        result[i](r) = values[k][cc[k]](v(k));
-                    ++r;
+                    firstComposition(i, m_dim, cc);
+                    do
+                    {
+                        result[i](r) = values[0][cc(0)](v(0));
+                        for (int k = 1; k!=m_dim; ++k)
+                            result[i](r) = values[k][cc(k)](v(k));
+                        ++r;
+                    } while (nextComposition(cc));
                 } while (nextLexicographic_d(v, nb_cwise));
             }
         }

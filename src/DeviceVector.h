@@ -143,6 +143,24 @@ public:
     {
         DeviceMatrix<T>::setZero(size, 1);
     }
+
+    __device__
+    T prod() const
+    {
+        T prod = 1;
+        for (int i = 0; i < size(); i++)
+            prod *= this->operator()(i);
+        return prod;
+    }
+
+    __device__
+    T sum() const
+    {
+        T sum = 0;
+        for (int i = 0; i < size(); i++)
+            sum += this->operator()(i);
+        return sum;
+    }
 };
 
 template <typename T>
