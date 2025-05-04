@@ -167,14 +167,8 @@ DeviceVector<double> outerNormal(DeviceMatrix<double> firstGrads, BoxSide_d s)
 }
 
 __device__
-void tensorGrid_device(
-    int idx, 
-    int* vecs_sizes, 
-    int dim, 
-    int num_patch, 
-    int& patch, 
-    int* pt_coords,
-    int* starts = nullptr)
+void tensorGrid_device(int idx, int* vecs_sizes, int dim, int num_patch, 
+                       int& patch, int* pt_coords, int* starts = nullptr)
 {
 	int point_idx = idx;
 
@@ -221,6 +215,33 @@ void assembleDomain(int totalGPs, MultiBasis_d* bases, MultiPatch_d* patches,
         values[0].print();
         printf("derivative:\n");
         values[1].print();
+    }
+}
+
+__global__
+void constructSolutionKernel(const DeviceVector<double>* solVector,
+                             const DeviceObjectArray<DeviceVector<int>>* fixedDoFs,
+                             const MultiBasis_d* bases, const SparseSystem* system,
+                             MultiPatch_d* result, const DeviceVector<int>* unknowns)
+{
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
+        idx < solVector->size(); idx += blockDim.x * gridDim.x)
+    {
+        int patch(0);
+        int point_idx = bases->threadPatch_dof(idx, patch);
+        DeviceObjectArray<int> dofCoords = bases->dofCoords(point_idx, patch);
+        int index(0);
+        if (system->colMapper(dofCoords[0]).is_free(dofCoords[1], patch))
+        {
+            index = system->mapToGlobalColIndex(dofCoords[1], patch, dofCoords[0]);
+            result->setCoefficients(patch, dofCoords[1], dofCoords[0], (*solVector)(index));
+        }
+        else
+        {
+            index = system->colMapper(dofCoords[0]).bindex(dofCoords[1], patch);
+            result->setCoefficients(patch, dofCoords[0], dofCoords[1], 
+                                    (*fixedDoFs)[dofCoords[0]](index));
+        }
     }
 }
 
@@ -709,6 +730,11 @@ int Assembler::getNumPatches() const
     return m_multiPatch.getNumPatches();
 }
 
+int Assembler::numDofs() const
+{
+    return m_sparseSystem.numDofs();
+}
+
 __global__
 void gaussPointsTest(GaussPoints_d* gspts)
 {
@@ -716,7 +742,7 @@ void gaussPointsTest(GaussPoints_d* gspts)
     gspts->gaussPointsOnDir(1).print();
 }
 
-void Assembler::assemble()
+void Assembler::assemble(DeviceVector<double> solVector)
 {
     int totalGPs = m_multiBasis.totalNumGPs();
 

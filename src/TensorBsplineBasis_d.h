@@ -856,6 +856,20 @@ public:
     }
 
     __device__
+    int numCPsInDir(int d) const { return m_knotVectors[d].getNumControlPoints(); }
+
+    __device__
+    int numCPs() const
+    {
+        int numCPs = 1;
+
+        for (int d = 0; d < m_dim; d++)
+            numCPs *= numCPsInDir(d);
+
+        return numCPs;
+    }
+
+    __device__
     int getNumActiveControlPoints()
     {
         int numAct = 1;
@@ -1064,6 +1078,16 @@ public:
         KnotVector_d knotVector(order, size, data);
         delete[] data;
         return knotVector;
+    }
+
+    __device__ 
+    DeviceObjectArray<int> dofCoords(int idx) const
+    {
+        DeviceObjectArray<int> coords(2);
+        coords[0] = idx % numCPs();
+        idx /= numCPs();
+        coords[1] = idx;
+        return coords;
     }
 
     __device__

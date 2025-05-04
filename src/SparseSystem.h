@@ -58,10 +58,14 @@ public:
                                     const int patchIndex,
                                     const int c = 0) const
     { return m_mappers[m_col(c)].getGlobalIndices(actives, patchIndex); }
+
+    __device__
+    int mapToGlobalColIndex(int active, int patchIndex, int c = 0) const
+    { return m_mappers[m_col(c)].index(active, patchIndex) + m_cstr(c); }
     
 
     __device__
-    const DofMapper_d& colMapper(int c) const { return m_mappers[m_col[c]]; }
+    const DofMapper_d& colMapper(int c) const { return m_mappers[m_col(c)]; }
 
     #if 0
     __host__
@@ -70,5 +74,11 @@ public:
 
     __host__
     DeviceObjectArray<int> getDofs(int c) const;
+
+    __host__
+    int numColBlocks() const {return m_col.size();}
+
+    __host__
+    int numDofs() const { return m_RHS.size(); }
     
 };

@@ -107,6 +107,10 @@ public:
     }
 
     __device__
+    void setCoefficients(int row, int col, double value)
+    { m_controlPoints(row, col) = value; }
+
+    __device__
     int getCPDim() const
     {
         return m_controlPoints.cols();

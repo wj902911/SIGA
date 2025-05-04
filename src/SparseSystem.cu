@@ -143,6 +143,7 @@ const DofMapper_d &SparseSystem::colMapper_h(int c) const
 }
 #endif
 
+
 __host__ 
 DeviceObjectArray<int> SparseSystem::getDofs(int c) const
 { 

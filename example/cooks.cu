@@ -548,7 +548,9 @@ int main()
 	std::cout << std::endl;
 #endif
 	Assembler assembler(multiPatch, bases, bcInfo);
-	assembler.assemble();
+	DeviceVector<double> solution(assembler.numDofs());
+	solution.setZero();
+	assembler.assemble(solution);
 #endif
 #if 0
 	thrust::device_vector<int> dofs_u{ 2,0,3,1 };

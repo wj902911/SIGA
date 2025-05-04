@@ -15,8 +15,9 @@ public:
     ~Assembler()=default;
 
     int getNumPatches() const;
+    int numDofs() const;
 
-    void assemble();
+    void assemble(DeviceVector<double> solVector);
     void assembleNeumannBCs();
 
     void computeDirichletDofs(int unk_, const std::vector<DofMapper> &mappers);

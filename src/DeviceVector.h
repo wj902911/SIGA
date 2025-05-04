@@ -62,7 +62,7 @@ public:
     }
 
 
-    __device__
+    __host__ __device__
     int size() const
     {
         return this->rows();

@@ -100,6 +100,29 @@ public:
     }
 
     __device__
+    int threadPatch_dof(int idx, int& patch) const
+    {
+        int dim = getDim();
+        int point_idx = idx;
+        for (int i = 0; i < m_bases.size(); i++)
+        {
+            int patch_points = m_bases[i].numCPs();
+            if (point_idx < patch_points) 
+            {
+            	patch = i;
+            	break;
+            }
+            point_idx -= patch_points;
+        }
+
+        return point_idx;
+    }
+    
+    __device__
+    DeviceObjectArray<int> dofCoords(int point_idx, int patch) const
+    { return m_bases[patch].dofCoords(point_idx); }
+
+    __device__
     DeviceObjectArray<int> ptCoords(int idx) const
     {
         int patch = 0;

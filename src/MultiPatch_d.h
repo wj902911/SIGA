@@ -35,27 +35,23 @@ public:
 
     __device__
     int getBasisDim() const
-    {
-        return m_patches[0].getDim();
-    }
+    { return m_patches[0].getDim(); }
 
     __device__
     int getCPDim() const
-    {
-        return m_patches[0].getCPDim();
-    }
+    { return m_patches[0].getCPDim(); }
 
     __device__
     int getNumPatches() const
-    {
-        return m_patches.size();
-    }
+    { return m_patches.size(); }
 
     __device__
     const Patch_d& patch(int patchIndex) const
-    {
-        return m_patches[patchIndex];
-    }
+    { return m_patches[patchIndex]; }
+
+    __device__
+    void setCoefficients(int patchIndex, int row, int col, double value)
+    { m_patches[patchIndex].setCoefficients(row, col, value); }
 
 #if 0
     __device__
