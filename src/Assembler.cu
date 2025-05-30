@@ -198,18 +198,19 @@ void tensorGrid_device(int idx, int* vecs_sizes, int dim, int num_patch,
 }
 
 __global__
-void assembleDomain(int totalGPs, MultiBasis_d* bases, MultiPatch_d* patches,
+void assembleDomain(int totalGPs, MultiPatch_d* displacement, MultiPatch_d* patches,
                     DeviceObjectArray<GaussPoints_d>* gaussPoints)
 {
+    //MultiBasis_d bases(*displacement);
     for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
         idx < totalGPs; idx += blockDim.x * gridDim.x)
     {
         int patch(0);
-        int point_idx = bases->threadPatch(idx, patch);
+        int point_idx = displacement->threadPatch(idx, patch);
         DeviceVector<double> pt;
-        double wt = bases->gsPoint(point_idx, patch, (*gaussPoints)[patch], pt);
+        double wt = displacement->gsPoint(point_idx, patch, (*gaussPoints)[patch], pt);
         DeviceObjectArray<DeviceVector<double>> values;
-        bases->evalAllDers_into(patch, pt, 1, values);
+        displacement->evalAllDers_into(patch, pt, 1, values);
         printf("patch %d, point %d:\n", patch, point_idx);
         printf("values:\n");
         values[0].print();
@@ -222,7 +223,7 @@ __global__
 void constructSolutionKernel(const DeviceVector<double>* solVector,
                              const DeviceObjectArray<DeviceVector<int>>* fixedDoFs,
                              const MultiBasis_d* bases, const SparseSystem* system,
-                             MultiPatch_d* result, const DeviceVector<int>* unknowns)
+                             MultiPatch_d* result)
 {
     for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
         idx < solVector->size(); idx += blockDim.x * gridDim.x)
@@ -243,6 +244,10 @@ void constructSolutionKernel(const DeviceVector<double>* solVector,
                                     (*fixedDoFs)[dofCoords[0]](index));
         }
     }
+    printf("Patch 0 control points:\n");
+    result->patch(0).controlPoints().print();
+    printf("Patch 1 control points:\n");
+    result->patch(1).controlPoints().print();
 }
 
 #if 0
@@ -742,19 +747,55 @@ void gaussPointsTest(GaussPoints_d* gspts)
     gspts->gaussPointsOnDir(1).print();
 }
 
-void Assembler::assemble(DeviceVector<double> solVector)
+void Assembler::assemble(const DeviceVector<double>& solVector)
 {
-    int totalGPs = m_multiBasis.totalNumGPs();
+    MultiPatch displacement;
+    int geoDim = m_multiPatch.getCPDim();
+    for (int i = 0; i < m_multiPatch.getNumPatches(); ++i) 
+    {
+        displacement.addPatch(Patch(m_multiBasis.basis(i), geoDim));
+    }
+    MultiPatch_d displacement_d(displacement);
+    MultiPatch_d* d_displacement = nullptr;
+    cudaMalloc((void**)&d_displacement, sizeof(MultiPatch_d));
+    cudaMemcpy(d_displacement, &displacement_d, sizeof(MultiPatch_d), 
+               cudaMemcpyHostToDevice);
 
+    DeviceVector<double>* d_solVector = nullptr;
+    cudaMalloc((void**)&d_solVector, sizeof(DeviceVector<double>));
+    cudaMemcpy(d_solVector, &solVector, sizeof(DeviceVector<double>), 
+               cudaMemcpyHostToDevice);
+
+    DeviceObjectArray<DeviceVector<int>>* d_fixedDoFs = nullptr;
+    cudaMalloc((void**)&d_fixedDoFs, sizeof(DeviceObjectArray<DeviceVector<int>>));
+    cudaMemcpy(d_fixedDoFs, &m_ddof, sizeof(DeviceObjectArray<DeviceVector<int>>), 
+               cudaMemcpyHostToDevice);
+    
     MultiPatch_d patches(m_multiPatch);
     MultiPatch_d* d_patches = nullptr;
     cudaMalloc((void**)&d_patches, sizeof(MultiPatch_d));
     cudaMemcpy(d_patches, &patches, sizeof(MultiPatch_d), cudaMemcpyHostToDevice);
 
+    SparseSystem* d_sparseSystem = nullptr;
+    cudaMalloc((void**)&d_sparseSystem, sizeof(SparseSystem));
+    cudaMemcpy(d_sparseSystem, &m_sparseSystem, sizeof(SparseSystem), 
+               cudaMemcpyHostToDevice);
+
     MultiBasis_d bases(m_multiBasis);
     MultiBasis_d* d_bases = nullptr;
     cudaMalloc((void**)&d_bases, sizeof(MultiBasis_d));
     cudaMemcpy(d_bases, &bases, sizeof(MultiBasis_d), cudaMemcpyHostToDevice);
+
+    constructSolutionKernel<<<1, 1>>>(d_solVector, d_fixedDoFs, d_bases, 
+                                      d_sparseSystem, d_displacement);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess)
+        std::cerr << "Error after kernel constructSolutionKernel launch: " 
+                  << cudaGetErrorString(err) << std::endl;
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+        std::cerr << "CUDA error during device synchronization (constructSolutionKernel): " 
+                  << cudaGetErrorString(err) << std::endl;
 
     int dim = m_multiPatch.getBasisDim();
     int numPatches = m_multiPatch.getNumPatches();
@@ -795,8 +836,9 @@ void Assembler::assemble(DeviceVector<double> solVector)
     //printf("StackSize limit = %zu bytes\n", limit);
     cudaDeviceSetLimit(cudaLimitStackSize, 2*1024);
 
-    assembleDomain<<<1, 1>>>(totalGPs, d_bases, d_patches, d_gaussPoints);
-    cudaError_t err = cudaGetLastError();
+    int totalGPs = m_multiBasis.totalNumGPs();
+    assembleDomain<<<1, 1>>>(totalGPs, d_displacement, d_patches, d_gaussPoints);
+    err = cudaGetLastError();
     if (err != cudaSuccess)
         std::cerr << "Error after kernel assembleDomain launch: " 
                   << cudaGetErrorString(err) << std::endl;
@@ -807,6 +849,11 @@ void Assembler::assemble(DeviceVector<double> solVector)
     
     cudaFree(d_patches);
     cudaFree(d_bases);
+    cudaFree(d_displacement);
+    cudaFree(d_gaussPoints);
+    cudaFree(d_fixedDoFs);
+    cudaFree(d_solVector);
+    cudaFree(d_sparseSystem);
 
 #if 0
     assemble_kernel<<<1, 1>>>(m_multiPatchData.getBasisDim(),
@@ -1047,6 +1094,14 @@ void Assembler::computeDirichletDofs(int unk_, const std::vector<DofMapper> &map
         m_ddof[unk_][ii] = it->value(unk_);
     }
 }
+
+#if 0
+void Assembler::constructSolution(const DeviceVector<double> &solVector, 
+                                  MultiPatch_d &displacement) const
+{
+    
+}
+#endif
 
 int Assembler::getBoundaryData_Neumann(thrust::device_vector<int> &sizes, 
                                        thrust::device_vector<int> &starts,

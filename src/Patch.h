@@ -10,6 +10,8 @@ public:
         //thrust::device_vector<double>& controlPoints);
         const Eigen::MatrixXd& controlPoints);
 
+    Patch(const TensorBsplineBasis& basis, int geoDim);
+
     Patch(
         const KnotVector& ku,
         const KnotVector& kv,

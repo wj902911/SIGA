@@ -53,6 +53,46 @@ public:
     void setCoefficients(int patchIndex, int row, int col, double value)
     { m_patches[patchIndex].setCoefficients(row, col, value); }
 
+    __device__
+    int threadPatch(int idx, int& patch) const
+    {
+        int point_idx = idx;
+        for (int i = 0; i < m_patches.size(); i++)
+        {
+            int patch_points = m_patches[i].basis().totalNumGPs();
+            if (point_idx < patch_points) 
+            {
+                patch = i;
+                break;
+            }
+            point_idx -= patch_points;
+        }
+        return point_idx;
+    }
+
+    __device__
+    double gsPoint(int idx, int patch, const GaussPoints_d& gps,
+                   DeviceVector<double>& result) const
+    { return m_patches[patch].basis().gsPoint(idx, gps, result); }
+
+    __device__
+    double gsPoint(int idx, const DeviceObjectArray<GaussPoints_d>& gps,
+                   DeviceVector<double>& result) const
+    {
+        int patch = 0;
+        int point_idx = threadPatch(idx, patch);
+        return gsPoint(point_idx, patch, gps[patch], result);
+    }
+
+    __device__
+    void evalAllDers_into(int patch, int dir, double u, int n, 
+                          DeviceObjectArray<DeviceVector<double>>& result) const
+    { m_patches[patch].basis().evalAllDers_into(u, dir, n, result); }
+
+    __device__
+    void evalAllDers_into(int patch, const DeviceVector<double>& u, int n, 
+                          DeviceObjectArray<DeviceVector<double>>& result) const
+    { m_patches[patch].basis().evalAllDers_into(u, n, result); }
 #if 0
     __device__
     const int *getPatchNumKnots(int patchIndex) const

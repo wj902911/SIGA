@@ -17,10 +17,15 @@ public:
     int getNumPatches() const;
     int numDofs() const;
 
-    void assemble(DeviceVector<double> solVector);
+    void assemble(const DeviceVector<double>& solVector);
     void assembleNeumannBCs();
 
     void computeDirichletDofs(int unk_, const std::vector<DofMapper> &mappers);
+
+#if 0
+    void constructSolution(const DeviceVector<double>& solVector,
+                           MultiPatch_d& displacement) const;
+#endif
 
     int getBoundaryData_Neumann(thrust::device_vector<int>& sizes, 
                                 thrust::device_vector<int>& starts,

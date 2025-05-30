@@ -12,6 +12,12 @@ Patch::Patch(
     }
 }
 
+Patch::Patch(const TensorBsplineBasis &basis, int geoDim)
+    : m_basis(basis), 
+    m_controlPoints(Eigen::MatrixXd::Zero(basis.getNumControlPoints(), geoDim))
+{
+}
+
 Patch::Patch(
     const KnotVector& ku, 
     const KnotVector& kv, 

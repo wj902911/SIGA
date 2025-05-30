@@ -3,6 +3,7 @@
 #include <cuda_runtime.h>
 #include <MultiBasis.h>
 #include <TensorBsplineBasis_d.h>
+#include <MultiPatch_d.h>
 
 #if 0
 __global__
@@ -57,6 +58,19 @@ public:
     }
 
     __device__
+    MultiBasis_d(const MultiPatch_d& patches_d)
+        : m_bases(patches_d.getNumPatches())
+    {
+        printf("From MultiBasis_d constructor:\n");
+        for (int i = 0; i < patches_d.getNumPatches(); i++)
+        {
+            m_bases[i] = patches_d.patch(i).basis();
+
+        }
+        printf("\n");
+    }
+
+    __device__
     int getDim() const
     {
         return m_bases[0].getDim();
@@ -83,7 +97,7 @@ public:
     __device__
     int threadPatch(int idx, int& patch) const
     {
-        int dim = getDim();
+        //int dim = getDim();
         int point_idx = idx;
         for (int i = 0; i < m_bases.size(); i++)
         {

@@ -23,6 +23,13 @@ public:
     Patch_d(const TensorBsplineBasis_d& basis, const DeviceMatrix<double>& controlPoints)
         : m_controlPoints(controlPoints), m_basis(basis) {}
 
+#if 0
+    __host__
+    Patch_d(const TensorBsplineBasis_d& basis, int CPDim)
+        : m_basis(basis), m_controlPoints(basis.numCPs(), CPDim)
+    { m_controlPoints.setZero(); }
+#endif
+
     __host__
     Patch_d(const Patch& host_other)
         : m_controlPoints(host_other.getControlPoints()),
