@@ -26,7 +26,7 @@ public:
     size_t nBoundary() const   { return m_boundary.size(); }
 
     __device__
-    const BoundaryInterface_d& interface(int i) const
+    const BoundaryInterface_d& getInterface(int i) const
     {
         assert(i >= 0 && i < nInterfaces());
         return m_interfaces[i];

@@ -30,7 +30,7 @@ public:
     std::vector<BoundaryInterface>::iterator iEnd()
     { return m_interfaces.end(); }
 
-    const BoundaryInterface& interface(int i) const
+    const BoundaryInterface& getInterface(int i) const
     {
         assert(i >= 0 && i < nInterfaces());
         return m_interfaces[i];

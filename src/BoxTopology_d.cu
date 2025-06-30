@@ -10,6 +10,6 @@ BoxTopology_d::BoxTopology_d(const BoxTopology &topology)
     {
         //BoundaryInterface_d temp = topology.interface(i);
         //m_interfaces.at(i) = temp;
-        m_interfaces.at(i) = topology.interface(i);
+        m_interfaces.at(i) = topology.getInterface(i);
     }
 }
