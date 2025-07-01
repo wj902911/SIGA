@@ -1,7 +1,7 @@
 #pragma once
 
 #include "DeviceMatrix.h"
-#include <Eigen/core>
+#include <Eigen/Core>
 
 template <typename T>
 class DeviceVector: public DeviceMatrix<T>
@@ -81,13 +81,13 @@ public:
     }
 
     __host__
-    Element operator[](int i) const
+    typename DeviceMatrix<T>::Element operator[](int i) const
     {
         return DeviceMatrix<T>::at(i, 0);
     }
 
     __host__
-    Element at(int i) const
+    typename DeviceMatrix<T>::Element at(int i) const
     {
         return DeviceMatrix<T>::at(i, 0);
     }

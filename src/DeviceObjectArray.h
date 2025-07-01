@@ -6,6 +6,18 @@
 #include <type_traits>
 
 template <typename T>
+__global__ void deviceAssign(T* data, int size, const T* value);
+
+template <typename T>
+__global__ void deviceRead(T* value, int size, const T* data);
+
+template <typename T>
+__global__ void deviceDeepCopyKernel(T* device_dst, T* host_src);
+
+template <typename T>
+__global__ void destructKernel(T* ptr, size_t count);
+
+template <typename T>
 class DeviceObjectArray
 {
 private:

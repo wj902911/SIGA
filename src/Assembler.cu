@@ -753,7 +753,8 @@ void Assembler::assemble(const DeviceVector<double>& solVector)
     int geoDim = m_multiPatch.getCPDim();
     for (int i = 0; i < m_multiPatch.getNumPatches(); ++i) 
     {
-        displacement.addPatch(Patch(m_multiBasis.basis(i), geoDim));
+        Patch patch(m_multiPatch.basis(i), geoDim);
+        displacement.addPatch(patch);
     }
     MultiPatch_d displacement_d(displacement);
     MultiPatch_d* d_displacement = nullptr;
