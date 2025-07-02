@@ -2,25 +2,16 @@
 
 #include <cuda_runtime.h>
 #include <DeviceObjectArray.h>
+#include <DeviceVector.h>
 #include <vector>
 
-__global__ inline
+__global__
 void retrieveSizes(int numArrays, const DeviceObjectArray<double>* arrays, 
-                  int* sizes)
-{
-    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
-        idx < numArrays; idx += blockDim.x * gridDim.x)
-        sizes[idx] = arrays[idx].size();
-}
+                   int* sizes);
 
-__global__ inline
+__global__
 void retrieveData(int dir, const DeviceObjectArray<double>* array, 
-                  double* data)
-{
-    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
-         idx < array->size(); idx += blockDim.x * gridDim.x)
-        data[idx] = (*array)[idx];
-}
+                  double* data);
 
 class GaussPoints_d
 {

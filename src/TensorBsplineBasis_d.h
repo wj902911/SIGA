@@ -1,10 +1,11 @@
 #pragma once
 
-#include "KnotVector_d.h"
-#include "Utility_d.h"
+#include <KnotVector_d.h>
+#include <Utility_d.h>
 #include <Boundary_d.h>
 #include <DeviceVector.h>
 #include <GaussPoints_d.h>
+#include <TensorBsplineBasis.h>
 
 #if 0
 __device__
@@ -46,54 +47,20 @@ void getTensorProduct(int dim, int* numVlues, double* in, double* out)
 #endif
 
 __global__
-inline
-void retrieveKnotData(int dir, DeviceObjectArray<KnotVector_d>* d_knots_d, double* d_result)
-{
-    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
-         idx < (*d_knots_d)[dir].getNumKnots(); idx += blockDim.x * gridDim.x)
-    {
-        d_result[idx] = (*d_knots_d)[dir].getKnots()[idx];
-        //printf("retrieveKnotData: %d, %f\n", idx, d_result[idx]);
-    }   
-        //(*d_knots_d)[dir].getKnots().print();
-}
+void retrieveKnotData(int dir, DeviceObjectArray<KnotVector_d>* d_knots_d, double* d_result);
 
 __global__
-inline
-void retrieveKnotSize(DeviceObjectArray<KnotVector_d>* d_knots_d, int* d_result)
-{
-    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
-         idx < d_knots_d->size(); idx += blockDim.x * gridDim.x)
-        d_result[idx] = (*d_knots_d)[idx].getNumKnots();
-}
+void retrieveKnotSize(DeviceObjectArray<KnotVector_d>* d_knots_d, int* d_result);
 
 __global__
-inline
 void retrieveKnotSizeAndOrder(DeviceObjectArray<KnotVector_d>* d_knots_d, 
-                              int* d_order, int* d_size)
-{
-    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
-         idx < d_knots_d->size(); idx += blockDim.x * gridDim.x)
-    {
-        d_order[idx] = (*d_knots_d)[idx].getOrder();
-        d_size[idx] = (*d_knots_d)[idx].getNumKnots();
-    }
-}
+                              int* d_order, int* d_size);
 
 __global__
-inline
-void retrieveKnotOrder(DeviceObjectArray<KnotVector_d>* d_knots_d, int* d_result)
-{
-    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
-         idx < d_knots_d->size(); idx += blockDim.x * gridDim.x)
-        d_result[idx] = (*d_knots_d)[idx].getOrder();
-}
+void retrieveKnotOrder(DeviceObjectArray<KnotVector_d>* d_knots_d, int* d_result);
 
 __global__
-inline void deviceConstructKnotVector(KnotVector_d* knotVector, KnotVector_d* input)
-{
-    new (knotVector) KnotVector_d(*input);
-}
+void deviceConstructKnotVector(KnotVector_d* knotVector, KnotVector_d* input);
 
 class TensorBsplineBasis_d
 {

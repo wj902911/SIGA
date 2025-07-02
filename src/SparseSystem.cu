@@ -5,6 +5,28 @@
 //template __global__ void parallPlus<int>(int* a, int b, int* c, int n);
 //template __global__ void destructKernel<DeviceObjectArray<double>>(DeviceObjectArray<double>* a, size_t n);
 
+__global__
+void getDofsSizeKernel(int* d_size, DeviceObjectArray<DofMapper_d>* d_mappers)
+{ 
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < d_mappers->size())
+    {
+        //printf("getDofsSizeKernel: %d\n", idx);
+        //(*d_mappers)[idx].getDofs().print();
+        d_size[idx] = (*d_mappers)[idx].getDofs().size();
+        //printf("getDofsSizeKernel: %d, %d\n", idx, d_size[idx]);
+    }
+}
+
+__global__
+void getDofsKernel(int index, int size, int* d_dofs, 
+                   DeviceObjectArray<DofMapper_d>* d_mappers)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size) 
+        d_dofs[idx] = (*d_mappers)[index].getDofs().data()[idx];
+}
+
 #if 1
 __global__
 void dofMapperTestKernel(DeviceObjectArray<DofMapper_d>* dofMappers)

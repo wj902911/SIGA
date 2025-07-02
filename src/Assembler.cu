@@ -767,9 +767,15 @@ void Assembler::assemble(const DeviceVector<double>& solVector)
     cudaMemcpy(d_solVector, &solVector, sizeof(DeviceVector<double>), 
                cudaMemcpyHostToDevice);
 
+    DeviceObjectArray<DeviceVector<int>> fixedDoFs_d(m_ddof.size());
+    for (int i = 0; i < m_ddof.size(); ++i)
+    {
+        DeviceVector<int> fixedDoF_d(m_ddof[i].size(), m_ddof[i].data());
+        fixedDoFs_d.at(i) = fixedDoF_d;
+    }
     DeviceObjectArray<DeviceVector<int>>* d_fixedDoFs = nullptr;
     cudaMalloc((void**)&d_fixedDoFs, sizeof(DeviceObjectArray<DeviceVector<int>>));
-    cudaMemcpy(d_fixedDoFs, &m_ddof, sizeof(DeviceObjectArray<DeviceVector<int>>), 
+    cudaMemcpy(d_fixedDoFs, &fixedDoFs_d, sizeof(DeviceObjectArray<DeviceVector<int>>), 
                cudaMemcpyHostToDevice);
     
     MultiPatch_d patches(m_multiPatch);

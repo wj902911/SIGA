@@ -3,32 +3,17 @@
 //#include <cuda_runtime.h>
 //#include <thrust/device_vector.h>
 //#include <iostream>
-#include "DeviceVector.h"
-#include "DeviceObjectArray.h"
-#include "DofMapper_d.h"
+#include <DeviceVector.h>
+#include <DeviceObjectArray.h>
+#include <DofMapper_d.h>
 #include <Eigen/Core>
 
-__global__ inline
-void getDofsSizeKernel(int* d_size, DeviceObjectArray<DofMapper_d>* d_mappers)
-{ 
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < d_mappers->size())
-    {
-        //printf("getDofsSizeKernel: %d\n", idx);
-        //(*d_mappers)[idx].getDofs().print();
-        d_size[idx] = (*d_mappers)[idx].getDofs().size();
-        //printf("getDofsSizeKernel: %d, %d\n", idx, d_size[idx]);
-    }
-}
+__global__
+void getDofsSizeKernel(int* d_size, DeviceObjectArray<DofMapper_d>* d_mappers);
 
-__global__ inline
+__global__
 void getDofsKernel(int index, int size, int* d_dofs, 
-                   DeviceObjectArray<DofMapper_d>* d_mappers)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < size) 
-        d_dofs[idx] = (*d_mappers)[index].getDofs().data()[idx];
-}
+                   DeviceObjectArray<DofMapper_d>* d_mappers);
 
 class SparseSystem
 {

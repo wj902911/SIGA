@@ -1,6 +1,7 @@
 #pragma once
 
-#include "DeviceObjectArray.h"
+#include <DeviceObjectArray.h>
+#include <KnotVector.h>
 
 class KnotVector_d
 {
