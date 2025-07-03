@@ -411,7 +411,7 @@ public:
     // Copy constructor
     __host__ __device__
     DeviceMatrix(const DeviceMatrix& other)
-        : m_rows(other.m_rows), m_cols(other.m_cols)
+		: m_rows(other.m_rows), m_cols(other.m_cols), m_owns_data(other.m_owns_data)
     {
     #if defined(__CUDA_ARCH__)
         int size = m_rows * m_cols;

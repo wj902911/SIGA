@@ -749,6 +749,7 @@ void gaussPointsTest(GaussPoints_d* gspts)
 
 void Assembler::assemble(const DeviceVector<double>& solVector)
 {
+#if 0
     MultiPatch displacement;
     int geoDim = m_multiPatch.getCPDim();
     for (int i = 0; i < m_multiPatch.getNumPatches(); ++i) 
@@ -766,6 +767,7 @@ void Assembler::assemble(const DeviceVector<double>& solVector)
     cudaMalloc((void**)&d_solVector, sizeof(DeviceVector<double>));
     cudaMemcpy(d_solVector, &solVector, sizeof(DeviceVector<double>), 
                cudaMemcpyHostToDevice);
+#endif
 
     DeviceObjectArray<DeviceVector<int>> fixedDoFs_d(m_ddof.size());
     for (int i = 0; i < m_ddof.size(); ++i)
@@ -777,7 +779,7 @@ void Assembler::assemble(const DeviceVector<double>& solVector)
     cudaMalloc((void**)&d_fixedDoFs, sizeof(DeviceObjectArray<DeviceVector<int>>));
     cudaMemcpy(d_fixedDoFs, &fixedDoFs_d, sizeof(DeviceObjectArray<DeviceVector<int>>), 
                cudaMemcpyHostToDevice);
-    
+#if 0
     MultiPatch_d patches(m_multiPatch);
     MultiPatch_d* d_patches = nullptr;
     cudaMalloc((void**)&d_patches, sizeof(MultiPatch_d));
@@ -792,7 +794,9 @@ void Assembler::assemble(const DeviceVector<double>& solVector)
     MultiBasis_d* d_bases = nullptr;
     cudaMalloc((void**)&d_bases, sizeof(MultiBasis_d));
     cudaMemcpy(d_bases, &bases, sizeof(MultiBasis_d), cudaMemcpyHostToDevice);
+#endif
 
+#if 0
     constructSolutionKernel<<<1, 1>>>(d_solVector, d_fixedDoFs, d_bases, 
                                       d_sparseSystem, d_displacement);
     cudaError_t err = cudaGetLastError();
@@ -803,7 +807,9 @@ void Assembler::assemble(const DeviceVector<double>& solVector)
     if (err != cudaSuccess)
         std::cerr << "CUDA error during device synchronization (constructSolutionKernel): " 
                   << cudaGetErrorString(err) << std::endl;
+#endif
 
+#if 0
     int dim = m_multiPatch.getBasisDim();
     int numPatches = m_multiPatch.getNumPatches();
     DeviceObjectArray<GaussPoints_d> gaussPoints(numPatches);
@@ -837,12 +843,14 @@ void Assembler::assemble(const DeviceVector<double>& solVector)
     cudaMalloc((void**)&d_gaussPoints, sizeof(DeviceObjectArray<GaussPoints_d>));
     cudaMemcpy(d_gaussPoints, &gaussPoints, sizeof(DeviceObjectArray<GaussPoints_d>), 
                cudaMemcpyHostToDevice);
+#endif
 
     //size_t curr, limit;
     //cudaDeviceGetLimit(&limit, cudaLimitStackSize);
     //printf("StackSize limit = %zu bytes\n", limit);
     cudaDeviceSetLimit(cudaLimitStackSize, 2*1024);
 
+#if 0
     int totalGPs = m_multiBasis.totalNumGPs();
     assembleDomain<<<1, 1>>>(totalGPs, d_displacement, d_patches, d_gaussPoints);
     err = cudaGetLastError();
@@ -853,14 +861,15 @@ void Assembler::assemble(const DeviceVector<double>& solVector)
     if (err != cudaSuccess)
         std::cerr << "CUDA error during device synchronization (assembleDomain): " 
                   << cudaGetErrorString(err) << std::endl;
+#endif
     
-    cudaFree(d_patches);
-    cudaFree(d_bases);
-    cudaFree(d_displacement);
-    cudaFree(d_gaussPoints);
+    //cudaFree(d_patches);
+    //cudaFree(d_bases);
+    //cudaFree(d_displacement);
+    //cudaFree(d_gaussPoints);
     cudaFree(d_fixedDoFs);
-    cudaFree(d_solVector);
-    cudaFree(d_sparseSystem);
+    //cudaFree(d_solVector);
+    //cudaFree(d_sparseSystem);
 
 #if 0
     assemble_kernel<<<1, 1>>>(m_multiPatchData.getBasisDim(),

@@ -382,7 +382,7 @@ public:
     ~DeviceObjectArray() 
     { 
     #if defined(__CUDA_ARCH__)
-        #if 0
+        #if 1
         if (!std::is_trivially_destructible<T>::value)
         {
             for (int i = 0; i < m_size; ++i) 
@@ -390,6 +390,7 @@ public:
                 m_data[i].~T(); // Call destructor for each object
             }
         }
+        else
         #endif
         delete[] m_data; 
     #else
