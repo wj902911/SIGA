@@ -244,10 +244,10 @@ void constructSolutionKernel(const DeviceVector<double>* solVector,
                                     (*fixedDoFs)[dofCoords[0]](index));
         }
     }
-    printf("Patch 0 control points:\n");
-    result->patch(0).controlPoints().print();
-    printf("Patch 1 control points:\n");
-    result->patch(1).controlPoints().print();
+    //printf("Patch 0 control points:\n");
+    //result->patch(0).controlPoints().print();
+    //printf("Patch 1 control points:\n");
+    //result->patch(1).controlPoints().print();
 }
 
 #if 0
@@ -749,7 +749,7 @@ void gaussPointsTest(GaussPoints_d* gspts)
 
 void Assembler::assemble(const DeviceVector<double>& solVector)
 {
-#if 0
+#if 1
     MultiPatch displacement;
     int geoDim = m_multiPatch.getCPDim();
     for (int i = 0; i < m_multiPatch.getNumPatches(); ++i) 
@@ -779,7 +779,7 @@ void Assembler::assemble(const DeviceVector<double>& solVector)
     cudaMalloc((void**)&d_fixedDoFs, sizeof(DeviceObjectArray<DeviceVector<int>>));
     cudaMemcpy(d_fixedDoFs, &fixedDoFs_d, sizeof(DeviceObjectArray<DeviceVector<int>>), 
                cudaMemcpyHostToDevice);
-#if 0
+#if 1
     MultiPatch_d patches(m_multiPatch);
     MultiPatch_d* d_patches = nullptr;
     cudaMalloc((void**)&d_patches, sizeof(MultiPatch_d));
@@ -796,7 +796,7 @@ void Assembler::assemble(const DeviceVector<double>& solVector)
     cudaMemcpy(d_bases, &bases, sizeof(MultiBasis_d), cudaMemcpyHostToDevice);
 #endif
 
-#if 0
+#if 1
     constructSolutionKernel<<<1, 1>>>(d_solVector, d_fixedDoFs, d_bases, 
                                       d_sparseSystem, d_displacement);
     cudaError_t err = cudaGetLastError();
@@ -809,7 +809,7 @@ void Assembler::assemble(const DeviceVector<double>& solVector)
                   << cudaGetErrorString(err) << std::endl;
 #endif
 
-#if 0
+#if 1
     int dim = m_multiPatch.getBasisDim();
     int numPatches = m_multiPatch.getNumPatches();
     DeviceObjectArray<GaussPoints_d> gaussPoints(numPatches);
@@ -850,7 +850,7 @@ void Assembler::assemble(const DeviceVector<double>& solVector)
     //printf("StackSize limit = %zu bytes\n", limit);
     cudaDeviceSetLimit(cudaLimitStackSize, 2*1024);
 
-#if 0
+#if 1
     int totalGPs = m_multiBasis.totalNumGPs();
     assembleDomain<<<1, 1>>>(totalGPs, d_displacement, d_patches, d_gaussPoints);
     err = cudaGetLastError();
@@ -863,13 +863,13 @@ void Assembler::assemble(const DeviceVector<double>& solVector)
                   << cudaGetErrorString(err) << std::endl;
 #endif
     
-    //cudaFree(d_patches);
-    //cudaFree(d_bases);
-    //cudaFree(d_displacement);
-    //cudaFree(d_gaussPoints);
+    cudaFree(d_patches);
+    cudaFree(d_bases);
+    cudaFree(d_displacement);
+    cudaFree(d_gaussPoints);
     cudaFree(d_fixedDoFs);
-    //cudaFree(d_solVector);
-    //cudaFree(d_sparseSystem);
+    cudaFree(d_solVector);
+    cudaFree(d_sparseSystem);
 
 #if 0
     assemble_kernel<<<1, 1>>>(m_multiPatchData.getBasisDim(),
