@@ -1,7 +1,8 @@
 #pragma once
 
 #include <TensorBsplineBasis_d.h>
-#include <DeviceMatrix.h>
+//#include <DeviceMatrix.h>
+#include <DeviceVector.h>
 
 class Patch_d
 {
@@ -160,6 +161,23 @@ public:
             }
         }
         delete[] activeIndexes;
+    }
+
+    __device__
+    DeviceMatrix<double> getActiveControlPoints(DeviceVector<double> pt)
+    {
+        DeviceVector<int> activeIndexes = m_basis.getActiveIndexes(pt);
+        int CPDim = getCPDim();
+        DeviceMatrix<double> activeCPs(activeIndexes.size(), CPDim);
+        for (int i = 0; i < activeIndexes.size(); i++)
+        {
+            //for (int j = 0; j < CPDim; j++)
+            //{
+            //    activeCPs(i, j) = m_controlPoints(activeIndexes[i], j);
+            //}
+            activeCPs.row(i) = m_controlPoints.row(activeIndexes(i));
+        }
+        return activeCPs;
     }
 
     __device__

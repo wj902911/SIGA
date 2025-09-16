@@ -10,6 +10,7 @@
 #include "DofMapper_d.h"
 #include "DeviceObjectArray.h"
 #include "Utility_h.h"
+//#include "Utility_d.h"
 #include <BoundaryCondition_d.h>
 
 #if 0
@@ -205,17 +206,72 @@ void assembleDomain(int totalGPs, MultiPatch_d* displacement, MultiPatch_d* patc
     for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
         idx < totalGPs; idx += blockDim.x * gridDim.x)
     {
+        double YM = 1.0;
+        double PR = 0.3;
+        double lambda = YM * PR / ( ( 1. + PR ) * ( 1. - 2. * PR ) );
+        double mu = YM / ( 2. * ( 1. + PR ) );
+
+        int numDerivatives = 1;
+        int CPdim = displacement->getCPDim();
         int patch(0);
         int point_idx = displacement->threadPatch(idx, patch);
         DeviceVector<double> pt;
         double wt = displacement->gsPoint(point_idx, patch, (*gaussPoints)[patch], pt);
+        DeviceMatrix<double> geoActiveCPs = patches->getActiveControlPoints(patch, pt);
+        DeviceObjectArray<DeviceVector<double>> geoValues;
+        patches->evalAllDers_into(patch, pt, numDerivatives, geoValues);
+        DeviceObjectArray<DeviceMatrix<double>> md;
+        md.resize(numDerivatives+1);
+        md[0] = geoValues[0].transpose() * geoActiveCPs;
+        md[1] = geoValues[1].reshape(CPdim, geoActiveCPs.rows()) * geoActiveCPs;
+        DeviceMatrix<double> geoJacobian = md[1].transpose();
+        double measure = geoJacobian.determinant();
+        double weightForce = wt * measure;
+        //printf("patch %d, point %d:\n", patch, point_idx);
+        //printf("weightForce: %f\n", weightForce);
+        //geoActiveCPs.print();
+        //pt.print();
+        //printf("geoValues:\n");
+        //geoValues[0].print();
+        //printf("md[0]:\n");
+        //md[0].print();
+        //printf("md[1]:\n");
+        //md[1].print();
+        //printf("derivatives:\n");
+        //geoValues[1].print();
+        //printf("derivatives reshaped:\n");
+        //geoValues[1].reshape(CPdim, geoActiveCPs.rows()).print();
+        DeviceMatrix<double> activeCPs = displacement->getActiveControlPoints(patch, pt);
         DeviceObjectArray<DeviceVector<double>> values;
-        displacement->evalAllDers_into(patch, pt, 1, values);
+        displacement->evalAllDers_into(patch, pt, numDerivatives, values);
+        DeviceObjectArray<DeviceMatrix<double>> mdDisplacement;
+        mdDisplacement.resize(numDerivatives+1);
+        mdDisplacement[0] = values[0].transpose() * activeCPs;
+        mdDisplacement[1] = values[1].reshape(CPdim, activeCPs.rows()) * activeCPs;
+        DeviceMatrix<double> phyGrad = geoJacobian.inverse().transpose() * values[1].reshape(CPdim, activeCPs.rows());
+        DeviceMatrix<double> physDispJac = mdDisplacement[1].transpose() * geoJacobian.inverse();
+        DeviceMatrix<double> I = DeviceMatrix<double>::Identity(CPdim);
+        DeviceMatrix<double> F = physDispJac + I;
+        double J = F.determinant();
+        DeviceMatrix<double> RCG = F.transpose() * F;
+        DeviceMatrix<double> E = 0.5 * (RCG - I);
+        DeviceMatrix<double> RCGinv = RCG.inverse();
+        DeviceMatrix<double> S = (lambda*(J*J-1)/2-mu)*RCGinv + mu*I;
+        DeviceMatrix<double> C;
+        matrixTraceTensor<double>(C,RCGinv,RCGinv);
+        C=C*lambda*J*J;
+        DeviceMatrix<double> Ctemp;
+        symmetricIdentityTensor<double>(Ctemp, RCGinv);
+        C=C+(mu-lambda*(J*J-1)/2)*Ctemp;
         printf("patch %d, point %d:\n", patch, point_idx);
-        printf("values:\n");
-        values[0].print();
-        printf("derivative:\n");
-        values[1].print();
+        //printf("lambda: %f, mu: %f\n", lambda, mu);
+        C.print();
+        //phyGrads.print();
+        //activeCPs.print();
+        //printf("values:\n");
+        //values[0].print();
+        //printf("derivative:\n");
+        //values[1].print();
     }
 }
 
@@ -754,7 +810,7 @@ void Assembler::assemble(const DeviceVector<double>& solVector)
     int geoDim = m_multiPatch.getCPDim();
     for (int i = 0; i < m_multiPatch.getNumPatches(); ++i) 
     {
-        Patch patch(m_multiPatch.basis(i), geoDim);
+        Patch patch(m_multiBasis.basis(i), geoDim);
         displacement.addPatch(patch);
     }
     MultiPatch_d displacement_d(displacement);
@@ -817,7 +873,7 @@ void Assembler::assemble(const DeviceVector<double>& solVector)
     {
         std::vector<int> numGPs(dim, 0);
         for (int d = 0; d < dim; ++d)
-            numGPs[d] = m_multiPatch.basis(i).getNumGaussPoints(d);
+            numGPs[d] = m_multiBasis.basis(i).getNumGaussPoints(d);
     #if 0
         GaussPoints_d gaussPoints_d(dim, numGPs);
         GaussPoints_d* d_gaussPoints_d = nullptr;
@@ -848,7 +904,7 @@ void Assembler::assemble(const DeviceVector<double>& solVector)
     //size_t curr, limit;
     //cudaDeviceGetLimit(&limit, cudaLimitStackSize);
     //printf("StackSize limit = %zu bytes\n", limit);
-    cudaDeviceSetLimit(cudaLimitStackSize, 2*1024);
+    cudaDeviceSetLimit(cudaLimitStackSize, 3*1024);
 
 #if 1
     int totalGPs = m_multiBasis.totalNumGPs();

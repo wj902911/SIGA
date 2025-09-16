@@ -255,14 +255,16 @@ __device__
 DeviceMatrix<T> operator-(const DeviceMatrixBase<DerivedA, T>& A,
                           const DeviceMatrixBase<DerivedB, T>& B)
 {
-    assert(A.rows() == B.rows() && A.cols() == B.cols() 
-           && "Matrix dimensions mismatch for addition");
+    const DerivedA& derivedA = static_cast<const DerivedA&>(A);
+    const DerivedB& derivedB = static_cast<const DerivedB&>(B);
+    assert(derivedA.rows() == derivedB.rows() && derivedA.cols() == derivedB.cols() 
+           && "Matrix dimensions mismatch for subtraction");
 
-    DeviceMatrix<T> result(A.rows(), A.cols());
+    DeviceMatrix<T> result(derivedA.rows(), derivedA.cols());
 
-    for (int i = 0; i < A.rows(); ++i)
-        for (int j = 0; j < A.cols(); ++j)
-            result(i, j) = A(i, j) - B(i, j);
+    for (int i = 0; i < derivedA.rows(); ++i)
+        for (int j = 0; j < derivedA.cols(); ++j)
+            result(i, j) = derivedA(i, j) - derivedB(i, j);
 
     return result;
 }
@@ -272,18 +274,20 @@ __device__
 DeviceMatrix<T> operator*(const DeviceMatrixBase<DerivedA, T>& A,
                           const DeviceMatrixBase<DerivedB, T>& B)
 {
-    assert(A.cols() == B.rows() && "Matrix dimensions mismatch for multiplication");
+    const DerivedA& derivedA = static_cast<const DerivedA&>(A);
+    const DerivedB& derivedB = static_cast<const DerivedB&>(B);
+    assert(derivedA.cols() == derivedB.rows() && "Matrix dimensions mismatch for multiplication");
 
-    DeviceMatrix<T> result(A.rows(), B.cols());
+    DeviceMatrix<T> result(derivedA.rows(), derivedB.cols());
 
-    for (int i = 0; i < A.rows(); ++i)
+    for (int i = 0; i < derivedA.rows(); ++i)
     {
-        for (int j = 0; j < B.cols(); ++j)
+        for (int j = 0; j < derivedB.cols(); ++j)
         {
             T sum = 0;
-            for (int k = 0; k < A.cols(); ++k)
+            for (int k = 0; k < derivedA.cols(); ++k)
             {
-                sum += A(i, k) * B(k, j);
+                sum += derivedA(i, k) * derivedB(k, j);
             }
             result(i, j) = sum;
         }
@@ -406,6 +410,17 @@ public:
             assert(err == cudaSuccess && "cudaMalloc failed");
         }
     #endif
+    }
+
+    //Cstruct identity matrix
+    __device__
+    static DeviceMatrix<T> Identity(int size)
+    {
+        DeviceMatrix<T> I(size, size);
+        I.setZero();
+        for (int i = 0; i < size; ++i)
+            I(i, i) = T(1);
+        return I;
     }
 
     // Copy constructor
@@ -555,6 +570,21 @@ public:
     T* data() const
     {
         return m_data;
+    }
+
+    //Returns column  c of the matrix resized to n x m matrix
+    __device__
+    DeviceMatrix<T> reshapeCol(int c, int n, int m) const
+    {
+        DeviceMatrix<T> result(n, m);
+        for (int i = 0; i < n; ++i)
+        {
+            for (int j = 0; j < m; ++j)
+            {
+                result(i, j) = (*this)(j * n + i, c);
+            }
+        }
+        return result;
     }
 
     class Element;
@@ -935,6 +965,40 @@ class Row : public Block
             }
             return det;
         }
+    }
+
+    //Inversion for small matrices using Cramer's Rule
+    __device__
+    DeviceMatrix inverse() const
+    {
+        assert(m_rows == m_cols && "Matrix must be square for inverse");
+
+        DeviceMatrix inv(m_rows, m_cols);
+        T det = determinant();
+        assert(det != 0 && "Matrix is singular and cannot be inverted");
+
+        if (m_rows == 1)
+        {
+            inv(0, 0) = 1 / (*this)(0, 0);
+        }
+        else if (m_rows == 2)
+        {
+            inv(0, 0) = (*this)(1, 1) / det;
+            inv(0, 1) = -(*this)(0, 1) / det;
+            inv(1, 0) = -(*this)(1, 0) / det;
+            inv(1, 1) = (*this)(0, 0) / det;
+        }
+        else
+        {
+            for (int i = 0; i < m_rows; i++)
+            {
+                for (int j = 0; j < m_cols; j++)
+                {
+                    inv(j, i) = cofactor(i, j) / det; // Note the transpose here
+                }
+            }
+        }
+        return inv;
     }
 
     __host__ __device__

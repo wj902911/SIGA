@@ -803,6 +803,31 @@ public:
     }
 
     __device__
+    DeviceVector<int> getActiveIndexes(DeviceVector<double> pt)
+    {
+        int numAct = getNumActiveControlPoints();
+        DeviceVector<int> activeIndexes(numAct);
+        DeviceVector<int> firstAct(m_dim);
+        DeviceVector<int> sizes(m_dim);
+        for (int d = 0; d < m_dim; ++d)
+        {
+            int order = m_knotVectors[d].getOrder();
+            firstAct(d) = upperBound(d, pt(d)) - order - 1;
+            sizes(d) = order + 1;
+        }
+        for (int r = 0; r < numAct; r++)
+        {
+            DeviceVector<int> index(m_dim);
+            getTensorCoordinate(m_dim, sizes.data(), r, index.data());
+            int gidx = firstAct(m_dim - 1) + index(m_dim - 1);
+            for (int d = m_dim - 2; d >= 0; d--)
+                gidx = gidx * size(d) + firstAct(d) + index(d);
+            activeIndexes(r) = gidx;
+        }
+        return activeIndexes;
+    }
+
+    __device__
     int size(int d)
     {
         return m_knotVectors[d].getNumControlPoints();

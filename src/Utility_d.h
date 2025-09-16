@@ -5,6 +5,9 @@
 //#include <DeviceVector.h>
 //#include "Matrix.h"
 
+template <typename T>
+class DeviceMatrix;
+
 __host__ __device__
 inline void getTensorCoordinate(int dim, int* numVlues, int index, int* out)
 {
@@ -200,4 +203,53 @@ inline void printThrustVector(const thrust::device_vector<T>& vec, const char* n
             std::cout << ", ";
     }
     std::cout << "]" << std::endl;
+}
+
+// Indices of the Voigt notation
+__host__ __device__
+inline int voigt(int dim, int I, int J)
+{
+    if (dim == 2)
+        switch(I)
+        {
+        case 0: return J == 0 ? 0 : 0;
+        case 1: return J == 0 ? 1 : 1;
+        case 2: return J == 0 ? 0 : 1;
+        }
+    else if (dim == 3)
+        switch (I)
+        {
+        case 0: return J == 0 ? 0 : 0;
+        case 1: return J == 0 ? 1 : 1;
+        case 2: return J == 0 ? 2 : 2;
+        case 3: return J == 0 ? 0 : 1;
+        case 4: return J == 0 ? 1 : 2;
+        case 5: return J == 0 ? 0 : 2;
+        }
+    return -1;
+}
+
+template <class T>
+__device__
+inline void matrixTraceTensor(DeviceMatrix<T> &C, const DeviceMatrix<T> &R, const DeviceMatrix<T> &S)
+{
+    int dim = R.cols();
+    int dimTensor = (dim * (dim + 1)) / 2;
+    C.setZero(dimTensor,dimTensor);
+    for (int i = 0; i < dimTensor; i++)
+        for (int j = 0; j < dimTensor; j++)
+            C(i, j) = R(voigt(dim, i, 0), voigt(dim, i, 1)) * S(voigt(dim, j, 0), voigt(dim, j, 1));
+}
+
+template <class T>
+__device__
+inline void symmetricIdentityTensor(DeviceMatrix<T> &C, const DeviceMatrix<T> &R)
+{
+    int dim = R.cols();
+    int dimTensor = (dim * (dim + 1)) / 2;
+    C.setZero(dimTensor,dimTensor);
+    for (int i = 0; i < dimTensor; i++)
+        for (int j = 0; j < dimTensor; j++)
+            C(i, j) = (R(voigt(dim, i, 0), voigt(dim, j, 0)) * R(voigt(dim, i, 1), voigt(dim, j, 1))
+                           + R(voigt(dim, i, 0), voigt(dim, j, 1)) * R(voigt(dim, i, 1), voigt(dim, j, 0)));
 }

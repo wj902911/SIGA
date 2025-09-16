@@ -161,6 +161,14 @@ public:
             sum += this->operator()(i);
         return sum;
     }
+
+    //Returns the vector as a resized to n x m matrix
+    __device__
+    DeviceMatrix<T> reshape(int n, int m) const
+    {
+        return this->reshapeCol(0, n, m);
+    }
+
 };
 
 template <typename T>
