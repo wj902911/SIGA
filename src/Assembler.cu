@@ -213,11 +213,14 @@ void assembleDomain(int totalGPs, MultiPatch_d* displacement, MultiPatch_d* patc
 
         int numDerivatives = 1;
         int CPdim = displacement->getCPDim();
+        int dim = displacement->getBasisDim();
         int patch(0);
         int point_idx = displacement->threadPatch(idx, patch);
         DeviceVector<double> pt;
         double wt = displacement->gsPoint(point_idx, patch, (*gaussPoints)[patch], pt);
+
         DeviceMatrix<double> geoActiveCPs = patches->getActiveControlPoints(patch, pt);
+        DeviceVector<int> localIndicesDisp = displacement->getActiveIndexes(patch, pt);
         DeviceObjectArray<DeviceVector<double>> geoValues;
         patches->evalAllDers_into(patch, pt, numDerivatives, geoValues);
         DeviceObjectArray<DeviceMatrix<double>> md;
@@ -227,20 +230,8 @@ void assembleDomain(int totalGPs, MultiPatch_d* displacement, MultiPatch_d* patc
         DeviceMatrix<double> geoJacobian = md[1].transpose();
         double measure = geoJacobian.determinant();
         double weightForce = wt * measure;
-        //printf("patch %d, point %d:\n", patch, point_idx);
-        //printf("weightForce: %f\n", weightForce);
-        //geoActiveCPs.print();
-        //pt.print();
-        //printf("geoValues:\n");
-        //geoValues[0].print();
-        //printf("md[0]:\n");
-        //md[0].print();
-        //printf("md[1]:\n");
-        //md[1].print();
-        //printf("derivatives:\n");
-        //geoValues[1].print();
-        //printf("derivatives reshaped:\n");
-        //geoValues[1].reshape(CPdim, geoActiveCPs.rows()).print();
+        double weightBody = wt * measure;
+        
         DeviceMatrix<double> activeCPs = displacement->getActiveControlPoints(patch, pt);
         DeviceObjectArray<DeviceVector<double>> values;
         displacement->evalAllDers_into(patch, pt, numDerivatives, values);
@@ -248,7 +239,7 @@ void assembleDomain(int totalGPs, MultiPatch_d* displacement, MultiPatch_d* patc
         mdDisplacement.resize(numDerivatives+1);
         mdDisplacement[0] = values[0].transpose() * activeCPs;
         mdDisplacement[1] = values[1].reshape(CPdim, activeCPs.rows()) * activeCPs;
-        DeviceMatrix<double> phyGrad = geoJacobian.inverse().transpose() * values[1].reshape(CPdim, activeCPs.rows());
+        DeviceMatrix<double> physGrad = geoJacobian.inverse().transpose() * values[1].reshape(CPdim, activeCPs.rows());
         DeviceMatrix<double> physDispJac = mdDisplacement[1].transpose() * geoJacobian.inverse();
         DeviceMatrix<double> I = DeviceMatrix<double>::Identity(CPdim);
         DeviceMatrix<double> F = physDispJac + I;
@@ -263,10 +254,44 @@ void assembleDomain(int totalGPs, MultiPatch_d* displacement, MultiPatch_d* patc
         DeviceMatrix<double> Ctemp;
         symmetricIdentityTensor<double>(Ctemp, RCGinv);
         C=C+(mu-lambda*(J*J-1)/2)*Ctemp;
-        printf("patch %d, point %d:\n", patch, point_idx);
+        int N_D = localIndicesDisp.rows();
+        DeviceMatrix<double> B_i, B_j, materialTangentTemp, materialTangent, localMat;
+        DeviceVector<double> geometricTangentTemp, localRhs, Svec, localResidual;
+        localMat.setZero(dim*N_D,dim*N_D);
+        localRhs.setZero(dim*N_D);
+        //printf("patch %d, point %d:\n", patch, point_idx);
+        //physGrad.print();
+        for (int i = 0; i < N_D; i++)
+        {
+            setB<double>(B_i,F,physGrad.col(i));
+            materialTangentTemp = B_i.transpose() * C;
+            geometricTangentTemp = S * physGrad.col(i);
+            for (int j = 0; j < N_D; j++)
+            {
+                setB<double>(B_j,F,physGrad.col(j));
+                materialTangent = materialTangentTemp * B_j;
+                double geometricTangent = geometricTangentTemp.dot(physGrad.col(j));
+                for (int d = 0; d < dim; d++)
+                    materialTangent(d,d) += geometricTangent;
+                for (int di = 0; di < dim; di++)
+                    for (int dj = 0; dj < dim; dj++)
+                        localMat(di*N_D+i, dj*N_D+j) += weightBody * materialTangent(di,dj);
+                //printf("patch %d, point %d, N_%d, N_%d:\n", patch, point_idx, i, j);
+                //materialTangent.print();
+                //printf("%f\n", geometricTangent);
+            }
+            voigtStress<double>(Svec, S);
+            localResidual = B_i.transpose() * Svec;
+            for (int d = 0; d < dim; d++)
+                localRhs(d*N_D+i) -= weightBody * localResidual(d);
+            printf("patch %d, point %d, N_%d:\n", patch, point_idx, i);
+            localRhs.print();
+        }
+        //printf("patch %d, point %d:\n", patch, point_idx);
+        //localMat.print();
         //printf("lambda: %f, mu: %f\n", lambda, mu);
-        C.print();
-        //phyGrads.print();
+        //localIndicesDisp.print();
+        //phyGrads.print(); 
         //activeCPs.print();
         //printf("values:\n");
         //values[0].print();
@@ -904,7 +929,7 @@ void Assembler::assemble(const DeviceVector<double>& solVector)
     //size_t curr, limit;
     //cudaDeviceGetLimit(&limit, cudaLimitStackSize);
     //printf("StackSize limit = %zu bytes\n", limit);
-    cudaDeviceSetLimit(cudaLimitStackSize, 3*1024);
+    cudaDeviceSetLimit(cudaLimitStackSize, 4*1024);
 
 #if 1
     int totalGPs = m_multiBasis.totalNumGPs();

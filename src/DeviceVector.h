@@ -162,6 +162,16 @@ public:
         return sum;
     }
 
+    __device__
+    T dot(const DeviceVector& other) const
+    {
+        assert(size() == other.size() && "Dot product requires vectors of the same size");
+        T result = 0;
+        for (int i = 0; i < size(); i++)
+            result += this->operator()(i) * other(i);
+        return result;
+    }
+
     //Returns the vector as a resized to n x m matrix
     __device__
     DeviceMatrix<T> reshape(int n, int m) const

@@ -95,6 +95,12 @@ public:
     { m_patches[patch].basis().evalAllDers_into(u, n, result); }
 
     __device__
+    DeviceMatrix<int> getActiveIndexes(int patchIndex, DeviceVector<double> pt)
+    {
+        return m_patches[patchIndex].getActiveIndexes(pt);
+    }
+    
+    __device__
     DeviceMatrix<double> getActiveControlPoints(int patchIndex, DeviceVector<double> pt)
     {
         return m_patches[patchIndex].getActiveControlPoints(pt);

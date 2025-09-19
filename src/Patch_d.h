@@ -164,6 +164,12 @@ public:
     }
 
     __device__
+    DeviceMatrix<int> getActiveIndexes(DeviceVector<double> pt)
+    {
+        return m_basis.getActiveIndexes(pt);
+    }
+
+    __device__
     DeviceMatrix<double> getActiveControlPoints(DeviceVector<double> pt)
     {
         DeviceVector<int> activeIndexes = m_basis.getActiveIndexes(pt);

@@ -8,6 +8,9 @@
 template <typename T>
 class DeviceMatrix;
 
+template <typename T>
+class DeviceVector;
+
 __host__ __device__
 inline void getTensorCoordinate(int dim, int* numVlues, int index, int* out)
 {
@@ -252,4 +255,38 @@ inline void symmetricIdentityTensor(DeviceMatrix<T> &C, const DeviceMatrix<T> &R
         for (int j = 0; j < dimTensor; j++)
             C(i, j) = (R(voigt(dim, i, 0), voigt(dim, j, 0)) * R(voigt(dim, i, 1), voigt(dim, j, 1))
                            + R(voigt(dim, i, 0), voigt(dim, j, 1)) * R(voigt(dim, i, 1), voigt(dim, j, 0)));
+}
+
+template <class T>
+__device__
+inline void setB(DeviceMatrix<T>& B, const DeviceMatrix<T>& F, const DeviceVector<T>& bGrad)
+{
+    int dim = F.cols();
+    int dimTensor = (dim * (dim + 1)) / 2;
+    B.setZero(dimTensor, dim);
+
+    for (int j = 0; j < dim; j++)
+    {
+        for (int i = 0; i < dim; i++)
+            B(i,j) = F(j,i) * bGrad(i);
+        if (dim == 2)
+            B(2,j) = F(j,0) * bGrad(1) + F(j,1) * bGrad(0);
+        if (dim == 3)
+            for (int i = 0; i < dim; i++)
+            {
+                int k = (i+1)%3;
+                B(i+dim,j) = F(j,i) * bGrad(k) + F(j,k) * bGrad(i);
+            }
+    }
+}
+
+template <class T>
+__device__
+inline void voigtStress(DeviceVector<T>& Svec, const DeviceMatrix<T>& S)
+{
+    int dim = S.cols();
+    int dimTensor = (dim * (dim + 1)) / 2;
+    Svec.setZero(dimTensor);
+    for (int i = 0; i < dimTensor; i++)
+        Svec(i) = S(voigt(dim, i, 0), voigt(dim, i, 1));
 }
