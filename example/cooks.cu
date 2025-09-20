@@ -495,8 +495,14 @@ int main()
 	for (int d = 0; d < 2; ++d)
 		bcInfo.addCondition(0, boundary::west, condition_type::dirichlet, std::vector<double>{0.0, 0.0}, d);
 
-	std::vector<double> neumannValue{ 100e4, 0.0 };
-    bcInfo.addCondition(1, boundary::east, condition_type::neumann, neumannValue);
+	//std::vector<double> neumannValue{ 100e4, 0.0 };
+	std::vector<double> disp{ 0.1, 0.0 };
+    //bcInfo.addCondition(1, boundary::east, condition_type::neumann, neumannValue);
+    bcInfo.addCondition(1, boundary::east, condition_type::dirichlet, disp, 0);
+
+	Eigen::VectorXd bodyForce(2);
+	bodyForce << 0.0, 0.0;
+
 #if 0
 	numKnots = multiPatch.getBasisNumKnots();
 	knots = multiPatch.getBasisKnots();
@@ -551,7 +557,7 @@ int main()
 	}
 	std::cout << std::endl;
 #endif
-	Assembler assembler(multiPatch, bases, bcInfo);
+	Assembler assembler(multiPatch, bases, bcInfo, bodyForce);
 	DeviceVector<double> solution(assembler.numDofs());
 	solution.setZero();
 	assembler.assemble(solution);
