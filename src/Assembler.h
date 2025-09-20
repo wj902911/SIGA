@@ -4,14 +4,14 @@
 #include "MultiPatchData.h"
 #include "MultiBasis.h"
 #include "BoundaryCondition.h"
-//#include "DeviceVector.h"
+#include "DeviceVector.h"
 #include "SparseSystem.h"
 
 class Assembler
 {
 public:
     Assembler(const MultiPatch& multiPatch, const MultiBasis& multiBasis, 
-              const BoundaryConditions& bc);
+              const BoundaryConditions& bc, const Eigen::VectorXd& bodyForce);
     ~Assembler()=default;
 
     int getNumPatches() const;
@@ -39,8 +39,9 @@ private:
     MultiBasis m_multiBasis;
     //std::vector<DofMapper> m_dofMappers;
     BoundaryConditions m_boundaryConditions;
-    std::vector<std::vector<int>> m_ddof;
+    std::vector<std::vector<double>> m_ddof;
     SparseSystem m_sparseSystem;
+    Eigen::VectorXd m_bodyForce;
 
 #if 0
     thrust::device_vector<double> m_matrix;

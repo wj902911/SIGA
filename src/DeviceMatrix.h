@@ -654,6 +654,95 @@ public:
             return *this;
         }
 
+        template <typename Derived>
+        __device__
+        Block& operator+(const DeviceMatrixBase<Derived, T>& other)
+        {
+            const Derived& derived = static_cast<const Derived&>(other);
+
+            assert(m_rows == derived.rows() && m_cols == derived.cols() 
+                   && "Matrix dimensions mismatch for addition");
+
+            for (int i = 0; i < m_rows; i++)
+                for (int j = 0; j < m_cols; j++)
+                    (*this)(i, j) += derived(i, j);
+
+            return *this;
+        }
+
+        template <typename Derived>
+        __device__
+        Block& operator-(const DeviceMatrixBase<Derived, T>& other)
+        {
+            const Derived& derived = static_cast<const Derived&>(other);
+
+            assert(m_rows == derived.rows() && m_cols == derived.cols() 
+                   && "Matrix dimensions mismatch for subtraction");
+
+            for (int i = 0; i < m_rows; i++)
+                for (int j = 0; j < m_cols; j++)
+                    (*this)(i, j) -= derived(i, j);
+
+            return *this;
+        }
+
+        template <typename Derived>
+        __device__
+        Block& operator*(const DeviceMatrixBase<Derived, T>& other)
+        {
+            const Derived& derived = static_cast<const Derived&>(other);
+
+            assert(m_cols == derived.rows() && "Matrix dimensions mismatch for multiplication");
+
+            DeviceMatrix<T> result(m_rows, derived.cols());
+            for (int i = 0; i < m_rows; i++)
+            {
+                for (int j = 0; j < derived.cols(); j++)
+                {
+                    T sum = 0;
+                    for (int k = 0; k < m_cols; k++)
+                    {
+                        sum += (*this)(i, k) * derived(k, j);
+                    }
+                    result(i, j) = sum;
+                }
+            }
+            *this = result;
+            return *this;
+        }
+
+        template <typename Derived>
+        __device__
+        Block& operator-=(const DeviceMatrixBase<Derived, T>& other)
+        {
+            const Derived& derived = static_cast<const Derived&>(other);
+
+            assert(m_rows == derived.rows() && m_cols == derived.cols() 
+                   && "Matrix dimensions mismatch for subtraction assignment");
+
+            for (int i = 0; i < m_rows; i++)
+                for (int j = 0; j < m_cols; j++)
+                    (*this)(i, j) -= derived(i, j);
+
+            return *this;
+        }
+
+        template <typename Derived>
+        __device__
+        Block& operator+=(const DeviceMatrixBase<Derived, T>& other)
+        {
+            const Derived& derived = static_cast<const Derived&>(other);
+
+            assert(m_rows == derived.rows() && m_cols == derived.cols() 
+                   && "Matrix dimensions mismatch for addition assignment");
+
+            for (int i = 0; i < m_rows; i++)
+                for (int j = 0; j < m_cols; j++)
+                    (*this)(i, j) += derived(i, j);
+
+            return *this;
+        }
+
         __host__ __device__
         T* data() const
         { 

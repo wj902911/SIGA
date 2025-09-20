@@ -310,6 +310,13 @@ DofMapper_d(int* mapperData)
     bool is_free(int i, int k = 0) const
     { return is_free_index(index(i, k)); }
 
+    __device__
+    int global_to_bindex(int gl) const
+    {
+        assert(!is_free_index(gl) && "DofMapper_d::global_to_bindex() called with free dof");
+        return gl - m_numFreeDofs.back() + m_bshift - m_shift;
+    }
+
 private:
 #if !singleDofs
     DeviceObjectArray<DeviceObjectArray<int>> m_dofs;

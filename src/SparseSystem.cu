@@ -149,7 +149,7 @@ SparseSystem::SparseSystem(const std::vector<DofMapper> &mappers,
     for (int c = 1; c < d; ++c)
         m_cstr[c] = int(m_cstr[c-1]) + mappers[m_col[c-1]].freeSize(); // Use the original mappers to get freeSize
 
-    m_matrix.resize(int(m_rstr[d-1]) + mappers[m_row[d-1]].freeSize(),
+    m_matrix.setZero(int(m_rstr[d-1]) + mappers[m_row[d-1]].freeSize(),
                     int(m_cstr[d-1]) + mappers[m_col[d-1]].freeSize());
                     
     m_RHS.setZero(m_matrix.rows());
@@ -213,3 +213,29 @@ DeviceObjectArray<int> SparseSystem::getDofs(int c) const
     delete[] dofsSizes;
     return dofs;
 }
+
+#if 0
+__device__
+void SparseSystem::pushToRhs(const DeviceVector<double> &localRhs, 
+                             const DeviceObjectArray<DeviceVector<int>> &actives_vec, 
+                             const DeviceVector<int> &r_vec)
+{
+    int rstrLocal = 0;
+    for (int r_ind = 0; r_ind != r_vec.size(); r_ind++)
+    {
+        int r = r_vec(r_ind);
+        const DofMapper_d& rowMap = m_mappers[m_row(r)];
+        const int numActive_i = actives_vec[r].rows();
+
+        for (int i = 0; i != numActive_i; i++)
+        {
+            const int ii = m_rstr(r) + actives_vec[r](i);
+            const int iiLocal = rstrLocal + i;
+
+            if (rowMap.is_free_index(actives_vec[r](i)))
+                atomicAdd(&m_RHS(ii), localRhs(iiLocal));
+        }
+        rstrLocal += numActive_i;
+    }
+}
+#endif

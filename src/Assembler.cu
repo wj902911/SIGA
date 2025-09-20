@@ -200,7 +200,8 @@ void tensorGrid_device(int idx, int* vecs_sizes, int dim, int num_patch,
 
 __global__
 void assembleDomain(int totalGPs, MultiPatch_d* displacement, MultiPatch_d* patches,
-                    DeviceObjectArray<GaussPoints_d>* gaussPoints)
+                    DeviceObjectArray<GaussPoints_d>* gaussPoints, DeviceVector<double>* bodyForce,
+                    SparseSystem* system, DeviceObjectArray<DeviceVector<double>>* eliminatedDofs)
 {
     //MultiBasis_d bases(*displacement);
     for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
@@ -284,10 +285,16 @@ void assembleDomain(int totalGPs, MultiPatch_d* displacement, MultiPatch_d* patc
             localResidual = B_i.transpose() * Svec;
             for (int d = 0; d < dim; d++)
                 localRhs(d*N_D+i) -= weightBody * localResidual(d);
-            printf("patch %d, point %d, N_%d:\n", patch, point_idx, i);
-            localRhs.print();
+            //printf("patch %d, point %d, N_%d:\n", patch, point_idx, i);
+            //localRhs.print();
         }
+
+        for (int d = 0; d < dim; d++)
+            localRhs.middleRows(d*N_D, N_D) += weightForce * bodyForce->operator()(d) * values[0];
+            //localRhs.middleRows(d*N_D, N_D)+= weightForce * values[0];
+            //weightForce * bodyForce->operator[](d) * values[0];
         //printf("patch %d, point %d:\n", patch, point_idx);
+        //localRhs.print();
         //localMat.print();
         //printf("lambda: %f, mu: %f\n", lambda, mu);
         //localIndicesDisp.print();
@@ -297,12 +304,26 @@ void assembleDomain(int totalGPs, MultiPatch_d* displacement, MultiPatch_d* patc
         //values[0].print();
         //printf("derivative:\n");
         //values[1].print();
+
+        DeviceObjectArray<DeviceVector<int>> globalIndices(dim);
+        DeviceVector<int> blockNumbers(dim);
+        //printf("patch %d, point %d:\n", patch, point_idx);
+        for (int d = 0; d < dim; d++)
+        {
+            //printf("Component %d global indices:\n", d);
+            globalIndices[d] = system->mapColIndices(localIndicesDisp, patch, d);
+            //globalIndices[d].print();
+            blockNumbers(d) = d;
+        }
+        system->pushToRhs(localRhs, globalIndices, blockNumbers);
+        system->pushToMatrix(localMat, globalIndices, *eliminatedDofs, blockNumbers, blockNumbers);
     }
+    //system->rhs().print();
 }
 
 __global__
 void constructSolutionKernel(const DeviceVector<double>* solVector,
-                             const DeviceObjectArray<DeviceVector<int>>* fixedDoFs,
+                             const DeviceObjectArray<DeviceVector<double>>* fixedDoFs,
                              const MultiBasis_d* bases, const SparseSystem* system,
                              MultiPatch_d* result)
 {
@@ -734,8 +755,8 @@ void matrixTexsKernel(int rows, int column, double* matrix)
 }
 
 Assembler::Assembler(const MultiPatch& multiPatch, const MultiBasis& multiBasis, 
-                     const BoundaryConditions& bc)
-: m_multiPatch(multiPatch), m_boundaryConditions(bc), m_multiBasis(multiBasis)//, m_multiPatchData(multiPatch)
+                     const BoundaryConditions& bc, const Eigen::VectorXd& bodyForce)
+: m_multiPatch(multiPatch), m_boundaryConditions(bc), m_multiBasis(multiBasis), m_bodyForce(bodyForce)
 {
     int targetDim = m_multiPatch.getCPDim();
     int domainDim = m_multiPatch.getBasisDim();
@@ -850,15 +871,15 @@ void Assembler::assemble(const DeviceVector<double>& solVector)
                cudaMemcpyHostToDevice);
 #endif
 
-    DeviceObjectArray<DeviceVector<int>> fixedDoFs_d(m_ddof.size());
+    DeviceObjectArray<DeviceVector<double>> fixedDoFs_d(m_ddof.size());
     for (int i = 0; i < m_ddof.size(); ++i)
     {
-        DeviceVector<int> fixedDoF_d(m_ddof[i].size(), m_ddof[i].data());
+        DeviceVector<double> fixedDoF_d(m_ddof[i].size(), m_ddof[i].data());
         fixedDoFs_d.at(i) = fixedDoF_d;
     }
-    DeviceObjectArray<DeviceVector<int>>* d_fixedDoFs = nullptr;
-    cudaMalloc((void**)&d_fixedDoFs, sizeof(DeviceObjectArray<DeviceVector<int>>));
-    cudaMemcpy(d_fixedDoFs, &fixedDoFs_d, sizeof(DeviceObjectArray<DeviceVector<int>>), 
+    DeviceObjectArray<DeviceVector<double>>* d_fixedDoFs = nullptr;
+    cudaMalloc((void**)&d_fixedDoFs, sizeof(DeviceObjectArray<DeviceVector<double>>));
+    cudaMemcpy(d_fixedDoFs, &fixedDoFs_d, sizeof(DeviceObjectArray<DeviceVector<double>>), 
                cudaMemcpyHostToDevice);
 #if 1
     MultiPatch_d patches(m_multiPatch);
@@ -875,6 +896,12 @@ void Assembler::assemble(const DeviceVector<double>& solVector)
     MultiBasis_d* d_bases = nullptr;
     cudaMalloc((void**)&d_bases, sizeof(MultiBasis_d));
     cudaMemcpy(d_bases, &bases, sizeof(MultiBasis_d), cudaMemcpyHostToDevice);
+
+    DeviceVector<double> bodyForce_d(m_bodyForce);
+    DeviceVector<double>* d_bodyForce = nullptr;
+    cudaMalloc((void**)&d_bodyForce, sizeof(DeviceVector<double>));
+    cudaMemcpy(d_bodyForce, &bodyForce_d, sizeof(DeviceVector<double>), cudaMemcpyHostToDevice);
+
 #endif
 
 #if 1
@@ -933,7 +960,7 @@ void Assembler::assemble(const DeviceVector<double>& solVector)
 
 #if 1
     int totalGPs = m_multiBasis.totalNumGPs();
-    assembleDomain<<<1, 1>>>(totalGPs, d_displacement, d_patches, d_gaussPoints);
+    assembleDomain<<<1, 1>>>(totalGPs, d_displacement, d_patches, d_gaussPoints, d_bodyForce, d_sparseSystem, d_fixedDoFs);
     err = cudaGetLastError();
     if (err != cudaSuccess)
         std::cerr << "Error after kernel assembleDomain launch: " 
@@ -951,6 +978,7 @@ void Assembler::assemble(const DeviceVector<double>& solVector)
     cudaFree(d_fixedDoFs);
     cudaFree(d_solVector);
     cudaFree(d_sparseSystem);
+    cudaFree(d_bodyForce);
 
 #if 0
     assemble_kernel<<<1, 1>>>(m_multiPatchData.getBasisDim(),
