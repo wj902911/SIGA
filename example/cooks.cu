@@ -60,6 +60,7 @@ template __global__ void destructKernel<DeviceObjectArray<double>>(DeviceObjectA
 //template __global__ void destructKernel<DeviceObjectArray<DeviceMatrix<int>>>(DeviceObjectArray<DeviceMatrix<int>>* a, size_t n);
 //template __global__ void destructKernel<DeviceObjectArray<DeviceMatrixBase<DeviceMatrix<int>, int>>>(DeviceObjectArray<DeviceMatrixBase<DeviceMatrix<int>, int>>* a, size_t n);
 template __global__ void destructKernel<DeviceVector<int>>(DeviceVector<int>* a, size_t n);
+template __global__ void destructKernel<DeviceVector<double>>(DeviceVector<double>* a, size_t n);
 //template __global__ void destructKernel<DeviceMatrix<int>>(DeviceMatrix<int>* a, size_t n);
 #endif
 template __global__ void destructKernel<KnotVector_d>(KnotVector_d* a, size_t n);
