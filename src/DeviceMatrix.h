@@ -204,7 +204,10 @@ DeviceMatrix<T> operator+(const DeviceMatrixBase<DerivedA, T>& A,
     int numBlocks = (size + blockSize - 1) / blockSize;
     T* d_A = derivedA.data();
     T* d_B = derivedB.data();
-    parallPlus<T><<<numBlocks, blockSize>>>(d_A, d_B, result.data(), size);
+    T* d_test = nullptr;
+    cudaMalloc((void**)&d_test, size * sizeof(T));
+
+    parallPlus<T><<<numBlocks, blockSize>>>(d_A, d_B, d_test, size);
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) 
         printf("Error in operator+: %s\n", cudaGetErrorString(err));
