@@ -14,6 +14,6 @@ foreach(EXAMPLE_FILE ${EXAMPLE_FILES})
     add_executable(${EXAMPLE_NAME} ${EXAMPLE_FILE})
     set_property(TARGET ${EXAMPLE_NAME} PROPERTY FOLDER "example")
 
-    target_link_libraries(${EXAMPLE_NAME} SIGA ${GLFW_LIBRARIES})
+    target_link_libraries(${EXAMPLE_NAME} SIGA )
 
 endforeach()

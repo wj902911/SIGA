@@ -143,9 +143,15 @@ public:
         }
     }
 
-    __device__
+    __host__ __device__
     DeviceVector<double>& rhs() { return m_RHS; }
 
-    __device__
+    __host__ __device__
+    const DeviceVector<double>& rhs() const { return m_RHS; }
+
+    __host__ __device__
     DeviceMatrix<double>& matrix() { return m_matrix; }
+
+    __host__ __device__
+    const DeviceMatrix<double>& matrix() const { return m_matrix; }
 };

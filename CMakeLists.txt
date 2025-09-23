@@ -11,6 +11,12 @@ set(CMAKE_CUDA_ARCHITECTURES 75)
 
 set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -G")
 
+find_package(CUDAToolkit REQUIRED)
+
+#if (MSVC)
+#  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+#endif()
+
 # Include directories
 include_directories("${PROJECT_SOURCE_DIR}/src")
 include_directories("${PROJECT_SOURCE_DIR}/external/eigen")

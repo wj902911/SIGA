@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Boundary.h"
+#include <cassert> 
 
 class BoxTopology
 {

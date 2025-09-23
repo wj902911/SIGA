@@ -8,7 +8,8 @@
 
 #include <iostream>
 
-#include <Assembler.h>
+#include <Solver.h>
+//#include <Assembler.h>
 #include <MultiPatch_d.h>
 #include <MultiBasis_d.h>
 #include <MultiBasis.h>
@@ -72,6 +73,7 @@ template __global__ void destructKernel<GaussPoints_d>(GaussPoints_d* a, size_t 
 template __global__ void deviceDeepCopyKernel<DeviceObjectArray<double>>(DeviceObjectArray<double>* a, 
 	                                                                     DeviceObjectArray<double>* b);
 #endif
+//template __global__ void parallPlus<double>(double* a, double* b, double* c, int n);
 
 __global__ void testKernel(MultiPatch_d* d_multiPatch_d)
 {
@@ -559,9 +561,11 @@ int main()
 	std::cout << std::endl;
 #endif
 	Assembler assembler(multiPatch, bases, bcInfo, bodyForce);
-	DeviceVector<double> solution(assembler.numDofs());
-	solution.setZero();
-	assembler.assemble(solution);
+	//DeviceVector<double> solution(assembler.numDofs());
+	//solution.setZero();
+	//assembler.assemble(solution);
+	Solver solver(assembler);
+	solver.solve();
 #endif
 #if 0
 	thrust::device_vector<int> dofs_u{ 2,0,3,1 };

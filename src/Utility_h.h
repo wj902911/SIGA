@@ -1,4 +1,5 @@
 #pragma once
+#include <cassert> 
 
 //#include <cuda_runtime.h>
 //#include <thrust/device_vector.h>

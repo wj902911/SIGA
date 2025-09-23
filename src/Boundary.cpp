@@ -1,4 +1,5 @@
 #include "Boundary.h"
+#include <cassert> 
 
 void BoxSide::getContainedCorners(int dim, std::vector<BoxCorner> &corners) const
 {

@@ -1,5 +1,6 @@
 #include "DofMapper.h"
 #include <algorithm>
+#include <cassert> 
 
 void DofMapper::init(const std::vector<TensorBsplineBasis> &bases, int nComp)
 {

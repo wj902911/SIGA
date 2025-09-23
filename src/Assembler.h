@@ -33,6 +33,9 @@ public:
                                 thrust::device_vector<int> &sides,
                                 thrust::device_vector<double> &values) const;
 
+    const DeviceMatrix<double> & matrix() const { return m_sparseSystem.matrix(); }
+    const DeviceVector<double> & rhs() const { return m_sparseSystem.rhs(); }
+
 private:
     //MultiPatchData m_multiPatchData;
     MultiPatch m_multiPatch;

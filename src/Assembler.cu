@@ -318,7 +318,7 @@ void assembleDomain(int totalGPs, MultiPatch_d* displacement, MultiPatch_d* patc
         system->pushToRhs(localRhs, globalIndices, blockNumbers);
         system->pushToMatrix(localMat, globalIndices, *eliminatedDofs, blockNumbers, blockNumbers);
     }
-    system->rhs().print();
+    //system->rhs().print();
 }
 
 __global__
