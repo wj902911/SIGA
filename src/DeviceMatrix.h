@@ -13,79 +13,36 @@ class DeviceMatrix;
 
 template <typename T>
 __global__
-void parallPlus(T* a, T* b, T* c, int n)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) 
-        c[i] = a[i] + b[i];
-}
+void parallPlus(T* a, T* b, T* c, int n);
+
 #if 1
 template <typename T>
 __global__
-void parallPlus(T* a, T b, T* c, int n)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) 
-    {
-        c[i] = a[i] + b;
-        printf("c[%d] = %d + %d = %d\n", i, a[i], b, c[i]);
-    }
-}
+void parallPlus(T* a, T b, T* c, int n);
 #endif
 template <typename T>
 __global__
-void parallMinus(T* a, T* b, T* c, int n)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n)
-        c[i] = a[i] - b[i];
-}
+void parallMinus(T* a, T* b, T* c, int n);
 
 template <typename T>
 __global__
-void parallMinus(T* a, T b, T* c, int n)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n)
-        c[i] = a[i] - b;
-}
+void parallMinus(T* a, T b, T* c, int n);
 
 template <typename T>
 __global__
-void parallMult(T* a, T* b, T* c, int n)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n)
-        c[i] = a[i] * b[i];
-}
+void parallMult(T* a, T* b, T* c, int n);
 
 template <typename T>
 __global__
-void parallMult(T* a, T b, T* c, int n)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n)
-        c[i] = a[i] * b;
-}
+void parallMult(T* a, T b, T* c, int n);
 
 template <typename T>
 __global__
-void parallDiv(T* a, T* b, T* c, int n)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n)
-        c[i] = a[i] / b[i];
-}
+void parallDiv(T* a, T* b, T* c, int n);
 
 template <typename T>
 __global__
-void parallDiv(T* a, T b, T* c, int n)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) {
-        c[i] = a[i] / b;
-    }
-}
+void parallDiv(T* a, T b, T* c, int n);
 
 
 
@@ -204,10 +161,8 @@ DeviceMatrix<T> operator+(const DeviceMatrixBase<DerivedA, T>& A,
     int numBlocks = (size + blockSize - 1) / blockSize;
     T* d_A = derivedA.data();
     T* d_B = derivedB.data();
-    T* d_test = nullptr;
-    cudaMalloc((void**)&d_test, size * sizeof(T));
 
-    parallPlus<T><<<numBlocks, blockSize>>>(d_A, d_B, d_test, size);
+    parallPlus<T><<<numBlocks, blockSize>>>(d_A, d_B, result.data(), size);
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) 
         printf("Error in operator+: %s\n", cudaGetErrorString(err));
@@ -1173,3 +1128,79 @@ public:
     __host__ __device__
     ~DeviceMatrixView() {}
 };
+
+template <typename T>
+__global__
+void parallPlus(T* a, T* b, T* c, int n)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) 
+        c[i] = a[i] + b[i];
+}
+
+template <typename T>
+__global__
+void parallPlus(T* a, T b, T* c, int n)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) 
+    {
+        c[i] = a[i] + b;
+        printf("c[%d] = %d + %d = %d\n", i, a[i], b, c[i]);
+    }
+}
+
+template <typename T>
+__global__
+void parallMinus(T* a, T* b, T* c, int n)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n)
+        c[i] = a[i] - b[i];
+}
+
+template <typename T>
+__global__
+void parallMinus(T* a, T b, T* c, int n)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n)
+        c[i] = a[i] - b;
+}
+
+template <typename T>
+__global__
+void parallMult(T* a, T* b, T* c, int n)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n)
+        c[i] = a[i] * b[i];
+}
+
+template <typename T>
+__global__
+void parallMult(T* a, T b, T* c, int n)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n)
+        c[i] = a[i] * b;
+}
+
+template <typename T>
+__global__
+void parallDiv(T* a, T* b, T* c, int n)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n)
+        c[i] = a[i] / b[i];
+}
+
+template <typename T>
+__global__
+void parallDiv(T* a, T b, T* c, int n)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {
+        c[i] = a[i] / b;
+    }
+}

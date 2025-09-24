@@ -73,7 +73,8 @@ template __global__ void destructKernel<GaussPoints_d>(GaussPoints_d* a, size_t 
 template __global__ void deviceDeepCopyKernel<DeviceObjectArray<double>>(DeviceObjectArray<double>* a, 
 	                                                                     DeviceObjectArray<double>* b);
 #endif
-//template __global__ void parallPlus<double>(double* a, double* b, double* c, int n);
+template __global__ void parallPlus<double>(double* a, double* b, double* c, int n);
+template __global__ void parallPlus<double>(double* a, double b, double* c, int n);
 
 __global__ void testKernel(MultiPatch_d* d_multiPatch_d)
 {

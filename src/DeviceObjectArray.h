@@ -982,10 +982,10 @@ template <typename T>
 __global__ 
 void deviceDeepCopyKernel(T* device_dst, T* host_src) 
 {
-    printf("deviceDeepCopyKernel called\n");
+    //printf("deviceDeepCopyKernel called\n");
     new (device_dst) T(*host_src);
     //device_dst->operator=(*host_src); // Call the assignment operator to copy the object
-    printf("deviceDeepCopyKernel done\n");
+    //printf("deviceDeepCopyKernel done\n");
 }
 
 template <typename T>
@@ -995,9 +995,9 @@ void destructKernel(T* ptr, size_t count)
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < count) 
     {
-        printf("Destructing object at index %d.\n", idx);
+        //printf("Destructing object at index %d.\n", idx);
         ptr[idx].~T();
-        printf("Destructed object at index %d.\n", idx);
+        //printf("Destructed object at index %d.\n", idx);
     }
 }
 

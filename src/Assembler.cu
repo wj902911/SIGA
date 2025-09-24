@@ -240,6 +240,13 @@ void assembleDomain(int totalGPs, MultiPatch_d* displacement, MultiPatch_d* patc
         mdDisplacement.resize(numDerivatives+1);
         mdDisplacement[0] = values[0].transpose() * activeCPs;
         mdDisplacement[1] = values[1].reshape(CPdim, activeCPs.rows()) * activeCPs;
+        //printf("patch %d, point %d:\n", patch, point_idx);
+        //activeCPs.print();
+        //printf("values[0]:\n");
+        //values[0].print();
+        //printf("values[1]:\n");
+        //values[1].print();
+        //mdDisplacement[1].transpose().print();
         DeviceMatrix<double> physGrad = geoJacobian.inverse().transpose() * values[1].reshape(CPdim, activeCPs.rows());
         DeviceMatrix<double> physDispJac = mdDisplacement[1].transpose() * geoJacobian.inverse();
         DeviceMatrix<double> I = DeviceMatrix<double>::Identity(CPdim);
@@ -260,8 +267,6 @@ void assembleDomain(int totalGPs, MultiPatch_d* displacement, MultiPatch_d* patc
         DeviceVector<double> geometricTangentTemp, localRhs, Svec, localResidual;
         localMat.setZero(dim*N_D,dim*N_D);
         localRhs.setZero(dim*N_D);
-        //printf("patch %d, point %d:\n", patch, point_idx);
-        //physGrad.print();
         for (int i = 0; i < N_D; i++)
         {
             setB<double>(B_i,F,physGrad.col(i));
@@ -305,6 +310,7 @@ void assembleDomain(int totalGPs, MultiPatch_d* displacement, MultiPatch_d* patc
         //printf("derivative:\n");
         //values[1].print();
 
+        
         DeviceObjectArray<DeviceVector<int>> globalIndices(dim);
         DeviceVector<int> blockNumbers(dim);
         //printf("patch %d, point %d:\n", patch, point_idx);
@@ -327,24 +333,36 @@ void constructSolutionKernel(const DeviceVector<double>* solVector,
                              const MultiBasis_d* bases, const SparseSystem* system,
                              MultiPatch_d* result)
 {
+    int numDofs = result->getTotalNumControlPoints()*result->getCPDim();
+    printf("Total num dofs: %d\n", numDofs);
     for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
-        idx < solVector->size(); idx += blockDim.x * gridDim.x)
+        idx < numDofs; idx += blockDim.x * gridDim.x)
     {
+        printf("Thread %d\n", idx);
+        //printf("Total num control points: %d\n", result->getTotalNumControlPoints());
         int patch(0);
-        int point_idx = bases->threadPatch_dof(idx, patch);
-        DeviceObjectArray<int> dofCoords = bases->dofCoords(point_idx, patch);
+        int unk(0);
+        int point_idx = result->threadPatchAndDof(idx, patch, unk);
+        //DeviceObjectArray<int> dofCoords = bases->dofCoords(point_idx, patch);
+        //DeviceObjectArray<int> dofCoords = result->dofCoords(point_idx);
+        printf("patch %d, point_idx %d, unknown:%d\n", patch, point_idx, unk);
         int index(0);
-        if (system->colMapper(dofCoords[0]).is_free(dofCoords[1], patch))
+        if (system->colMapper(unk).is_free(point_idx, patch))
         {
-            index = system->mapToGlobalColIndex(dofCoords[1], patch, dofCoords[0]);
-            result->setCoefficients(patch, dofCoords[1], dofCoords[0], (*solVector)(index));
+            printf("free dof\n");
+            index = system->mapToGlobalColIndex(point_idx, patch, unk);
+            printf("global index: %d\n", index);
+            result->setCoefficients(patch, point_idx, unk, (*solVector)(index));
         }
         else
         {
-            index = system->colMapper(dofCoords[0]).bindex(dofCoords[1], patch);
-            result->setCoefficients(patch, dofCoords[0], dofCoords[1], 
-                                    (*fixedDoFs)[dofCoords[0]](index));
+            printf("fixed dof\n");
+            index = system->colMapper(unk).bindex(point_idx, patch);
+            printf("global index: %d\n", index);
+            result->setCoefficients(patch, point_idx, unk, 
+                                    (*fixedDoFs)[unk](index));
         }
+        printf("Thread %d finished\n", idx);
     }
     //printf("Patch 0 control points:\n");
     //result->patch(0).controlPoints().print();
@@ -851,6 +869,8 @@ void gaussPointsTest(GaussPoints_d* gspts)
 
 void Assembler::assemble(const DeviceVector<double>& solVector)
 {
+    m_sparseSystem.matrix().setZero();
+    m_sparseSystem.rhs().setZero();
 #if 1
     MultiPatch displacement;
     int geoDim = m_multiPatch.getCPDim();
@@ -952,6 +972,8 @@ void Assembler::assemble(const DeviceVector<double>& solVector)
     cudaMemcpy(d_gaussPoints, &gaussPoints, sizeof(DeviceObjectArray<GaussPoints_d>), 
                cudaMemcpyHostToDevice);
 #endif
+
+    
 
     //size_t curr, limit;
     //cudaDeviceGetLimit(&limit, cudaLimitStackSize);

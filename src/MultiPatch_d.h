@@ -46,6 +46,60 @@ public:
     { return m_patches.size(); }
 
     __device__
+    int getNumControlPoints(int patchIndex) const
+    { return m_patches[patchIndex].getNumControlPoints(); }
+
+    __device__
+    int getTotalNumControlPoints() const
+    { 
+        int total = 0;
+        for (int i = 0; i < m_patches.size(); i++)
+            total += getNumControlPoints(i);
+        return total;
+    }
+
+    __device__
+    int threadPatchAndDof(int idx, int& patch, int& unk) const
+    {
+        int dim = getCPDim();
+        int point_idx_patch = idx;
+        int point_idx_dof = idx;
+        int total_points = getTotalNumControlPoints();
+        for (int d = 0; d < dim; d++)
+        {
+            if (point_idx_dof < total_points)
+            {
+                unk = d;
+                break;
+            }
+            point_idx_dof -= total_points;
+            point_idx_patch = point_idx_dof;
+        }
+        for (int i = 0; i < getNumPatches(); i++)
+        {
+            int patch_points = m_patches[i].getNumControlPoints();
+            if (point_idx_patch < patch_points) 
+            {
+            	patch = i;
+            	break;
+            }
+            point_idx_patch -= patch_points;
+        }
+        return point_idx_dof;
+    }
+
+    __device__ 
+    DeviceObjectArray<int> dofCoords(int idx) const
+    {
+        DeviceObjectArray<int> coords(2);
+        int numCPs = getTotalNumControlPoints();
+        coords[1] = idx % numCPs;
+        idx /= numCPs;
+        coords[0] = idx;
+        return coords;
+    }
+
+    __device__
     const Patch_d& patch(int patchIndex) const
     { return m_patches[patchIndex]; }
 

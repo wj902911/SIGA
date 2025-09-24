@@ -119,6 +119,12 @@ bool Solver::solveSingleIteration()
     int ld       = num_cols;
     DeviceVector<double> solutionVector(num_rows);
 
+    //std::cout << "m_solVector:\n";
+    //m_solVector.print();
+    //std::cout << "bdev:\n";
+    //bdev.print();
+    //std::cout << "Adev:\n";
+    //Adev.print();
     //--------------------------------------------------------------------------
     // Device memory management
     int   *d_csr_offsets, *d_csr_columns;
