@@ -97,6 +97,26 @@ SparseSystem::SparseSystem(const std::vector<DofMapper> &mappers,
         }
     #endif
     }
+#if 0
+    DeviceObjectArray<DofMapper_d>* d_mappers = nullptr;
+    cudaMalloc((void**)&d_mappers, sizeof(DeviceObjectArray<DofMapper_d>));
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        std::cerr << "CUDA error: " << cudaGetErrorString(err) << std::endl;
+    }
+    cudaMemcpy(d_mappers, &m_mappers, sizeof(DeviceObjectArray<DofMapper_d>), 
+               cudaMemcpyHostToDevice);
+    dofMapperTestKernel<<<1, 1>>>(d_mappers);
+    err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        std::cerr << "CUDA error: " << cudaGetErrorString(err) << std::endl;
+    }
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) {
+        std::cerr << "CUDA error: " << cudaGetErrorString(err) << std::endl;
+    }
+    cudaFree(d_mappers);
+#endif
     //m_mappers.parallelDataSetting(h_mappers, ms);
     //delete[] h_mappers;
 #if 0

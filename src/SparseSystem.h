@@ -17,8 +17,9 @@ void getDofsKernel(int index, int size, int* d_dofs,
 
 class SparseSystem
 {
-private:
+public:
     DeviceObjectArray<DofMapper_d> m_mappers;
+private:
     
     DeviceVector<int> m_row;
     DeviceVector<int> m_col;

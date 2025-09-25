@@ -347,7 +347,8 @@ void constructSolutionKernel(const DeviceVector<double>* solVector,
         //DeviceObjectArray<int> dofCoords = result->dofCoords(point_idx);
         printf("patch %d, point_idx %d, unknown:%d\n", patch, point_idx, unk);
         int index(0);
-        if (system->colMapper(unk).is_free(point_idx, patch))
+        //const DofMapper_d& mapper= system->colMapper(unk);
+        if (system->m_mappers[unk].is_free(point_idx, patch))
         {
             printf("free dof\n");
             index = system->mapToGlobalColIndex(point_idx, patch, unk);
@@ -357,7 +358,7 @@ void constructSolutionKernel(const DeviceVector<double>* solVector,
         else
         {
             printf("fixed dof\n");
-            index = system->colMapper(unk).bindex(point_idx, patch);
+            index = system->m_mappers[unk].bindex(point_idx, patch);
             printf("global index: %d\n", index);
             result->setCoefficients(patch, point_idx, unk, 
                                     (*fixedDoFs)[unk](index));
