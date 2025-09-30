@@ -324,6 +324,8 @@ void assembleDomain(int totalGPs, MultiPatch_d* displacement, MultiPatch_d* patc
         system->pushToRhs(localRhs, globalIndices, blockNumbers);
         system->pushToMatrix(localMat, globalIndices, *eliminatedDofs, blockNumbers, blockNumbers);
     }
+    //eliminatedDofs->operator[](0).print();
+    //eliminatedDofs->operator[](1).print();
     //system->rhs().print();
 }
 
@@ -331,39 +333,39 @@ __global__
 void constructSolutionKernel(const DeviceVector<double>* solVector,
                              const DeviceObjectArray<DeviceVector<double>>* fixedDoFs,
                              const MultiBasis_d* bases, const SparseSystem* system,
-                             MultiPatch_d* result)
+                             MultiPatch_d* result, int numDofs)
 {
-    int numDofs = result->getTotalNumControlPoints()*result->getCPDim();
-    printf("Total num dofs: %d\n", numDofs);
+    //int numDofs = result->getTotalNumControlPoints()*result->getCPDim();
+    //printf("Total num dofs: %d\n", numDofs);
     for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
         idx < numDofs; idx += blockDim.x * gridDim.x)
     {
-        printf("Thread %d\n", idx);
+        //printf("Thread %d\n", idx);
         //printf("Total num control points: %d\n", result->getTotalNumControlPoints());
         int patch(0);
         int unk(0);
         int point_idx = result->threadPatchAndDof(idx, patch, unk);
         //DeviceObjectArray<int> dofCoords = bases->dofCoords(point_idx, patch);
         //DeviceObjectArray<int> dofCoords = result->dofCoords(point_idx);
-        printf("patch %d, point_idx %d, unknown:%d\n", patch, point_idx, unk);
+        //printf("patch %d, point_idx %d, unknown:%d\n", patch, point_idx, unk);
         int index(0);
         //const DofMapper_d& mapper= system->colMapper(unk);
         if (system->m_mappers[unk].is_free(point_idx, patch))
         {
-            printf("free dof\n");
+            //printf("free dof\n");
             index = system->mapToGlobalColIndex(point_idx, patch, unk);
-            printf("global index: %d\n", index);
+            //printf("global index: %d\n", index);
             result->setCoefficients(patch, point_idx, unk, (*solVector)(index));
         }
         else
         {
-            printf("fixed dof\n");
+            //printf("fixed dof\n");
             index = system->m_mappers[unk].bindex(point_idx, patch);
-            printf("global index: %d\n", index);
+            //printf("global index: %d\n", index);
             result->setCoefficients(patch, point_idx, unk, 
                                     (*fixedDoFs)[unk](index));
         }
-        printf("Thread %d finished\n", idx);
+        //printf("Thread %d finished\n", idx);
     }
     //printf("Patch 0 control points:\n");
     //result->patch(0).controlPoints().print();
@@ -868,8 +870,12 @@ void gaussPointsTest(GaussPoints_d* gspts)
     gspts->gaussPointsOnDir(1).print();
 }
 
-void Assembler::assemble(const DeviceVector<double>& solVector)
+void Assembler::assemble(const DeviceVector<double>& solVector, int numIter)
 {
+    //if (numIter == 1)
+        //for (int i = 0; i < m_ddof.size(); ++i)
+            //m_ddof[i].assign(m_ddof[i].size(), 0.0);
+    
     m_sparseSystem.matrix().setZero();
     m_sparseSystem.rhs().setZero();
 #if 1
@@ -896,11 +902,26 @@ void Assembler::assemble(const DeviceVector<double>& solVector)
     for (int i = 0; i < m_ddof.size(); ++i)
     {
         DeviceVector<double> fixedDoF_d(m_ddof[i].size(), m_ddof[i].data());
+        if (numIter == 0)
+            fixedDoF_d.setZero();
         fixedDoFs_d.at(i) = fixedDoF_d;
     }
     DeviceObjectArray<DeviceVector<double>>* d_fixedDoFs = nullptr;
     cudaMalloc((void**)&d_fixedDoFs, sizeof(DeviceObjectArray<DeviceVector<double>>));
     cudaMemcpy(d_fixedDoFs, &fixedDoFs_d, sizeof(DeviceObjectArray<DeviceVector<double>>), 
+               cudaMemcpyHostToDevice);
+
+    DeviceObjectArray<DeviceVector<double>> fixedDoFs_assem_d(m_ddof.size());
+    for (int i = 0; i < m_ddof.size(); ++i)
+    {
+        DeviceVector<double> fixedDoF_d(m_ddof[i].size(), m_ddof[i].data());
+        if (numIter != 0)
+            fixedDoF_d.setZero();
+        fixedDoFs_assem_d.at(i) = fixedDoF_d;
+    }
+    DeviceObjectArray<DeviceVector<double>>* d_fixedDoFs_assem = nullptr;
+    cudaMalloc((void**)&d_fixedDoFs_assem, sizeof(DeviceObjectArray<DeviceVector<double>>));
+    cudaMemcpy(d_fixedDoFs_assem, &fixedDoFs_assem_d, sizeof(DeviceObjectArray<DeviceVector<double>>), 
                cudaMemcpyHostToDevice);
 #if 1
     MultiPatch_d patches(m_multiPatch);
@@ -926,8 +947,14 @@ void Assembler::assemble(const DeviceVector<double>& solVector)
 #endif
 
 #if 1
-    constructSolutionKernel<<<1, 1>>>(d_solVector, d_fixedDoFs, d_bases, 
-                                      d_sparseSystem, d_displacement);
+    int numdofs = displacement.getTotalNumControlPoints()*displacement.getCPDim();
+    int minGrid, blockSize;
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, constructSolutionKernel, 0, numdofs);
+    int gridSize = (numdofs + blockSize - 1) / blockSize;
+    constructSolutionKernel<<<gridSize, blockSize>>>(d_solVector, d_fixedDoFs, d_bases, 
+                                      d_sparseSystem, d_displacement, numdofs);
+    //constructSolutionKernel<<<1, 2>>>(d_solVector, d_fixedDoFs, d_bases, 
+    //                                  d_sparseSystem, d_displacement);                                  
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess)
         std::cerr << "Error after kernel constructSolutionKernel launch: " 
@@ -983,7 +1010,9 @@ void Assembler::assemble(const DeviceVector<double>& solVector)
 
 #if 1
     int totalGPs = m_multiBasis.totalNumGPs();
-    assembleDomain<<<1, 1>>>(totalGPs, d_displacement, d_patches, d_gaussPoints, d_bodyForce, d_sparseSystem, d_fixedDoFs);
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, assembleDomain, 0, totalGPs);
+    gridSize = (totalGPs + blockSize - 1) / blockSize;
+    assembleDomain<<<gridSize, blockSize>>>(totalGPs, d_displacement, d_patches, d_gaussPoints, d_bodyForce, d_sparseSystem, d_fixedDoFs_assem);
     err = cudaGetLastError();
     if (err != cudaSuccess)
         std::cerr << "Error after kernel assembleDomain launch: " 

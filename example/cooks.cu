@@ -75,6 +75,7 @@ template __global__ void deviceDeepCopyKernel<DeviceObjectArray<double>>(DeviceO
 #endif
 template __global__ void parallPlus<double>(double* a, double* b, double* c, int n);
 template __global__ void parallPlus<double>(double* a, double b, double* c, int n);
+template __global__ void squareNormKernel<double>(double* a, double* result, int n);
 
 __global__ void testKernel(MultiPatch_d* d_multiPatch_d)
 {

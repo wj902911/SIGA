@@ -44,6 +44,10 @@ template <typename T>
 __global__
 void parallDiv(T* a, T b, T* c, int n);
 
+template <typename T>
+__global__
+void squareNormKernel(T* a, T* result, int n);
+
 
 
 template <typename Derived, typename T>
@@ -157,6 +161,8 @@ DeviceMatrix<T> operator+(const DeviceMatrixBase<DerivedA, T>& A,
             result(i, j) = derivedA(i, j) + derivedB(i, j);
 #else
     int size = derivedA.rows() * derivedA.cols(); 
+    //int minGrid, blockSize;
+    //cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, parallPlus<T>, 0, size);
     int blockSize = 256;
     int numBlocks = (size + blockSize - 1) / blockSize;
     T* d_A = derivedA.data();
@@ -1202,5 +1208,18 @@ void parallDiv(T* a, T b, T* c, int n)
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) {
         c[i] = a[i] / b;
+    }
+}
+
+template <typename T>
+__global__
+void squareNormKernel(T* a, T* result, int n)
+{
+    for (int i = blockIdx.x * blockDim.x + threadIdx.x; 
+        i < n; i += blockDim.x * gridDim.x)
+    {
+        //printf("a[%d] = %f\n", i, a[i]);
+        atomicAdd(result, a[i] * a[i]);
+        //printf("intermediate result = %f\n", *result);
     }
 }

@@ -1,6 +1,7 @@
 #include "Solver.h"
 #include <cusparse.h>
 #include <cusolverSp.h>
+#include <Utility_h.h>
 
 #if 0
 #define CUDA_CHECK(err) do { \
@@ -110,7 +111,7 @@ bool Solver::solveSingleIteration()
     CUSPARSE_CHECK(cusparseDestroyDnMat(dnA));
     CUSPARSE_CHECK(cusparseDestroy(cusparseH));
 #endif
-    m_assembler.assemble(m_solVector);
+    m_assembler.assemble(m_solVector, m_numIterations);
 
     const DeviceMatrix<double>& Adev = m_assembler.matrix();
     const DeviceVector<double>& bdev = m_assembler.rhs();
@@ -121,10 +122,11 @@ bool Solver::solveSingleIteration()
 
     //std::cout << "m_solVector:\n";
     //m_solVector.print();
-    //std::cout << "bdev:\n";
-    //bdev.print();
     //std::cout << "Adev:\n";
     //Adev.print();
+    //std::cout << "bdev:\n";
+    //bdev.print();
+    
     //--------------------------------------------------------------------------
     // Device memory management
     int   *d_csr_offsets, *d_csr_columns;
@@ -195,15 +197,21 @@ bool Solver::solveSingleIteration()
     if (singularity >= 0)
         printf("WARNING: The matrix is singular at row %d under tol %E\n", singularity, tol);
 
+#if 0
     double* host_sol = new double[num_rows];
     double* host_residual = new double[num_rows];
     CHECK_CUDA( cudaMemcpy(host_sol, solutionVector.data(), sizeof(double)*num_rows, cudaMemcpyDeviceToHost) )
     CHECK_CUDA( cudaMemcpy(host_residual, bdev.data(), sizeof(double)*num_rows, cudaMemcpyDeviceToHost) )
     Eigen::Map<Eigen::VectorXd> solvec(host_sol, num_rows);
     Eigen::Map<Eigen::VectorXd> resvec(host_residual, num_rows);
-
-    m_updateNorm = solvec.norm();
-    m_residualNorm = resvec.norm();
+    delete[] host_sol;
+    delete[] host_residual;
+#endif
+    //std::cout << "Solution vector:\n" << solvec << std::endl;
+    //m_updateNorm = solvec.norm();
+    m_updateNorm = solutionVector.norm();
+    //m_residualNorm = resvec.norm();
+    m_residualNorm = bdev.norm();
     m_solVector = m_solVector + solutionVector;
 
     if (m_numIterations == 0)
@@ -225,8 +233,7 @@ bool Solver::solveSingleIteration()
     CHECK_CUDA( cudaFree(d_csr_offsets) )
     CHECK_CUDA( cudaFree(d_csr_columns) )
     CHECK_CUDA( cudaFree(d_csr_values) )
-    delete[] host_sol;
-    delete[] host_residual;
+    
 
 
     return true;
@@ -237,8 +244,8 @@ void Solver::solve()
     double absTol = 1e-10;
     double relTol = 1e-9;
     int maxIterations = 50;
-    m_numIterations = 0;
     m_status = working;
+    std::cout << std::scientific;
     while (m_status == working)
     {
         if(!solveSingleIteration())
@@ -272,10 +279,10 @@ else if (m_status == bad_solution)
     statusString = "Iterative solver was interrupted after " +
             std::to_string(m_numIterations) + " iteration(s) due to an invalid solution";
 else if (m_status == working)
-    statusString = "It: " + std::to_string(m_numIterations) +
-             ", updAbs: " + std::to_string(m_updateNorm) +
-             ", updRel: " + std::to_string(m_updateNorm/m_initUpdateNorm) +
-             ", resAbs: " + std::to_string(m_residualNorm) +
-             ", resRel: " + std::to_string(m_residualNorm/m_initResidualNorm);
+    statusString = "It: " + to_string_sientific(m_numIterations) +
+             ", updAbs: " + to_string_sientific(m_updateNorm) +
+             ", updRel: " + to_string_sientific(m_updateNorm/m_initUpdateNorm) +
+             ", resAbs: " + to_string_sientific(m_residualNorm) +
+             ", resRel: " + to_string_sientific(m_residualNorm/m_initResidualNorm);
 return statusString;
 }

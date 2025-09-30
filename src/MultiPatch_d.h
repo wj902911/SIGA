@@ -85,7 +85,7 @@ public:
             }
             point_idx_patch -= patch_points;
         }
-        return point_idx_dof;
+        return point_idx_patch;
     }
 
     __device__ 

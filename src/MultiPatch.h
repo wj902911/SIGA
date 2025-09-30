@@ -50,6 +50,7 @@ public:
     std::vector<int> getBasisOrders(int patchIndex) const;
     Eigen::MatrixXd getControlPoints(int patchIndex) const;
     int getNumControlPoints(int patchIndex) const;
+    int getTotalNumControlPoints() const;
     std::vector<int> getNumGpAndEle(int patchIndex) const;
     std::vector<int> getGeoNumKnots(int patchIndex) const;
     std::vector<double> getGeoKnots(int patchIndex) const;

@@ -1,5 +1,9 @@
 #pragma once
 #include <cassert> 
+#include <string>
+#include <iostream>
+#include <sstream>
+#include <iomanip>
 
 //#include <cuda_runtime.h>
 //#include <thrust/device_vector.h>
@@ -45,5 +49,12 @@ bool nextLexicographic(Vec& cur, const Vec& start, const Vec& end)
     }
     assert("Something went wrong in nextLexicographic, wrong input?");
     return false;
+}
+
+inline std::string to_string_sientific(double value, int precision=3)
+{
+    std::ostringstream out;
+    out << std::scientific << std::setprecision(precision) << value;
+    return out.str();
 }
 

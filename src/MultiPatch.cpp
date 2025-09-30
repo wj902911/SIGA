@@ -236,6 +236,16 @@ int MultiPatch::getNumControlPoints(int patchIndex) const
     return m_patches[patchIndex].getNumControlPoints();
 }
 
+int MultiPatch::getTotalNumControlPoints() const
+{
+    int total = 0;
+    for (const auto& patch : m_patches)
+    {
+        total += patch.getNumControlPoints();
+    }
+    return total;
+}
+
 std::vector<int> MultiPatch::getNumGpAndEle(int patchIndex) const
 {
     return m_bases[patchIndex].getNumGpAndEle();

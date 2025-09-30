@@ -305,7 +305,7 @@ DofMapper_d(int* mapperData)
     __device__
     bool is_free_index(int gl) const
     { 
-        printf("gl:%d, m_curElimId:%d\n", gl, m_curElimId);
+        //printf("gl:%d, m_curElimId:%d\n", gl, m_curElimId);
         return gl < m_curElimId + m_shift; 
     }
 

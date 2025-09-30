@@ -132,7 +132,8 @@ public:
                             }
                             else
                             {
-                                m_RHS(ii) -= localMat(iiLocal, jjLocal) * eliminatedDofs_j(colMap.global_to_bindex(actives_vec[c](j)));
+                                //m_RHS(ii) -= localMat(iiLocal, jjLocal) * eliminatedDofs_j(colMap.global_to_bindex(actives_vec[c](j)));
+                                atomicAdd(&m_RHS(ii), -localMat(iiLocal, jjLocal) * eliminatedDofs_j(colMap.global_to_bindex(actives_vec[c](j))));
                             }
                         }
                     }

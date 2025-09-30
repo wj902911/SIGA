@@ -92,15 +92,37 @@ public:
         return DeviceMatrix<T>::at(i, 0);
     }
 
-    __device__
+    __host__ __device__
     T norm() const
     {
+#if defined(__CUDA_ARCH__)
         T sum = 0;
         for (int i = 0; i < size(); i++)
         {
             sum += this->operator()(i) * this->operator()(i);
         }
         return sqrt(sum);
+#else
+        T h_result = 0;
+        int size = this->size();
+        int blockSize = 256;
+        int numBlocks = (size + blockSize - 1) / blockSize;
+        T* d_result;
+        cudaError_t err = cudaMalloc((void**)&d_result, sizeof(T));
+        assert(err == cudaSuccess && "cudaMalloc failed in norm");
+        err = cudaMemset(d_result, 0, sizeof(T));
+        assert(err == cudaSuccess && "cudaMemset failed in norm");
+        squareNormKernel<T><<<numBlocks, blockSize>>>(this->data(), d_result, size);
+        //squareNormKernel<T><<<1, 1>>>(this->data(), d_result, size);
+        if (err != cudaSuccess) 
+            printf("Error in operator+: %s\n", cudaGetErrorString(err));
+        err = cudaDeviceSynchronize();
+        if (err != cudaSuccess) 
+            printf("Error in cudaDeviceSynchronize: %s\n", cudaGetErrorString(err));
+        cudaMemcpy(&h_result, d_result, sizeof(T), cudaMemcpyDeviceToHost);
+        cudaFree(d_result);
+        return sqrt(h_result);
+#endif
     }
 
     __device__

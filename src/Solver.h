@@ -19,9 +19,9 @@ private:
     Assembler& m_assembler;
     DeviceVector<double> m_solVector;
     solver_status m_status;
-    double m_residualNorm;
-    double m_initResidualNorm;
-    double m_updateNorm;
-    double m_initUpdateNorm;
-    int m_numIterations;
+    double m_residualNorm = 0.0;
+    double m_initResidualNorm = 0.0;
+    double m_updateNorm = 0.0;
+    double m_initUpdateNorm = 0.0;
+    int m_numIterations = 0;
 };
