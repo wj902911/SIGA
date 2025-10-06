@@ -235,6 +235,12 @@ public:
     }
 
     __device__
+    DeviceVector<int> coefSlice(int dir, int k) const
+    {
+        return m_basis.coefSlice(dir, k);
+    }
+
+    __device__
     Patch_d boundary(BoxSide_d const& s) const
     {
         

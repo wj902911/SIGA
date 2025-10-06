@@ -201,7 +201,7 @@ void tensorGrid_device(int idx, int* vecs_sizes, int dim, int num_patch,
 __global__
 void functionTestkernel(MultiPatch_d* patches)
 {
-    DeviceVector<int> ind = patches->patch(0).basis().coefSlice(1,0);
+    DeviceVector<int> ind = patches->coefSlice(0,1,0);
 }
 
 __global__

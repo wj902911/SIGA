@@ -1237,7 +1237,7 @@ public:
             sliceSize *= size(d);
             low(d) = 0;
             upp(d) = size(d);
-            printf("%d", d);
+            //printf("%d", d);
         }
         //low.print();
         //upp.print();
@@ -1255,6 +1255,7 @@ public:
 
         //printf("res[0]: %d\n", res(0));
         //printf("res[1]: %d\n", res(1));
+        res.print();
         return res;
     }
 

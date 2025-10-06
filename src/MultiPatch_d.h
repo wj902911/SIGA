@@ -160,6 +160,12 @@ public:
         return m_patches[patchIndex].getActiveControlPoints(pt);
     }
 
+    __device__
+    DeviceVector<int> coefSlice(int patch, int dir, int k) const
+    {
+        return m_patches[patch].coefSlice(dir, k);
+    }
+
 #if 0
     __device__
     const int *getPatchNumKnots(int patchIndex) const
