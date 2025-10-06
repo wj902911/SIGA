@@ -833,6 +833,15 @@ public:
         return m_knotVectors[d].getNumControlPoints();
     }
 
+    #if 1
+    __device__
+    int size(int d) const
+    {
+        //printf("size const called\n");
+        return m_knotVectors[d].getNumControlPoints();
+    }
+    #endif
+
     __device__
     int totalNumGPsInDir(int d) const { return m_knotVectors[d].totalNumGaussPoints(); }
 
@@ -1195,6 +1204,58 @@ public:
         DeviceVector<double> lower, upper;
         elementSupport(idx, coords, lower, upper);
         return gspts.threadGaussPoint(lower, upper, coords, result);
+    }
+
+    __device__
+    int index(const DeviceVector<int>& coords) const
+    {
+        int index = 0;
+        int dim = m_dim;
+        index = coords(dim - 1);
+        for (int d = dim - 2; d >= 0; --d)
+        {
+            index = index * size(d) + coords(d);
+        }
+        return index;
+    }
+
+    __device__
+    DeviceVector<int> coefSlice(int dir, int k) const
+    {
+        printf("coefSlice: dir = %d, k = %d\n", dir, k);
+        int dim = m_dim;
+        if(dir < 0 || dir >= dim)
+            printf("Error: dir is out of range in coefSlice.\n");
+        if(k < 0 || k >= size(dir))
+            printf("Error: k is out of range in coefSlice.\n");
+
+        int sliceSize = 1;
+        DeviceVector<int> low(dim), upp(dim);
+        //printf("here!\n");
+        for(int d = 0; d < dim; ++d)
+        {
+            sliceSize *= size(d);
+            low(d) = 0;
+            upp(d) = size(d);
+            printf("%d", d);
+        }
+        //low.print();
+        //upp.print();
+        sliceSize /= upp(dir);
+        low(dir) = k;
+	    upp(dir) = k + 1;
+
+        DeviceVector<int> res(sliceSize);
+        DeviceVector<int> v = low;
+        int i = 0;
+        do
+        {
+            res(i++) = index(v);
+        } while (nextLexicographic_d(v, low, upp));
+
+        //printf("res[0]: %d\n", res(0));
+        //printf("res[1]: %d\n", res(1));
+        return res;
     }
 
 private:

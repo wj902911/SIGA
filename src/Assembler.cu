@@ -199,6 +199,12 @@ void tensorGrid_device(int idx, int* vecs_sizes, int dim, int num_patch,
 }
 
 __global__
+void functionTestkernel(MultiPatch_d* patches)
+{
+    DeviceVector<int> ind = patches->patch(0).basis().coefSlice(1,0);
+}
+
+__global__
 void assembleDomain(int totalGPs, MultiPatch_d* displacement, MultiPatch_d* patches,
                     DeviceObjectArray<GaussPoints_d>* gaussPoints, DeviceVector<double>* bodyForce,
                     SparseSystem* system, DeviceObjectArray<DeviceVector<double>>* eliminatedDofs)
@@ -964,6 +970,16 @@ void Assembler::assemble(const DeviceVector<double>& solVector, int numIter)
         std::cerr << "CUDA error during device synchronization (constructSolutionKernel): " 
                   << cudaGetErrorString(err) << std::endl;
 #endif
+
+    functionTestkernel<<<1, 1>>>(d_patches);
+    err = cudaGetLastError();
+    if (err != cudaSuccess)
+        std::cerr << "Error after functionTestkernel launch: " 
+                  << cudaGetErrorString(err) << std::endl;
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+        std::cerr << "CUDA error during device synchronization (functionTestkernel): " 
+                  << cudaGetErrorString(err) << std::endl;
 
 #if 1
     int dim = m_multiPatch.getBasisDim();

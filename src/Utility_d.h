@@ -89,6 +89,29 @@ bool nextLexicographic_d(Vec& cur, const Vec& size)
     printf("Error: nextLexicographic\n");
 }
 
+template<class Vec>
+__device__ inline
+bool nextLexicographic_d(Vec& cur, const Vec& start, const Vec& end)
+{
+    const int d = cur.size();
+    assert(d == start.size() && d == end.size() && "cur, start and end must have the same size.");
+
+    for (int i = 0; i < d; ++i)
+    {
+        if (++cur(i) == end(i))
+        {
+            if (i == d - 1)
+                return false;
+            else
+                cur(i) = start(i);
+        }
+        else
+            return true;
+    }
+    printf("Error: nextLexicographic\n");
+    return false;
+}
+
 template <typename T>
 __host__ __device__ 
 inline T min(T a, T b) 

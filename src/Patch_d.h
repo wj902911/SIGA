@@ -234,6 +234,12 @@ public:
         delete[] activeCPs, values, firstDers;
     }
 
+    __device__
+    Patch_d boundary(BoxSide_d const& s) const
+    {
+        
+    }
+
 private:
     //int m_CPDim;
     TensorBsplineBasis_d m_basis;
