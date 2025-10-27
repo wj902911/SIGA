@@ -866,6 +866,9 @@ class Row : public Block
     __host__ __device__
     Row row(int i) { return Row(m_data + i * m_cols, m_cols); }
 
+    __host__ __device__
+    Row row(int i) const { return Row(m_data + i * m_cols, m_cols); }
+
 // column proxy class -------------------------------------------------------------------------------------
 #if 1
     class Col : public Block
@@ -925,6 +928,9 @@ class Row : public Block
 
     __host__ __device__
     Col col(int j) { return Col(m_data, m_rows, m_cols, j); }
+
+    __host__ __device__
+    Col col(int j) const  { return Col(m_data, m_rows, m_cols, j); }
 
     __device__
     DeviceMatrix rowMinor(int row) const
@@ -1107,6 +1113,16 @@ class Row : public Block
             for (int j = 0; j < m_cols; j++)
                 sum += (*this)(i, j);
         return sum;
+    }
+
+    __device__
+    T norm() const
+    {
+        T sumSquares = 0;
+        for (int i = 0; i < m_rows; i++)
+            for (int j = 0; j < m_cols; j++)
+                sumSquares += (*this)(i, j) * (*this)(i, j);
+        return sqrt(sumSquares);
     }
 
 private:

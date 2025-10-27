@@ -102,6 +102,11 @@ public:
     }
 
     __device__
+    TensorBsplineBasis_d(const KnotVector_d& u)
+    :m_dim(1), m_knotVectors(1)
+    { m_knotVectors[0] = u; }
+
+    __device__
     TensorBsplineBasis_d(const KnotVector_d& u, const KnotVector_d& v)
         : m_dim(2), m_knotVectors(2)
     {
@@ -176,6 +181,14 @@ public:
         }
         delete[] h_knotVectors;
     #endif
+    }
+
+    __device__
+    TensorBsplineBasis_d(const DeviceObjectArray<KnotVector_d>& knots)
+    :m_dim(knots.size()), m_knotVectors(knots.size()) 
+    {
+        for (int i = 0; i < m_dim; i++)
+            m_knotVectors[i] = knots[i];
     }
         
 
@@ -1222,7 +1235,7 @@ public:
     __device__
     DeviceVector<int> coefSlice(int dir, int k) const
     {
-        printf("coefSlice: dir = %d, k = %d\n", dir, k);
+        //printf("coefSlice: dir = %d, k = %d\n", dir, k);
         int dim = m_dim;
         if(dir < 0 || dir >= dim)
             printf("Error: dir is out of range in coefSlice.\n");
@@ -1255,9 +1268,43 @@ public:
 
         //printf("res[0]: %d\n", res(0));
         //printf("res[1]: %d\n", res(1));
-        res.print();
+        //res.print();
         return res;
     }
+
+    __device__
+    DeviceVector<int> boundaryOffset(BoxSide_d const& s, int offset) const
+    {
+        int k = s.direction();
+        bool r = s.parameter();
+        assert(offset < size(k));
+        // Optionally print error message if assertion fails (for debugging)
+        if (!(offset < size(k))) printf("Offset cannot be bigger than the amount of basis functions orthogonal to Boxside s!\n");
+        return (this->coefSlice(k, (r?size(k)-1-offset : offset)));
+    }
+
+    __device__
+    DeviceVector<int> boundary(BoxSide_d const& s) const
+    {
+        return this->boundaryOffset(s,0);
+    }
+
+    __device__
+    TensorBsplineBasis_d getComponentsForSide(BoxSide_d const& s) const
+    {
+        int dir = s.direction( );
+        int targetDim = m_dim - 1;
+        DeviceObjectArray<KnotVector_d> knots(targetDim);
+        for (int i = 0, n = 0; i < m_dim; i++)
+            if (i != dir)
+            {
+                knots[n] = m_knotVectors[i];
+                n++;
+            }
+        
+        return TensorBsplineBasis_d(knots);
+    }
+
 
 private:
     int m_dim;

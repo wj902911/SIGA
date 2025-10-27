@@ -76,3 +76,6 @@ void MultiPatch_d::evalAllDers_into(int patch, const DeviceVector<double> &u, in
     m_patches[patch].basis().evalAllDers_into(u, n, result);
 }
 #endif
+
+MultiPatch_d::MultiPatch_d(int numPatches)
+: m_patches(numPatches) {}

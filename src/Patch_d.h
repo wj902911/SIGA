@@ -243,7 +243,26 @@ public:
     __device__
     Patch_d boundary(BoxSide_d const& s) const
     {
-        
+        DeviceVector<int> ind = m_basis.boundary(s);
+        DeviceMatrix<double> coeffs (ind.size(), getCPDim());
+        coeffs.setZero();
+        for (int i = 0; i != ind.size(); i++)
+            coeffs.row(i) = m_controlPoints.row(ind(i));
+
+        //coeffs.print();
+
+        return Patch_d(m_basis.getComponentsForSide(s), coeffs);
+    }
+
+    __device__
+    double curveLengthPerGSPt(const DeviceVector<double>& pt, double wt)
+    {
+        int CPdim = getCPDim();
+        DeviceMatrix<double> geoActiveCPs = getActiveControlPoints(pt);
+        DeviceObjectArray<DeviceVector<double>> geoValues;
+        m_basis.evalAllDers_into(pt, 1, geoValues);
+        DeviceMatrix<double> md = geoValues[1].reshape(CPdim, geoActiveCPs.rows()) * geoActiveCPs;
+        return wt*md.transpose().norm();
     }
 
 private:

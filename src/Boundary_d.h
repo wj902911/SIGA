@@ -15,6 +15,8 @@ public:
     { if(a < 0) printf("invalid side"); }
     __host__ __device__
     BoxSide_d (const BoxSide_d &s): m_index(s.m_index) {}
+    __host__ __device__
+    BoxSide_d (boundary::side a) : m_index(a) {}
     __device__
     operator boundary::side() const 
     { return static_cast<boundary::side>(m_index); }

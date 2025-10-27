@@ -31,6 +31,9 @@ public:
     }
 #endif
 
+    __host__
+    MultiPatch_d(int numPatches);
+
     ~MultiPatch_d()=default;
 
     __device__
@@ -164,6 +167,18 @@ public:
     DeviceVector<int> coefSlice(int patch, int dir, int k) const
     {
         return m_patches[patch].coefSlice(dir, k);
+    }
+
+    __device__
+    Patch_d boundary(int patch, BoxSide_d const& s) const
+    { return m_patches[patch].boundary(s); }
+
+    __device__
+    void setPatch(int patchIndex, const Patch_d& patch)
+    { 
+        printf("Setting patch %d in MultiPatch_d\n", patchIndex);
+        m_patches[patchIndex] = patch; 
+        printf("After setting patch %d in MultiPatch_d:\n", patchIndex);
     }
 
 #if 0

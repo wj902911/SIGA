@@ -199,9 +199,44 @@ void tensorGrid_device(int idx, int* vecs_sizes, int dim, int num_patch,
 }
 
 __global__
-void functionTestkernel(MultiPatch_d* patches)
+void functionTestkernel(MultiPatch_d* patches, MultiPatch_d* boundaryPatches)
 {
-    DeviceVector<int> ind = patches->coefSlice(0,1,0);
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
+        idx < boundaryPatches->getNumPatches(); idx += blockDim.x * gridDim.x)
+    {
+        int basisDim = patches->getBasisDim();
+        int numBoundariesPerPatch = pow(2, basisDim - 1) * basisDim;
+        int patch = idx / numBoundariesPerPatch;
+        int localBoundary = idx % numBoundariesPerPatch;
+        switch (basisDim)
+        {
+            case 2:
+            {
+                boundaryPatches->setPatch(idx, patches->boundary(patch, localBoundary + 1));
+                printf("Processing boundary patch %d\n", idx);
+                break;
+            }
+            case 3:
+            {
+                int faceIdx = localBoundary / 2;
+                int edgeIdx = localBoundary % 2;
+                Patch_d face = patches->boundary(patch, faceIdx + 1);
+                switch (faceIdx)
+                {
+                    case 0: case 1: case 2: case 3:
+                    {
+                        boundaryPatches->setPatch(idx, face.boundary(edgeIdx + 1));
+                        break;
+                    }
+                    case 4: case 5:
+                    {
+                        boundaryPatches->setPatch(idx, face.boundary(edgeIdx + 3));
+                        break;
+                    }
+                }
+            }
+        }
+    }
 }
 
 __global__
@@ -887,6 +922,7 @@ void Assembler::assemble(const DeviceVector<double>& solVector, int numIter)
 #if 1
     MultiPatch displacement;
     int geoDim = m_multiPatch.getCPDim();
+    int basisDim = m_multiPatch.getBasisDim();
     for (int i = 0; i < m_multiPatch.getNumPatches(); ++i) 
     {
         Patch patch(m_multiBasis.basis(i), geoDim);
@@ -971,7 +1007,16 @@ void Assembler::assemble(const DeviceVector<double>& solVector, int numIter)
                   << cudaGetErrorString(err) << std::endl;
 #endif
 
-    functionTestkernel<<<1, 1>>>(d_patches);
+    int numBundaries = m_multiPatch.getNumPatches()*basisDim*pow(2, basisDim-1);
+    MultiPatch_d boundaryPatches_d(numBundaries);
+    MultiPatch_d* d_boundaryPatches = nullptr;
+    cudaMalloc((void**)&d_boundaryPatches, sizeof(MultiPatch_d));
+    cudaMemcpy(d_boundaryPatches, &boundaryPatches_d, sizeof(MultiPatch_d), 
+               cudaMemcpyHostToDevice);
+
+    cudaDeviceSetLimit(cudaLimitStackSize, 4*1024);
+
+    functionTestkernel<<<1, 1>>>(d_patches, d_boundaryPatches);
     err = cudaGetLastError();
     if (err != cudaSuccess)
         std::cerr << "Error after functionTestkernel launch: " 
@@ -980,6 +1025,8 @@ void Assembler::assemble(const DeviceVector<double>& solVector, int numIter)
     if (err != cudaSuccess)
         std::cerr << "CUDA error during device synchronization (functionTestkernel): " 
                   << cudaGetErrorString(err) << std::endl;
+
+    cudaFree(d_boundaryPatches);
 
 #if 1
     int dim = m_multiPatch.getBasisDim();
