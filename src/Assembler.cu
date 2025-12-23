@@ -199,8 +199,81 @@ void tensorGrid_device(int idx, int* vecs_sizes, int dim, int num_patch,
 }
 
 __global__
-void functionTestkernel(MultiPatch_d* patches, MultiPatch_d* boundaryPatches)
+void functionTestkernel(MultiPatch_d* patches, double* patchLengthes)
 {
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
+        idx < patches->totalNumBdGPs(); idx += blockDim.x * gridDim.x)
+    {
+        int patch(0);
+        int point_idx = patches->threadPatch_edge(idx, patch);
+        int dir(0);
+        point_idx = patches->threadEdgeDir(point_idx, patch, dir);
+        int edgeIdx(0);
+        point_idx = patches->threadEdge(point_idx, patch, dir, edgeIdx);
+        int basisDim = patches->getBasisDim();
+        Patch_d edge;
+        switch (basisDim)
+        {
+            case 2:
+            {
+                edge = patches->boundary(patch, edgeIdx + 1);
+                break;
+            }
+            case 3:
+            {
+                int faceIdx = edgeIdx / 2;
+                int localEdgeIdx = edgeIdx % 2;
+                Patch_d face = patches->boundary(patch, faceIdx + 1);
+                switch (faceIdx)
+                {
+                    case 0: case 1: case 2: case 3:
+                    {
+                        edge = face.boundary(localEdgeIdx + 1);
+                        break;
+                    }
+                    case 4: case 5:
+                    {
+                        edge = face.boundary(localEdgeIdx + 3);
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+        DeviceObjectArray<int> numGPs(1);
+        numGPs[0]=edge.basis().numGPsInDir(0);
+        GaussPoints_d GPs(1, numGPs);
+        DeviceVector<double> pt;
+        double wt = edge.basis().gsPoint(point_idx, GPs, pt);
+        DeviceMatrix<double> activeCPs = edge.getActiveControlPoints(pt);
+        //printf("activeCPs:\n");
+        //activeCPs.print();
+        DeviceObjectArray<DeviceVector<double>> values;
+        edge.basis().evalAllDers_into(pt, 1, values);
+        //printf("values[0]:\n");
+        //values[0].print();
+        //printf("values[1]:\n");
+        //values[1].print();
+        DeviceObjectArray<DeviceMatrix<double>> md;
+        md.resize(2);
+        md[0] = values[0].transpose() * activeCPs;
+        md[1] = values[1].reshape(1, activeCPs.rows()) * activeCPs;
+        //printf("md[0]:\n");
+        //md[0].print();
+        //printf("md[1]:\n");
+        //md[1].print();
+        DeviceMatrix<double> jacobian = md[1].transpose();
+        //printf("wt %f\n", wt);
+        //printf("jacobian:\n");
+        //jacobian.print();
+        double length = wt * jacobian.norm();
+        //printf("length %f\n", length);
+        int edgeIdxOffset = patch*patches->getNumEdgesInPatch(0) + edgeIdx;
+        //printf("edgeIdxOffset %d length %f patchLengthes[edgeIdxOffset] %f\n", edgeIdxOffset, length, patchLengthes[edgeIdxOffset]);
+        atomicAdd(&patchLengthes[edgeIdxOffset], length);
+        //printf("Patch %d, dir %d, edge %d, point_idx %d, numGPs %d\n", patch, dir, edgeIdx, point_idx, numGPs[0]);
+    }
+#if 0
     for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
         idx < boundaryPatches->getNumPatches(); idx += blockDim.x * gridDim.x)
     {
@@ -237,6 +310,7 @@ void functionTestkernel(MultiPatch_d* patches, MultiPatch_d* boundaryPatches)
             }
         }
     }
+#endif
 }
 
 __global__
@@ -268,7 +342,7 @@ void assembleDomain(int totalGPs, MultiPatch_d* displacement, MultiPatch_d* patc
         DeviceObjectArray<DeviceMatrix<double>> md;
         md.resize(numDerivatives+1);
         md[0] = geoValues[0].transpose() * geoActiveCPs;
-        md[1] = geoValues[1].reshape(CPdim, geoActiveCPs.rows()) * geoActiveCPs;
+        md[1] = geoValues[1].reshape(dim, geoActiveCPs.rows()) * geoActiveCPs;
         DeviceMatrix<double> geoJacobian = md[1].transpose();
         double measure = geoJacobian.determinant();
         double weightForce = wt * measure;
@@ -1007,16 +1081,19 @@ void Assembler::assemble(const DeviceVector<double>& solVector, int numIter)
                   << cudaGetErrorString(err) << std::endl;
 #endif
 
-    int numBundaries = m_multiPatch.getNumPatches()*basisDim*pow(2, basisDim-1);
-    MultiPatch_d boundaryPatches_d(numBundaries);
-    MultiPatch_d* d_boundaryPatches = nullptr;
-    cudaMalloc((void**)&d_boundaryPatches, sizeof(MultiPatch_d));
-    cudaMemcpy(d_boundaryPatches, &boundaryPatches_d, sizeof(MultiPatch_d), 
-               cudaMemcpyHostToDevice);
+    //int numBundaries = m_multiPatch.getNumPatches()*basisDim*pow(2, basisDim-1);
+    //MultiPatch_d boundaryPatches_d(numBundaries);
+    //MultiPatch_d* d_boundaryPatches = nullptr;
+    //cudaMalloc((void**)&d_boundaryPatches, sizeof(MultiPatch_d));
+    //cudaMemcpy(d_boundaryPatches, &boundaryPatches_d, sizeof(MultiPatch_d), 
+    //           cudaMemcpyHostToDevice);
 
     cudaDeviceSetLimit(cudaLimitStackSize, 4*1024);
 
-    functionTestkernel<<<1, 1>>>(d_patches, d_boundaryPatches);
+#if 0
+    DeviceVector<double> patchLengthes(numBundaries);
+    patchLengthes.setZero();
+    functionTestkernel<<<1, 1>>>(d_patches, patchLengthes.data());
     err = cudaGetLastError();
     if (err != cudaSuccess)
         std::cerr << "Error after functionTestkernel launch: " 
@@ -1026,7 +1103,13 @@ void Assembler::assemble(const DeviceVector<double>& solVector, int numIter)
         std::cerr << "CUDA error during device synchronization (functionTestkernel): " 
                   << cudaGetErrorString(err) << std::endl;
 
-    cudaFree(d_boundaryPatches);
+    patchLengthes.print();
+#endif
+    DeviceVector<double> patchLengthes;
+    d_patches->getPatchLengthes(patchLengthes);
+    patchLengthes.print();
+
+    //cudaFree(d_boundaryPatches);
 
 #if 1
     int dim = m_multiPatch.getBasisDim();

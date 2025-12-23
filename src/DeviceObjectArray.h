@@ -735,7 +735,16 @@ public:
     }
 
     __host__ __device__ 
-    int size() const { return m_size; }
+    int size() const 
+    { 
+    //#if defined(__CUDA_ARCH__)
+        return m_size; 
+    //#else
+    //    int h_size;
+    //    cudaMemcpy(&h_size, &m_size, sizeof(int), cudaMemcpyDeviceToHost);
+    //    return h_size;
+    //#endif
+    }
 
     __host__ __device__
     void resize(int newSize)

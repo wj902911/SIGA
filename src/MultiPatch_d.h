@@ -40,6 +40,9 @@ public:
     int getBasisDim() const
     { return m_patches[0].getDim(); }
 
+    __host__
+    int getBasisDim_host() const;
+
     __device__
     int getCPDim() const
     { return m_patches[0].getCPDim(); }
@@ -47,6 +50,9 @@ public:
     __device__
     int getNumPatches() const
     { return m_patches.size(); }
+
+    __host__
+    int getNumPatches_host() const;
 
     __device__
     int getNumControlPoints(int patchIndex) const
@@ -128,6 +134,72 @@ public:
     }
 
     __device__
+    int threadPatch_edge(int idx, int& patch) const
+    {
+        int point_idx = idx;
+        for (int i = 0; i < m_patches.size(); i++)
+        {
+            int patch_points = totalNumBdGPsInPatch(i);
+            if (point_idx < patch_points) 
+            {
+                patch = i;
+                break;
+            }
+            point_idx -= patch_points;
+        }
+        return point_idx;
+    }
+
+    __device__
+    int threadEdgeDir(int idx, int patch, int& dir) const
+    {
+        int point_idx = idx;
+        int dim = getBasisDim();
+        for (int d = 0; d < dim; d++)
+        {
+            int dir_points = m_patches[patch].totalNumBdGPsInDir(d);
+            if (point_idx < dir_points) 
+            {
+                dir = d;
+                break;
+            }
+            point_idx -= dir_points;
+        }
+        return point_idx;
+    }
+
+    __device__
+    int threadEdge(int idx, int patch, int dir, int& edge) const
+    {
+        int point_idx = idx;
+        int numEdges = m_patches[patch].getNumEdgesInEachDir();
+        for (int e = 0; e < numEdges; e++)
+        {
+            int edge_points = m_patches[patch].totalNumGPsInDir(dir);
+            if (point_idx < edge_points) 
+            {
+                edge = e + dir * numEdges;
+                break;
+            }
+            point_idx -= edge_points;
+        }
+        return point_idx;
+    }
+
+#if 0
+    __device__
+    int getTotalNumEdges() const
+    {
+        int totalNumEdges = 0;
+        for (int i = 0; i < m_patches.size(); i++)
+        {
+            totalNumEdges += m_patches[i].getNumEdges();
+        }
+        return totalNumEdges;
+    }
+#endif
+
+    __device__
     double gsPoint(int idx, int patch, const GaussPoints_d& gps,
                    DeviceVector<double>& result) const
     { return m_patches[patch].basis().gsPoint(idx, gps, result); }
@@ -177,9 +249,79 @@ public:
     void setPatch(int patchIndex, const Patch_d& patch)
     { 
         printf("Setting patch %d in MultiPatch_d\n", patchIndex);
-        m_patches[patchIndex] = patch; 
+        new (&m_patches[patchIndex]) Patch_d(patch);
         printf("After setting patch %d in MultiPatch_d:\n", patchIndex);
     }
+
+    __device__
+    int getNumEdgesInEachDir(int patch) const
+    {
+        return m_patches[patch].getNumEdgesInEachDir();
+    }
+
+    __device__
+    int getNumEdgesInPatch(int patch) const
+    {
+        
+        return m_patches[patch].getNumEdgesInEachDir() * getBasisDim();
+    }
+
+    __device__
+    int getTotalNumEdges() const
+    {
+        int totalNumEdges = 0;
+        for (int i = 0; i < m_patches.size(); i++)
+        {
+            totalNumEdges += getNumEdgesInPatch(i);
+        }
+        return totalNumEdges;
+    }
+
+    __host__
+    int getTotalNumEdges_host() const;
+
+    __device__
+    int totalNumGPsInPatch(int patch) const
+    {
+        return m_patches[patch].totalNumGPs();
+    }
+
+    __host__ __device__
+    int totalNumBdGPsInPatch(int patch) const
+    {
+        return m_patches[patch].totalNumBdGPs();
+    }
+
+    __device__
+    int totalNumGPs() const
+    {
+        int totalNumGaussPoints = 0;
+        for (int i = 0; i < m_patches.size(); i++)
+        {
+            totalNumGaussPoints += totalNumGPsInPatch(i);
+        }
+        return totalNumGaussPoints;
+    }
+
+    __device__
+    int totalNumBdGPs() const
+    {
+        int totalNumBdGPs = 0;
+        for (int i = 0; i < m_patches.size(); i++)
+        {
+            totalNumBdGPs += totalNumBdGPsInPatch(i);
+        }
+        return totalNumBdGPs;
+    }
+
+    __host__
+    void getEdgeLengthes(DeviceVector<double>& lengths) const;
+
+    __host__
+    void getPatchLengthes(DeviceVector<double>& lengths) const;
+
+    __host__
+    int totalNumBdGPs_host() const;
 
 #if 0
     __device__

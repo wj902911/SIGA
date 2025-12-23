@@ -1,6 +1,145 @@
 #include "MultiPatch_d.h"
 
 //template __global__ void testKernel<int>(int);
+__global__
+void edgeLengthesKernel(const MultiPatch_d* patches, double* patchLengthes)
+{
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
+        idx < patches->totalNumBdGPs(); idx += blockDim.x * gridDim.x)
+    {
+        int patch(0);
+        int point_idx = patches->threadPatch_edge(idx, patch);
+        int dir(0);
+        point_idx = patches->threadEdgeDir(point_idx, patch, dir);
+        int edgeIdx(0);
+        point_idx = patches->threadEdge(point_idx, patch, dir, edgeIdx);
+        int basisDim = patches->getBasisDim();
+        Patch_d edge;
+        switch (basisDim)
+        {
+            case 2:
+            {
+                edge = patches->boundary(patch, edgeIdx + 1);
+                break;
+            }
+            case 3:
+            {
+                int faceIdx = edgeIdx / 2;
+                int localEdgeIdx = edgeIdx % 2;
+                Patch_d face = patches->boundary(patch, faceIdx + 1);
+                switch (faceIdx)
+                {
+                    case 0: case 1: case 2: case 3:
+                    {
+                        edge = face.boundary(localEdgeIdx + 1);
+                        break;
+                    }
+                    case 4: case 5:
+                    {
+                        edge = face.boundary(localEdgeIdx + 3);
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+        DeviceObjectArray<int> numGPs(1);
+        numGPs[0]=edge.basis().numGPsInDir(0);
+        GaussPoints_d GPs(1, numGPs);
+        DeviceVector<double> pt;
+        double wt = edge.basis().gsPoint(point_idx, GPs, pt);
+        DeviceMatrix<double> activeCPs = edge.getActiveControlPoints(pt);
+        DeviceObjectArray<DeviceVector<double>> values;
+        edge.basis().evalAllDers_into(pt, 1, values);
+        DeviceObjectArray<DeviceMatrix<double>> md;
+        md.resize(2);
+        md[0] = values[0].transpose() * activeCPs;
+        md[1] = values[1].reshape(1, activeCPs.rows()) * activeCPs;
+        DeviceMatrix<double> jacobian = md[1].transpose();
+        double length = wt * jacobian.norm();
+        int edgeIdxOffset = patch*patches->getNumEdgesInPatch(0) + edgeIdx;
+        atomicAdd(&patchLengthes[edgeIdxOffset], length);
+    }
+}
+
+__global__
+void totalNumBdGPsKernel(const MultiPatch_d* patches, int* result)
+{
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
+        idx < patches->getNumPatches(); idx += blockDim.x * gridDim.x)
+    {
+        int patchBdGPs = patches->totalNumBdGPsInPatch(idx);
+        atomicAdd(result, patchBdGPs);
+    }
+}
+
+__global__
+void getNumPatchesKernel(const MultiPatch_d* patches, int* result)
+{
+    if (threadIdx.x == 0 && blockIdx.x == 0)
+    {
+        *result = patches->getNumPatches();
+    }
+}
+
+__global__
+void getTotalNumEdgesKernel(const MultiPatch_d* patches, int* result)
+{
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
+        idx < patches->getNumPatches(); idx += blockDim.x * gridDim.x)
+    {
+        int patchEdges = patches->getNumEdgesInPatch(idx);
+        atomicAdd(result, patchEdges);
+    }
+}
+
+__global__
+void getBasisDimKernel(const MultiPatch_d* patches, int* result)
+{
+    if (threadIdx.x == 0 && blockIdx.x == 0)
+    {
+        *result = patches->getBasisDim();
+    }
+}
+
+__global__
+void getPatchLengthesKernel(const MultiPatch_d* patches, const double* edgeLengthes, double* patchLengthes)
+{
+    // compute patch lengthes in each direction, each thread deal with one edge, its length contribution
+    // is its length devided by the number of edges in each direction.
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
+        idx < patches->getTotalNumEdges(); idx += blockDim.x * gridDim.x)
+    {
+        int threadPatch = 0, point_idx = idx;
+        for (int i = 0; i < patches->getNumPatches(); i++)
+        {
+            int patchEdges = patches->getNumEdgesInPatch(i);
+            if (point_idx < patchEdges)
+            {
+                threadPatch = i;
+                //printf("Thread %d processing Patch %d\n", idx, threadPatch);
+                break;
+            }
+            point_idx -= patchEdges;
+        }
+        int threadDir = 0;
+        int dim = patches->getBasisDim();
+        for (int d = 0; d < dim; d++)
+        {
+            int dirEdges = patches->getNumEdgesInEachDir(threadPatch);
+            if (point_idx < dirEdges)
+            {
+                threadDir = d;
+                break;
+            }
+            point_idx -= dirEdges;
+        }
+        double edgeLengthContribution = edgeLengthes[idx] / patches->getNumEdgesInEachDir(threadPatch);
+        //printf("Patch %d, Dir %d, Edge idx %d, Edge length %f, Contribution %f\n", 
+        //       threadPatch, threadDir, idx, edgeLengthes[idx], edgeLengthContribution);
+        atomicAdd(&patchLengthes[threadPatch * dim + threadDir], edgeLengthContribution);
+    }
+}
 
 #if 0
 MultiPatch_d::MultiPatch_d(int basisDim, int CPDim, int numPatches, double *knots, 
@@ -79,3 +218,171 @@ void MultiPatch_d::evalAllDers_into(int patch, const DeviceVector<double> &u, in
 
 MultiPatch_d::MultiPatch_d(int numPatches)
 : m_patches(numPatches) {}
+
+void MultiPatch_d::getEdgeLengthes(DeviceVector<double> &lengths) const
+{
+    lengths.resize(getTotalNumEdges_host());
+    lengths.setZero();
+
+    int totalBDGPs = totalNumBdGPs_host();
+    int minGrid, blockSize;
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, 
+                                       edgeLengthesKernel, 0, totalBDGPs);
+    int gridSize = (totalBDGPs + blockSize - 1) / blockSize;
+    edgeLengthesKernel<<<gridSize, blockSize>>>(this, lengths.data());
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess)
+    {
+        printf("CUDA error during edgeLengthesKernel launch: %s\n", 
+               cudaGetErrorString(err));
+    }
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+    {
+        printf("CUDA error during device synchronization (edgeLengthesKernel): %s\n", 
+               cudaGetErrorString(err));
+    }
+}
+
+int MultiPatch_d::totalNumBdGPs_host() const
+{
+    int h_result = 0;
+    int* d_result;
+    cudaError_t err = cudaMalloc((void**)&d_result, sizeof(int));
+    assert(err == cudaSuccess && "cudaMalloc failed in totalNumBdGPs_host");
+    err = cudaMemset(d_result, 0, sizeof(int));
+    assert(err == cudaSuccess && "cudaMemset failed in totalNumBdGPs_host");
+    int minGrid, blockSize, numPatches = getNumPatches_host();
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, 
+                                       totalNumBdGPsKernel, 0, numPatches);
+    int gridSize = (numPatches + blockSize - 1) / blockSize;
+    totalNumBdGPsKernel<<<gridSize, blockSize>>>(this, d_result);
+    err = cudaGetLastError();
+    if (err != cudaSuccess)
+    {
+        printf("CUDA error during totalNumBdGPsKernel launch: %s\n", 
+               cudaGetErrorString(err));
+    }
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+    {
+        printf("CUDA error during device synchronization (totalNumBdGPsKernel): %s\n", 
+               cudaGetErrorString(err));
+    }
+    err = cudaMemcpy(&h_result, d_result, sizeof(int), cudaMemcpyDeviceToHost);
+    assert(err == cudaSuccess && "cudaMemcpy failed in totalNumBdGPs_host");
+    cudaFree(d_result);
+    return h_result;
+}
+
+int MultiPatch_d::getNumPatches_host() const
+{
+    int h_result = 0;
+    int* d_result;
+    cudaError_t err = cudaMalloc((void**)&d_result, sizeof(int));
+    assert(err == cudaSuccess && "cudaMalloc failed in getNumPatches_host");
+    err = cudaMemset(d_result, 0, sizeof(int));
+    assert(err == cudaSuccess && "cudaMemset failed in getNumPatches_host");
+    getNumPatchesKernel<<<1, 1>>>(this, d_result);
+    err = cudaGetLastError();
+    if (err != cudaSuccess)
+    {
+        printf("CUDA error during getNumPatchesKernel launch: %s\n", 
+               cudaGetErrorString(err));
+    }
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+    {
+        printf("CUDA error during device synchronization (getNumPatchesKernel): %s\n", 
+               cudaGetErrorString(err));
+    }
+    err = cudaMemcpy(&h_result, d_result, sizeof(int), cudaMemcpyDeviceToHost);
+    assert(err == cudaSuccess && "cudaMemcpy failed in getNumPatches_host");
+    cudaFree(d_result);
+    return h_result;
+}
+
+int MultiPatch_d::getTotalNumEdges_host() const
+{
+    int h_result = 0;
+    int* d_result;
+    cudaError_t err = cudaMalloc((void**)&d_result, sizeof(int));
+    assert(err == cudaSuccess && "cudaMalloc failed in getTotalNumEdges_host");
+    err = cudaMemset(d_result, 0, sizeof(int));
+    assert(err == cudaSuccess && "cudaMemset failed in getTotalNumEdges_host");
+    int minGrid, blockSize, numPatches = getNumPatches_host();
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, 
+                                       getTotalNumEdgesKernel, 0, numPatches);
+    int gridSize = (numPatches + blockSize - 1) / blockSize;
+    getTotalNumEdgesKernel<<<gridSize, blockSize>>>(this, d_result);
+    err = cudaGetLastError();
+    if (err != cudaSuccess)
+    {
+        printf("CUDA error during getTotalNumEdgesKernel launch: %s\n", 
+               cudaGetErrorString(err));
+    }
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+    {
+        printf("CUDA error during device synchronization (getTotalNumEdgesKernel): %s\n", 
+               cudaGetErrorString(err));
+    }
+    err = cudaMemcpy(&h_result, d_result, sizeof(int), cudaMemcpyDeviceToHost);
+    assert(err == cudaSuccess && "cudaMemcpy failed in getTotalNumEdges_host");
+    cudaFree(d_result);
+    return h_result;
+}
+
+void MultiPatch_d::getPatchLengthes(DeviceVector<double> &lengths) const
+{
+    DeviceVector<double> edgeLengths;
+    getEdgeLengthes(edgeLengths);
+    //edgeLengths.print();
+    //printf("\n");
+    lengths.resize(getNumPatches_host() * getBasisDim_host());
+    lengths.setZero();
+    int minGrid, blockSize, totalEdges = getTotalNumEdges_host();
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, 
+                                       getPatchLengthesKernel, 0, totalEdges);
+    int gridSize = (totalEdges + blockSize - 1) / blockSize;
+    getPatchLengthesKernel<<<1, 1>>>(this, edgeLengths.data(), lengths.data());
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess)
+    {
+        printf("CUDA error during getPatchLengthesKernel launch: %s\n", 
+               cudaGetErrorString(err));
+    }
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+    {
+        printf("CUDA error during device synchronization (getPatchLengthesKernel): %s\n", 
+               cudaGetErrorString(err));
+    }
+}
+
+int MultiPatch_d::getBasisDim_host() const
+{
+    int h_result = 0;
+    int* d_result;
+    cudaError_t err = cudaMalloc((void**)&d_result, sizeof(int));
+    assert(err == cudaSuccess && "cudaMalloc failed in getBasisDim_host");
+    err = cudaMemset(d_result, 0, sizeof(int));
+    assert(err == cudaSuccess && "cudaMemset failed in getBasisDim_host");
+    getBasisDimKernel<<<1, 1>>>(this, d_result);
+    err = cudaGetLastError();
+    if (err != cudaSuccess)
+    {
+        printf("CUDA error during getBasisDimKernel launch: %s\n", 
+               cudaGetErrorString(err));
+    }
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+    {
+        printf("CUDA error during device synchronization (getBasisDimKernel): %s\n", 
+               cudaGetErrorString(err));
+    }
+    err = cudaMemcpy(&h_result, d_result, sizeof(int), cudaMemcpyDeviceToHost);
+    assert(err == cudaSuccess && "cudaMemcpy failed in getBasisDim_host");
+    cudaFree(d_result);
+    return h_result;
+}

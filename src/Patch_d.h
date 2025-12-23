@@ -265,6 +265,48 @@ public:
         return wt*md.transpose().norm();
     }
 
+    __device__
+    int getNumEdgesInEachDir() const
+    {
+        return m_basis.getNumEdgesInEachDir();
+    }
+
+    __device__
+    int getNumEdges() const
+    {
+        return m_basis.getNumEdges();
+    }
+
+    __device__
+    int numGPsInDir(int d) const
+    {
+        return m_basis.numGPsInDir(d);
+    }
+
+    __device__
+    int totalNumGPsInDir(int d) const
+    {
+        return m_basis.totalNumGPsInDir(d);
+    }
+
+    __device__
+    int totalNumGPs() const
+    {
+        return m_basis.totalNumGPs();
+    }
+
+    __host__ __device__
+    int totalNumBdGPs() const
+    {
+        return m_basis.totalNumBdGPs();
+    }
+
+    __device__
+    int totalNumBdGPsInDir(int d) const
+    {
+        return m_basis.totalNumBdGPsInDir(d);
+    }
+
 private:
     //int m_CPDim;
     TensorBsplineBasis_d m_basis;

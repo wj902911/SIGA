@@ -93,16 +93,16 @@ public:
         return KnotVector_d(m_order, m_knots);
     }
 
-    __device__
+    __host__ __device__
     int numGaussPoints() const { return m_order + 1; }
 
-    __device__
+    __host__ __device__
     int numElements() const { return m_knots.size() - m_order * 2 - 1; }
 
-    __device__
+    __host__ __device__
     int totalNumGaussPoints() const { return numElements() * numGaussPoints(); }
 
-    __device__
+    __host__ __device__
     int getNumControlPoints() const { return m_knots.size() - m_order - 1; }
 
     __device__

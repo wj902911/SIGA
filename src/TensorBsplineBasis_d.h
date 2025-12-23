@@ -856,6 +856,9 @@ public:
     #endif
 
     __device__
+    int numGPsInDir(int d) const { return m_knotVectors[d].numGaussPoints(); }
+
+    __host__ __device__
     int totalNumGPsInDir(int d) const { return m_knotVectors[d].totalNumGaussPoints(); }
 
     __device__
@@ -867,6 +870,25 @@ public:
             numGPS *= totalNumGPsInDir(d);
 
         return numGPS;
+    }
+
+    __host__ __device__
+    int totalNumBdGPs() const
+    {
+        int numGPS = 0;
+
+        for (int d = 0; d < m_dim; d++)
+            numGPS += totalNumGPsInDir(d) * pow(2, m_dim - 1);
+
+        //printf("totalNumGPsInDir0: %d\n", totalNumGPsInDir(0));
+
+        return numGPS;
+    }
+
+    __host__ __device__
+    int totalNumBdGPsInDir(int d) const
+    {
+        return totalNumGPsInDir(d) * pow(2, m_dim - 1);
     }
 
     __device__
@@ -1187,7 +1209,7 @@ public:
     }
 
     __device__
-    void elementSupport(int idx, const DeviceObjectArray<int>& coords, 
+    void elementSupport(const DeviceObjectArray<int>& coords, 
                         DeviceVector<double>& lower, 
                         DeviceVector<double>& upper) const
     {
@@ -1205,7 +1227,7 @@ public:
     void elementSupport(int idx, DeviceVector<double>& lower, 
                         DeviceVector<double>& upper) const
     {
-        elementSupport(idx, ptCoords(idx), lower, upper);
+        elementSupport(ptCoords(idx), lower, upper);
     }
 
     __device__
@@ -1215,7 +1237,7 @@ public:
         DeviceVector<double> gsPoint(m_dim);
         DeviceObjectArray<int> coords = ptCoords(idx);
         DeviceVector<double> lower, upper;
-        elementSupport(idx, coords, lower, upper);
+        elementSupport(coords, lower, upper);
         return gspts.threadGaussPoint(lower, upper, coords, result);
     }
 
@@ -1305,6 +1327,17 @@ public:
         return TensorBsplineBasis_d(knots);
     }
 
+    __device__
+    int getNumEdgesInEachDir() const
+    {
+        return pow(2, m_dim - 1);
+    }
+
+     __device__
+    int getNumEdges() const
+    {
+        return m_dim * pow(2, m_dim - 1);
+    }
 
 private:
     int m_dim;

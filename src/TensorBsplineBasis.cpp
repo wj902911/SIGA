@@ -359,6 +359,17 @@ int TensorBsplineBasis::getTotalNumGaussPoints() const
 	return totalNumGaussPoints;
 }
 
+int TensorBsplineBasis::getTotalNumBoundaryGaussPoints() const
+{
+	int totalNumGaussPoints = 0;
+	int dim = getDim();
+	for (int d = 0; d < dim; ++d)
+	{
+		totalNumGaussPoints += getTotalNumGaussPoints(d)*pow(2, dim - 1);
+	}
+    return totalNumGaussPoints;
+}
+
 const KnotVector& TensorBsplineBasis::getKnotVector(int direction) const
 {
     return m_knotVectors[direction];

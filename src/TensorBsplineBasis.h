@@ -73,6 +73,7 @@ public:
 	int getNumControlPoints() const;
 
 	int getTotalNumGaussPoints() const;
+	int getTotalNumBoundaryGaussPoints() const;
 
 	const KnotVector& getKnotVector(int direction) const;
 

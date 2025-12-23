@@ -80,6 +80,16 @@ int MultiBasis::totalNumGPs() const
     return totalNumGaussPoints;
 }
 
+int MultiBasis::totalNumBdGPs() const
+{
+    int totalNumBoundaryGaussPoints = 0;
+    for (int i = 0; i < m_bases.size(); i++)
+    {
+        totalNumBoundaryGaussPoints += m_bases[i].getTotalNumBoundaryGaussPoints();
+    }
+    return totalNumBoundaryGaussPoints;
+}
+
 int MultiBasis::totalNumGPsOnBdries(const std::deque<boundary_condition> &bcs) const
 {
     int totalNumGaussPoints = 0;
