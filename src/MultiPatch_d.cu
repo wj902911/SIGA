@@ -141,6 +141,56 @@ void getPatchLengthesKernel(const MultiPatch_d* patches, const double* edgeLengt
     }
 }
 
+__global__
+void getUpperSupportsKernel(const MultiPatch_d* patches, double* upperSupports)
+{
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
+        idx < patches->getNumPatches(); idx += blockDim.x * gridDim.x)
+    {
+        int basisDim = patches->getBasisDim();
+        for (int d = 0; d < basisDim; d++)
+        {
+            upperSupports[idx * basisDim + d] = patches->patch(idx).upperSupportsInDir(d);
+        }
+    }
+}
+
+__global__
+void getLowerSupportsKernel(const MultiPatch_d* patches, double* lowerSupports)
+{
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
+        idx < patches->getNumPatches(); idx += blockDim.x * gridDim.x)
+    {
+        int basisDim = patches->getBasisDim();
+        for (int d = 0; d < basisDim; d++)
+        {
+            lowerSupports[idx * basisDim + d] = patches->patch(idx).lowerSupportsInDir(d);
+        }
+    }
+}
+
+__global__
+void getAllControlPointsKernel(const MultiPatch_d* patches, int dataSize, double* allControlPoints)
+{
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
+        idx < dataSize; idx += blockDim.x * gridDim.x)
+    {
+        int point_idx = idx;
+        int threadPatch = 0;
+        for (int i = 0; i < patches->getNumPatches(); i++)
+        {
+            int patchDataSize = patches->getNumControlPoints(i) * patches->getCPDim();
+            if (point_idx < patchDataSize)
+            {
+                threadPatch = i;
+                break;
+            }
+            point_idx -= patchDataSize;
+        }
+        allControlPoints[idx] = patches->patch(threadPatch).getControlPoints().data()[point_idx];
+    }
+}
+
 #if 0
 MultiPatch_d::MultiPatch_d(int basisDim, int CPDim, int numPatches, double *knots, 
                            int *numKnots, int *orders, double *controlPoints, 
@@ -385,4 +435,96 @@ int MultiPatch_d::getBasisDim_host() const
     assert(err == cudaSuccess && "cudaMemcpy failed in getBasisDim_host");
     cudaFree(d_result);
     return h_result;
+}
+
+void MultiPatch_d::getUpperSupports(DeviceMatrix<double> &upperSupports) const
+{
+    int numPatches = getNumPatches_host();
+    upperSupports.resize(numPatches, getBasisDim_host());
+    int minGrid, blockSize;
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, 
+                                       getUpperSupportsKernel, 0, numPatches);
+    int gridSize = (numPatches + blockSize - 1) / blockSize;
+    getUpperSupportsKernel<<<gridSize, blockSize>>>(this, upperSupports.data());
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess)
+    {
+        printf("CUDA error during getUpperSupportsKernel launch: %s\n", 
+               cudaGetErrorString(err));
+    }
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+    {
+        printf("CUDA error during device synchronization (getUpperSupportsKernel): %s\n", 
+               cudaGetErrorString(err));
+    }
+}
+
+void MultiPatch_d::getLowerSupports(DeviceMatrix<double> &lowerSupports) const
+{
+    int numPatches = getNumPatches_host();
+    lowerSupports.resize(numPatches, getBasisDim_host());
+    int minGrid, blockSize;
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, 
+                                       getLowerSupportsKernel, 0, numPatches);
+    int gridSize = (numPatches + blockSize - 1) / blockSize;
+    getLowerSupportsKernel<<<gridSize, blockSize>>>(this, lowerSupports.data());
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess)
+    {
+        printf("CUDA error during getLowerSupportsKernel launch: %s\n", 
+               cudaGetErrorString(err));
+    }
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+    {
+        printf("CUDA error during device synchronization (getLowerSupportsKernel): %s\n", 
+               cudaGetErrorString(err));
+    }
+}
+
+void MultiPatch_d::retrieveControlPoints(MultiPatch &mp) const
+{
+    int dataSize = 0;
+    for (int i = 0; i < mp.getNumPatches(); i++)
+    {
+        dataSize += mp.patch(i).getControlPoints().size();
+    }
+    DeviceVector<double> allCPs(dataSize);
+    allCPs.setZero();
+    int minGrid, blockSize;
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, 
+                                       getAllControlPointsKernel, 0, dataSize);
+    int gridSize = (dataSize + blockSize - 1) / blockSize;
+    getAllControlPointsKernel<<<gridSize, blockSize>>>(this, dataSize, allCPs.data());
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess)
+    {
+        printf("CUDA error during getAllControlPointsKernel launch: %s\n", 
+               cudaGetErrorString(err));
+    }
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+    {
+        printf("CUDA error during device synchronization (getAllControlPointsKernel): %s\n", 
+               cudaGetErrorString(err));
+    }
+    Eigen::VectorXd h_allCPs(dataSize);
+    err = cudaMemcpy(h_allCPs.data(), allCPs.data(), dataSize * sizeof(double), cudaMemcpyDeviceToHost);
+    err = cudaGetLastError();
+    if (err != cudaSuccess)
+    {
+        printf("CUDA error during cudaMemcpy in retrieveControlPoints: %s\n", 
+               cudaGetErrorString(err));
+    }
+    int offset = 0;
+    for (int i = 0; i < mp.getNumPatches(); i++)
+    {
+        int patchDataSize = mp.patch(i).getControlPoints().size();
+        Eigen::MatrixXd cpMat = Eigen::Map<const Eigen::MatrixXd>(h_allCPs.data() + offset, 
+                                                                  mp.patch(i).getCPDim(), 
+                                                                  patchDataSize / mp.patch(i).getCPDim());
+        mp.patch(i).setControlPoints(cpMat.transpose());
+        offset += patchDataSize;
+    }
 }

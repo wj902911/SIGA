@@ -14,6 +14,7 @@
 #include <MultiBasis_d.h>
 #include <MultiBasis.h>
 #include <GaussPoints_d.h>
+#include <Postprocessor.h>
 
 #if 0
 __device__
@@ -127,9 +128,9 @@ int main()
 	Eigen::MatrixXd control_points(4, 2);
 	control_points <<
 		0.000, 0.000, 
-		1.000, 0.000, 
+		2.000, 0.000, 
 		0.000, 1.000,
-		1.000, 1.000;
+		2.000, 1.000;
 
 #if 0
 	//DeviceObjectArray<double>* knot_DOA = new DeviceObjectArray<double>[2];
@@ -227,21 +228,35 @@ int main()
 	std::vector<double> knot_v2{ 0., 0., 1., 1. };
 	Eigen::MatrixXd control_points2(4, 2);
 	control_points2 <<
-		1.000, 0.000, 
-		2.000, 0.000,
-		1.000, 1.000,
-		2.000, 1.000;
+		2.000, 0.000, 
+		4.000, 0.000,
+		2.000, 1.000,
+		4.000, 1.000;
+#if 0
+	std::vector<double> knot_u3{ 0., 0., 1., 1. };
+	std::vector<double> knot_v3{ 0., 0., 1., 1. };
+	Eigen::MatrixXd control_points3(4, 2);
+	control_points3 <<
+		4.000, 0.000, 
+		6.000, 0.000,
+		4.000, 1.000,
+		6.000, 1.000;
+#endif
 
 	KnotVector u1(knot_u_order,knot_u);
 	KnotVector v1(knot_v_order,knot_v);
 	KnotVector u2(knot_u_order,knot_u2);
 	KnotVector v2(knot_v_order,knot_v2);
+	//KnotVector u3(knot_u_order,knot_u3);
+	//KnotVector v3(knot_v_order,knot_v3);
 	Patch patch(u1, v1, control_points);
 	Patch patch2(u2, v2, control_points2);
+	//Patch patch3(u3, v3, control_points3);
 
 	MultiPatch multiPatch;
 	multiPatch.addPatch(patch);
 	multiPatch.addPatch(patch2);
+	//multiPatch.addPatch(patch3);
 	multiPatch.computeTopology();
 
 	MultiBasis bases(multiPatch);
@@ -626,6 +641,17 @@ int main()
 	}
 #endif
 
+	MultiPatch displacement;
+	solver.constructSolution(displacement);
+
+#if 0
+	Eigen::VectorXi numPoints(2);
+	numPoints << 10, 10;
+	PostProcessor postProcessor(multiPatch);
+	DeviceMatrix<int> numPointsPerDir;
+	postProcessor.distributePoints(numPoints, numPointsPerDir);
+	numPointsPerDir.print();
+#endif
 	return 0;
 }
 

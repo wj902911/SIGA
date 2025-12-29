@@ -6,6 +6,7 @@
 #include "BoundaryCondition.h"
 #include "DeviceVector.h"
 #include "SparseSystem.h"
+#include "MultiPatch_d.h"
 
 class Assembler
 {
@@ -22,9 +23,8 @@ public:
 
     void computeDirichletDofs(int unk_, const std::vector<DofMapper> &mappers);
 
-#if 0
-    void constructSolution(const DeviceVector<double>& solVector,
-                           MultiPatch_d& displacement) const;
+#if 1
+    void constructSolution(const DeviceVector<double>& solVector, MultiPatch &displacement) const;
 #endif
 
     int getBoundaryData_Neumann(thrust::device_vector<int>& sizes, 
@@ -35,6 +35,8 @@ public:
 
     const DeviceMatrix<double> & matrix() const { return m_sparseSystem.matrix(); }
     const DeviceVector<double> & rhs() const { return m_sparseSystem.rhs(); }
+
+    void fixedDofs(DeviceObjectArray<DeviceVector<double>> &fixedDoFs_d) const;
 
 private:
     //MultiPatchData m_multiPatchData;

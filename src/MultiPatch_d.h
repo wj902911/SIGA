@@ -20,6 +20,8 @@ public:
                    m_controlPoints(controlPoints), m_numControlPoints(numControlPoints),
                    m_numGpAndEle(numGpAndEle) { }
 #endif
+    __host__
+    MultiPatch_d() = default;
 
     __host__ 
     MultiPatch_d(const MultiPatch& mp);
@@ -322,6 +324,15 @@ public:
 
     __host__
     int totalNumBdGPs_host() const;
+
+    __host__
+    void getUpperSupports(DeviceMatrix<double>& upperSupports) const;
+
+    __host__
+    void getLowerSupports(DeviceMatrix<double>& lowerSupports) const;
+
+    __host__
+    void retrieveControlPoints(MultiPatch& mp) const;
 
 #if 0
     __device__

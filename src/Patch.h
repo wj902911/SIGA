@@ -75,6 +75,9 @@ public:
     void eval_into(const Eigen::MatrixXd& u, Eigen::MatrixXd& result) const
     {m_basis.evalFunc_into(u, m_controlPoints, result);}
 
+    void setControlPoints(const Eigen::MatrixXd& controlPoints)
+    { m_controlPoints = controlPoints; }
+
 private:
     TensorBsplineBasis m_basis;
     Eigen::MatrixXd m_controlPoints;

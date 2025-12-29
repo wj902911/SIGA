@@ -286,3 +286,13 @@ else if (m_status == working)
              ", resRel: " + to_string_sientific(m_residualNorm/m_initResidualNorm);
 return statusString;
 }
+
+DeviceVector<double> Solver::solution() const
+{
+    return m_solVector;
+}
+
+void Solver::constructSolution(MultiPatch &displacement) const
+{
+    m_assembler.constructSolution(m_solVector, displacement);
+}

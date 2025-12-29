@@ -1,5 +1,4 @@
 #include "Assembler.h"
-#include "MultiPatch_d.h"
 #include "MultiBasis_d.h"
 #include "GaussPoints_d.h"
 #include "Patch_d.h"
@@ -12,6 +11,7 @@
 #include "Utility_h.h"
 //#include "Utility_d.h"
 #include <BoundaryCondition_d.h>
+#include <DeviceObjectPointer.h>
 
 #if 0
 __device__
@@ -1105,9 +1105,9 @@ void Assembler::assemble(const DeviceVector<double>& solVector, int numIter)
 
     patchLengthes.print();
 #endif
-    DeviceVector<double> patchLengthes;
-    d_patches->getPatchLengthes(patchLengthes);
-    patchLengthes.print();
+    //DeviceVector<double> patchLengthes;
+    //d_patches->getPatchLengthes(patchLengthes);
+    //patchLengthes.print();
 
     //cudaFree(d_boundaryPatches);
 
@@ -1418,13 +1418,47 @@ void Assembler::computeDirichletDofs(int unk_, const std::vector<DofMapper> &map
     }
 }
 
-#if 0
-void Assembler::constructSolution(const DeviceVector<double> &solVector, 
-                                  MultiPatch_d &displacement) const
+void Assembler::constructSolution(const DeviceVector<double> &solVector, MultiPatch &displacement) const
 {
+    //solVector.print();
+    int geoDim = m_multiPatch.getCPDim();
+    for (int i = 0; i < m_multiPatch.getNumPatches(); ++i) 
+    {
+        Patch patch(m_multiBasis.basis(i), geoDim);
+        displacement.addPatch(patch);
+    }
+    MultiPatch_d displacement_d(displacement);
+    DeviceObjectPointer<MultiPatch_d> d_displacement(displacement_d);
+    DeviceObjectPointer<DeviceVector<double>> d_solVector(solVector);
+    DeviceObjectArray<DeviceVector<double>> fixedDoFs_d;
+    fixedDofs(fixedDoFs_d);
+    DeviceObjectPointer<DeviceObjectArray<DeviceVector<double>>> d_fixedDoFs(fixedDoFs_d);
+    MultiBasis_d bases(m_multiBasis);
+    DeviceObjectPointer<MultiBasis_d> d_bases(bases);
+    DeviceObjectPointer<SparseSystem> d_sparseSystem(m_sparseSystem);
+    int numdofs = displacement.getTotalNumControlPoints()*displacement.getCPDim();
+    int minGrid, blockSize;
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, constructSolutionKernel, 0, numdofs);
+    int gridSize = (numdofs + blockSize - 1) / blockSize;
+    constructSolutionKernel<<<gridSize, blockSize>>>(d_solVector.pointer(), 
+                                                      d_fixedDoFs.pointer(), 
+                                                      d_bases.pointer(), 
+                                                      d_sparseSystem.pointer(), 
+                                                      d_displacement.pointer(), 
+                                                      numdofs);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess)
+        std::cerr << "Error after kernel constructSolutionKernel launch: " 
+                  << cudaGetErrorString(err) << std::endl;
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+        std::cerr << "CUDA error during device synchronization (constructSolutionKernel): " 
+                  << cudaGetErrorString(err) << std::endl;
     
+    d_displacement.pointer()->retrieveControlPoints(displacement);
+    std::cout << displacement.patch(0).getControlPoints() << std::endl << std::endl;
+    std::cout << displacement.patch(1).getControlPoints() << std::endl;
 }
-#endif
 
 int Assembler::getBoundaryData_Neumann(thrust::device_vector<int> &sizes, 
                                        thrust::device_vector<int> &starts,
@@ -1480,4 +1514,14 @@ int Assembler::getBoundaryData_Neumann(thrust::device_vector<int> &sizes,
     }
 
     return totalNumGaussPoints;
+}
+
+void Assembler::fixedDofs(DeviceObjectArray<DeviceVector<double>> &fixedDoFs_d) const
+{
+    fixedDoFs_d.resize(m_ddof.size());
+    for (int i = 0; i < m_ddof.size(); ++i)
+    {
+        DeviceVector<double> fixedDoF_d(m_ddof[i].size(), m_ddof[i].data());
+        fixedDoFs_d.at(i) = fixedDoF_d;
+    }
 }

@@ -15,6 +15,8 @@ public:
     bool solveSingleIteration();
     void solve();
     std::string status();
+    DeviceVector<double> solution() const;
+    void constructSolution(MultiPatch& displacement) const;
 private:
     Assembler& m_assembler;
     DeviceVector<double> m_solVector;

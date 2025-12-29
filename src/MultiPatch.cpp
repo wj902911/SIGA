@@ -545,6 +545,11 @@ const Patch &MultiPatch::patch(int patchIndex) const
     return m_patches[patchIndex];
 }
 
+Patch &MultiPatch::patch(int patchIndex)
+{
+    return m_patches[patchIndex];
+}
+
 bool MultiPatch::computeTopology(double tol, bool cornersOnly, bool tjunctions)
 {
     m_topology.clearTopology();

@@ -307,6 +307,47 @@ public:
         return m_basis.totalNumBdGPsInDir(d);
     }
 
+    __device__
+    double upperSupportsInDir(int d) const
+    {
+        return m_basis.upperSupportInDir(d);
+    }
+
+    __device__
+    double lowerSupportsInDir(int d) const
+    {
+        return m_basis.lowerSupportInDir(d);
+    }
+
+    __device__
+    DeviceVector<double> upperSupports() const
+    {
+        return m_basis.upperSupports();
+    }
+
+    __device__
+    DeviceVector<double> lowerSupports() const
+    {
+        return m_basis.lowerSupports();
+    }
+
+    __host__
+    void retrieveControlPoints(Eigen::MatrixXd& host_controlPoints) const
+    {
+        Eigen::MatrixXd host_controlPoints_temp;
+        cudaError_t err = cudaMemcpy(host_controlPoints_temp.data(), 
+                                         m_controlPoints.data(), 
+                                         m_controlPoints.rows() * m_controlPoints.cols() * sizeof(double), 
+                                         cudaMemcpyDeviceToHost);
+        host_controlPoints = host_controlPoints_temp.transpose();
+    }
+
+    __device__
+    const DeviceMatrix<double> &getControlPoints() const
+    {
+        return m_controlPoints;
+    }
+
 private:
     //int m_CPDim;
     TensorBsplineBasis_d m_basis;

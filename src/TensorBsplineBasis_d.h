@@ -1339,6 +1339,36 @@ public:
         return m_dim * pow(2, m_dim - 1);
     }
 
+    __device__
+    double upperSupportInDir(int dir) const
+    {
+        return m_knotVectors[dir].domainEnd();
+    }
+
+    __device__
+    double lowerSupportInDir(int dir) const
+    {
+        return m_knotVectors[dir].domainBegin();
+    }
+
+    __device__
+    DeviceVector<double> upperSupports() const
+    {
+        DeviceVector<double> upp(m_dim);
+        for (int d = 0; d < m_dim; d++)
+            upp(d) = upperSupportInDir(d);
+        return upp;
+    }
+
+    __device__
+    DeviceVector<double> lowerSupports() const
+    {
+        DeviceVector<double> low(m_dim);
+        for (int d = 0; d < m_dim; d++)
+            low(d) = lowerSupportInDir(d);
+        return low;
+    }
+
 private:
     int m_dim;
     DeviceObjectArray<KnotVector_d> m_knotVectors;

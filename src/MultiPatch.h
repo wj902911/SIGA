@@ -102,6 +102,7 @@ public:
 
     const TensorBsplineBasis& basis(int patchIndex) const;
     const Patch& patch(int patchIndex) const;
+    Patch& patch(int patchIndex);
     const BoxTopology& topology() const { return m_topology; }
     bool computeTopology( double tol = 1e-4, bool cornersOnly = false, bool tjunctions = false);
     static bool matchVerticesOnSide (const Eigen::MatrixXd& cc1, const std::vector<BoxCorner> &ci1, int start, 
