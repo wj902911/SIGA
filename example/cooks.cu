@@ -644,13 +644,15 @@ int main()
 	MultiPatch displacement;
 	solver.constructSolution(displacement);
 
-#if 0
+#if 1
 	Eigen::VectorXi numPoints(2);
 	numPoints << 10, 10;
 	PostProcessor postProcessor(multiPatch);
-	DeviceMatrix<int> numPointsPerDir;
+	Eigen::MatrixXi numPointsPerDir;
 	postProcessor.distributePoints(numPoints, numPointsPerDir);
-	numPointsPerDir.print();
+	Eigen::MatrixXd values;
+	postProcessor.evalGeometryAtPoints(numPointsPerDir, values);
+	std::cout << "Num points per dir:\n" << numPointsPerDir << std::endl;
 #endif
 	return 0;
 }

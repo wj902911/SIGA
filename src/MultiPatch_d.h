@@ -49,7 +49,7 @@ public:
     int getCPDim() const
     { return m_patches[0].getCPDim(); }
 
-    __device__
+    __host__ __device__
     int getNumPatches() const
     { return m_patches.size(); }
 
@@ -232,10 +232,18 @@ public:
     }
     
     __device__
-    DeviceMatrix<double> getActiveControlPoints(int patchIndex, DeviceVector<double> pt)
+    DeviceMatrix<double> getActiveControlPoints(int patchIndex, DeviceVector<double> pt) const
     {
         return m_patches[patchIndex].getActiveControlPoints(pt);
     }
+
+#if 0
+    __device__
+    DeviceMatrix<double> getActiveControlPoints(int patchIndex, DeviceVector<double> pt) const
+    {
+        return m_patches[patchIndex].getActiveControlPoints(pt);
+    }
+#endif
 
     __device__
     DeviceVector<int> coefSlice(int patch, int dir, int k) const
@@ -333,6 +341,9 @@ public:
 
     __host__
     void retrieveControlPoints(MultiPatch& mp) const;
+
+    __host__
+    void eval_into(const Eigen::MatrixXi &numPointsPerDir, Eigen::MatrixXd& values) const;
 
 #if 0
     __device__

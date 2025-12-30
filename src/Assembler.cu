@@ -1456,8 +1456,8 @@ void Assembler::constructSolution(const DeviceVector<double> &solVector, MultiPa
                   << cudaGetErrorString(err) << std::endl;
     
     d_displacement.pointer()->retrieveControlPoints(displacement);
-    std::cout << displacement.patch(0).getControlPoints() << std::endl << std::endl;
-    std::cout << displacement.patch(1).getControlPoints() << std::endl;
+    //std::cout << displacement.patch(0).getControlPoints() << std::endl << std::endl;
+    //std::cout << displacement.patch(1).getControlPoints() << std::endl;
 }
 
 int Assembler::getBoundaryData_Neumann(thrust::device_vector<int> &sizes, 

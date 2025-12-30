@@ -21,7 +21,10 @@ public:
         return m_functions;
     }
 
-    void distributePoints(const Eigen::VectorXi &numPoints, DeviceMatrix<int>& numPointsPerDir) const;
+    void distributePoints(const Eigen::VectorXi &numPoints, Eigen::MatrixXi& numPointsPerDir) const;
+
+    void evalGeometryAtPoints(const Eigen::MatrixXi &numPointsPerDir,
+                              Eigen::MatrixXd& values) const;
 
 private:
     MultiPatch m_geometry;

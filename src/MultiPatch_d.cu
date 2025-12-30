@@ -1,4 +1,5 @@
 #include "MultiPatch_d.h"
+#include <DeviceObjectPointer.h>
 
 //template __global__ void testKernel<int>(int);
 __global__
@@ -191,6 +192,59 @@ void getAllControlPointsKernel(const MultiPatch_d* patches, int dataSize, double
     }
 }
 
+__global__
+void evalAtDistributedPointsKernel(const MultiPatch_d* patches,
+                                   const DeviceMatrix<int>* numPointsPerDir,
+                                   DeviceMatrix<double>* values)
+{
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
+        idx < values->rows(); idx += blockDim.x * gridDim.x)
+    {
+        int point_idx = idx;
+        int threadPatch = 0;
+        for (int i = 0; i < patches->getNumPatches(); i++)
+        {
+            int patchPoints = 1;
+            for (int d = 0; d < patches->getBasisDim(); d++)
+            {
+                patchPoints *= (*numPointsPerDir)(d, i);
+            }
+            if (point_idx < patchPoints)
+            {
+                threadPatch = i;
+                break;
+            }
+            point_idx -= patchPoints;
+        }
+        //printf("Thread %d processing Patch %d\n", idx, threadPatch);
+        // Now compute the local parametric coordinates within the patch
+        DeviceVector<double> u_local(patches->getBasisDim());
+        int residual = point_idx;
+        for (int d = 0; d < patches->getBasisDim(); d++)
+        {
+            int numPointsInDir = (*numPointsPerDir)(d, threadPatch);
+            u_local(d) = static_cast<double>(residual % numPointsInDir) / (numPointsInDir - 1);
+            residual /= numPointsInDir;
+        }
+        printf("Thread %d Point %d Patch %d, Local coords:\n", idx, point_idx, threadPatch);
+        u_local.print();
+        // Evaluate geometry at u_local
+        //DeviceVector<double> pt_dev(patches->getBasisDim());
+        //for (int d = 0; d < patches->getBasisDim(); d++)
+            //pt_dev[d] = u_local(d);
+        DeviceMatrix<double> activeCPs = patches->getActiveControlPoints(threadPatch, u_local);
+        DeviceObjectArray<DeviceVector<double>> vals;
+        patches->evalAllDers_into(threadPatch, u_local, 0, vals);
+#if 0
+        DeviceMatrix<double> geomPoint = vals[0].transpose() * activeCPs;
+        for (int i = 0; i < geomPoint.rows(); i++)
+        {
+            (*values)(i, idx) = geomPoint(i, 0);
+        }
+#endif
+    }
+
+}
 #if 0
 MultiPatch_d::MultiPatch_d(int basisDim, int CPDim, int numPatches, double *knots, 
                            int *numKnots, int *orders, double *controlPoints, 
@@ -527,4 +581,39 @@ void MultiPatch_d::retrieveControlPoints(MultiPatch &mp) const
         mp.patch(i).setControlPoints(cpMat.transpose());
         offset += patchDataSize;
     }
+}
+
+void MultiPatch_d::eval_into(const Eigen::MatrixXi &numPointsPerDir, Eigen::MatrixXd &values) const
+{
+    DeviceMatrix<int> numPointsPerDir_d(numPointsPerDir);
+    DeviceObjectPointer<DeviceMatrix<int>> d_numPointsPerDir(numPointsPerDir_d);
+    DeviceMatrix<double> values_d(values.transpose());
+    DeviceObjectPointer<DeviceMatrix<double>> d_values(values_d);
+    int minGrid, blockSize;
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+                                        evalAtDistributedPointsKernel, 0, values_d.rows());
+    int gridSize = (values_d.rows() + blockSize - 1) / blockSize;
+    //evalAtDistributedPointsKernel<<<gridSize, blockSize>>>(this, d_numPointsPerDir.pointer(), d_values.pointer());
+    evalAtDistributedPointsKernel<<<1, 1>>>(this, d_numPointsPerDir.pointer(), d_values.pointer());
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess)
+    {
+        printf("CUDA error during evalAtDistributedPointsKernel launch: %s\n",
+               cudaGetErrorString(err));
+    }
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+    {
+        printf("CUDA error during device synchronization (evalAtDistributedPointsKernel): %s\n",
+               cudaGetErrorString(err));
+    }
+#if 0
+    err = cudaMemcpy(values.data(), values_d.data(), values.size() * sizeof(double), cudaMemcpyDeviceToHost);
+    if (err != cudaSuccess)
+    {
+        printf("CUDA error during cudaMemcpy in eval_into: %s\n",
+               cudaGetErrorString(err));
+    }
+#endif
+    std::cout << values.transpose() << std::endl;
 }

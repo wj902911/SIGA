@@ -1,4 +1,5 @@
 #include "Postprocessor.h"
+#include <DeviceObjectPointer.h>
 
 __global__
 void distributePointsKernel(const MultiPatch_d* patches, const double* patchLengthes, const int* numPoints, int* numPointsPerDir)
@@ -25,12 +26,14 @@ void distributePointsKernel(const MultiPatch_d* patches, const double* patchLeng
 
 }
 
-void PostProcessor::distributePoints(const Eigen::VectorXi &numPoints, DeviceMatrix<int>& numPointsPerDir) const
+void PostProcessor::distributePoints(const Eigen::VectorXi &numPoints, Eigen::MatrixXi& numPointsPerDir) const
 {
     int dim = m_geometry.getBasisDim();
     int numPatches = m_geometry.getNumPatches();
-    numPointsPerDir.resize(numPatches, dim);
+    numPointsPerDir.resize(dim, numPatches);
     numPointsPerDir.setZero();
+    DeviceMatrix<int> numPointsPerDir_d(numPatches, dim);
+    numPointsPerDir_d.setZero();
 
     DeviceVector<double> patchLengthes;
     MultiPatch_d geometry_d(m_geometry);
@@ -42,7 +45,7 @@ void PostProcessor::distributePoints(const Eigen::VectorXi &numPoints, DeviceMat
     cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, distributePointsKernel, 0, numPatches);
     int gridSize = (numPatches + blockSize - 1) / blockSize;
     DeviceVector<int> d_numPoints = numPoints;
-    distributePointsKernel<<<gridSize, blockSize>>>(d_geometry, patchLengthes.data(), d_numPoints.data(), numPointsPerDir.data());
+    distributePointsKernel<<<gridSize, blockSize>>>(d_geometry, patchLengthes.data(), d_numPoints.data(), numPointsPerDir_d.data());
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess)
     {
@@ -55,5 +58,26 @@ void PostProcessor::distributePoints(const Eigen::VectorXi &numPoints, DeviceMat
         std::cerr << "CUDA Synchronization Error in distributePointsKernel: " << cudaGetErrorString(err) << std::endl;
         exit(EXIT_FAILURE);
     }
+    err = cudaMemcpy(numPointsPerDir.data(), numPointsPerDir_d.data(), sizeof(int) * numPatches * dim, cudaMemcpyDeviceToHost);
+    if (err != cudaSuccess)
+    {
+        std::cerr << "CUDA Memcpy Error in distributePointsKernel: " << cudaGetErrorString(err) << std::endl;
+        exit(EXIT_FAILURE);
+    }
     cudaFree(d_geometry);
+}
+
+void PostProcessor::evalGeometryAtPoints(const Eigen::MatrixXi &numPointsPerDir, Eigen::MatrixXd &values) const
+{
+    int dim = m_geometry.getCPDim();
+    int numPoints = 0;
+    int numPatches = m_geometry.getNumPatches();
+    for (int p = 0; p < numPatches; p++)
+        numPoints += numPointsPerDir.col(p).prod();
+    //std::cout << "Total number of points: " << numPoints << std::endl;
+    values.resize(dim, numPoints);
+    values.setZero();
+    MultiPatch_d geometry_d(m_geometry);
+    DeviceObjectPointer<MultiPatch_d> d_geometry(geometry_d);
+    d_geometry.pointer()->eval_into(numPointsPerDir, values);
 }

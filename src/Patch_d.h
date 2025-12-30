@@ -170,7 +170,7 @@ public:
     }
 
     __device__
-    DeviceMatrix<double> getActiveControlPoints(DeviceVector<double> pt)
+    DeviceMatrix<double> getActiveControlPoints(DeviceVector<double> pt) const
     {
         DeviceVector<int> activeIndexes = m_basis.getActiveIndexes(pt);
         int CPDim = getCPDim();
@@ -185,6 +185,25 @@ public:
         }
         return activeCPs;
     }
+
+#if 0
+    __device__
+    DeviceMatrix<double> getActiveControlPoints(DeviceVector<double> pt) const
+    {
+        DeviceVector<int> activeIndexes = m_basis.getActiveIndexes(pt);
+        int CPDim = getCPDim();
+        DeviceMatrix<double> activeCPs(activeIndexes.size(), CPDim);
+        for (int i = 0; i < activeIndexes.size(); i++)
+        {
+            //for (int j = 0; j < CPDim; j++)
+            //{
+            //    activeCPs(i, j) = m_controlPoints(activeIndexes[i], j);
+            //}
+            activeCPs.row(i) = m_controlPoints.row(activeIndexes(i));
+        }
+        return activeCPs;
+    }
+#endif
 
     __device__
     void getValuesAnddDerivatives(
