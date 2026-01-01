@@ -1,5 +1,7 @@
 #include "Postprocessor.h"
 #include <DeviceObjectPointer.h>
+#include <fstream>
+#include <iomanip>
 
 __global__
 void distributePointsKernel(const MultiPatch_d* patches, const double* patchLengthes, const int* numPoints, int* numPointsPerDir)
@@ -80,4 +82,137 @@ void PostProcessor::evalGeometryAtPoints(const Eigen::MatrixXi &numPointsPerDir,
     MultiPatch_d geometry_d(m_geometry);
     DeviceObjectPointer<MultiPatch_d> d_geometry(geometry_d);
     d_geometry.pointer()->eval_into(numPointsPerDir, values);
+}
+
+void PostProcessor::evalFunctionsAtPoints(std::map<std::string, Eigen::MatrixXd> &data, 
+                                          const Eigen::MatrixXi &numPointsPerDir) const
+{
+    for (std::map<std::string, Function*>::const_iterator it = m_functions.begin(); it != m_functions.end(); ++it)
+    {
+        it->second->eval_into(numPointsPerDir, data[it->first]);
+        //std::cout << data[it->first] << std::endl;
+        if ( data[it->first].rows() == 2 )
+        {
+            data[it->first].conservativeResize(3, data[it->first].cols());
+            data[it->first].row(2).setZero();
+        }
+    }
+}
+
+void PostProcessor::outputToParaview(const std::string &fn, 
+                                     const Eigen::VectorXi& numPoints, 
+                                     int step, 
+                                     ParaviewCollection& collection) const
+{
+    Eigen::MatrixXi numPointsPerDir;
+    distributePoints(numPoints, numPointsPerDir);
+    Eigen::MatrixXd points;
+    evalGeometryAtPoints(numPointsPerDir, points);
+    std::map<std::string, Eigen::MatrixXd> data;
+    evalFunctionsAtPoints(data, numPointsPerDir);
+    writeParaview(fn, numPointsPerDir, points, data, step, collection);
+}
+
+void PostProcessor::writeParaview(const std::string& fn, 
+                                  const Eigen::MatrixXi& numPointsPerDir, 
+                                  const Eigen::MatrixXd& points,
+                                  const std::map<std::string, Eigen::MatrixXd>& data,
+                                  int step,
+                                  ParaviewCollection& collection) const
+{
+    std::string fileName = fn.substr(fn.find_last_of("/\\")+1);
+    for (int p = 0; p < m_geometry.getNumPatches(); p++)
+    {
+        int d = m_geometry.patch(p).getBasisDim();
+        int n = m_geometry.patch(p).getCPDim();
+        Eigen::VectorXi np = numPointsPerDir.col(p);
+        int totalNumPointsPatch = np.prod();
+        Eigen::MatrixXd pointsPatch = points.middleCols(p * totalNumPointsPatch, totalNumPointsPatch);
+        std::map<std::string, Eigen::MatrixXd> dataPatch;
+        for (const auto& item : data)
+        {
+            dataPatch[item.first] = item.second.middleCols(p * totalNumPointsPatch, totalNumPointsPatch);
+        }
+        if (3 -d > 0)
+        {
+            np.conservativeResize(3);
+            np.bottomRows(3-d).setOnes();
+        }
+        else if (d > 3)
+        {
+            std::cout << "Cannot plot 4D data.\n";
+            return;
+        }
+
+        if ( 3 - n > 0 )
+        {
+            pointsPatch.conservativeResize(3, pointsPatch.cols());
+            pointsPatch.bottomRows(3 - n).setZero();
+        }
+        else if (n > 3)
+        {
+            std::cout << "Cannot plot data with dimension higher than 3.\n";
+        }
+
+        writeParaviewSinglePatch(fn + std::to_string(step) + "_" + std::to_string(p), np, pointsPatch, dataPatch);
+        collection.addTimestep(fileName + std::to_string(step), p, step, ".vts");
+    }
+}
+
+void PostProcessor::writeParaviewSinglePatch(const std::string &fn, 
+                                             const Eigen::VectorXi &np, 
+                                             const Eigen::MatrixXd &points,
+                                             const std::map<std::string, Eigen::MatrixXd>& data) const
+{
+    const int n = points.rows();
+
+    std::string mfn(fn);
+    mfn.append(".vts");
+    std::ofstream file(mfn.c_str());
+    file << std::fixed; // no exponents
+    file << std::setprecision (11);
+
+    file <<"<?xml version=\"1.0\"?>\n";
+    file <<"<VTKFile type=\"StructuredGrid\" version=\"0.1\">\n";
+    file <<"<StructuredGrid WholeExtent=\"0 "<< np(0)-1<<" 0 "<<np(1)-1<<" 0 "
+         << (np.size()>2 ? np(2)-1 : 0) <<"\">\n";
+    file <<"<Piece Extent=\"0 "<< np(0)-1<<" 0 "<<np(1)-1<<" 0 "
+         << (np.size()>2 ? np(2)-1 : 0) <<"\">\n";
+
+    file <<"<PointData>\n";
+    for (const auto& item : data)
+    {
+        file << "<DataArray type=\"Float32\" Name=\"" << item.first << "\" format=\"ascii\" NumberOfComponents=\"" << (item.second.rows() ==1 ? 1 : 3) << "\">\n";
+        if (item.second.rows() == 1)
+            for (int i = 0; i < item.second.cols(); ++i)
+                file << item.second(0, i) << " ";
+        else
+        {
+            for (int j = 0; j < item.second.cols(); ++j)
+            {
+                for (int i = 0; i < item.second.rows(); ++i)
+                    file << item.second(i, j) << " ";
+                for (int i = item.second.rows(); i < 3; ++i)
+                    file << "0 ";
+            }
+        }
+        file << "</DataArray>\n";
+    }
+    file <<"</PointData>\n";
+    file <<"<Points>\n";
+    file <<"<DataArray type=\"Float32\" NumberOfComponents=\"3\">\n";
+    for ( int j=0; j<points.cols(); ++j)
+    {
+        for ( int i=0; i!=n; ++i)
+            file<< points(i,j) <<" ";
+        for ( int i=n; i<3; ++i)
+            file<<"0 ";
+    }
+    file <<"</DataArray>\n";
+    file <<"</Points>\n";
+    file <<"</Piece>\n";
+    file <<"</StructuredGrid>\n";
+    file <<"</VTKFile>\n";
+
+    file.close();
 }

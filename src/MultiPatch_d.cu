@@ -226,8 +226,8 @@ void evalAtDistributedPointsKernel(const MultiPatch_d* patches,
             u_local(d) = static_cast<double>(residual % numPointsInDir) / (numPointsInDir - 1);
             residual /= numPointsInDir;
         }
-        printf("Thread %d Point %d Patch %d, Local coords:\n", idx, point_idx, threadPatch);
-        u_local.print();
+        //printf("Thread %d Point %d Patch %d, Local coords:\n", idx, point_idx, threadPatch);
+        //u_local.print();
         // Evaluate geometry at u_local
         //DeviceVector<double> pt_dev(patches->getBasisDim());
         //for (int d = 0; d < patches->getBasisDim(); d++)
@@ -235,11 +235,19 @@ void evalAtDistributedPointsKernel(const MultiPatch_d* patches,
         DeviceMatrix<double> activeCPs = patches->getActiveControlPoints(threadPatch, u_local);
         DeviceObjectArray<DeviceVector<double>> vals;
         patches->evalAllDers_into(threadPatch, u_local, 0, vals);
-#if 0
+        //printf("u_local:\n");
+        //u_local.print();
+        //printf("vals[0]:\n");
+        //vals[0].print();
+        //printf("activeCPs:\n");
+        //activeCPs.print();
+#if 1
         DeviceMatrix<double> geomPoint = vals[0].transpose() * activeCPs;
-        for (int i = 0; i < geomPoint.rows(); i++)
+        //printf("geomPoint:\n");
+        //geomPoint.print();
+        for (int i = 0; i < geomPoint.cols(); i++)
         {
-            (*values)(i, idx) = geomPoint(i, 0);
+            (*values)(idx, i) = geomPoint(0, i);
         }
 #endif
     }
@@ -607,7 +615,7 @@ void MultiPatch_d::eval_into(const Eigen::MatrixXi &numPointsPerDir, Eigen::Matr
         printf("CUDA error during device synchronization (evalAtDistributedPointsKernel): %s\n",
                cudaGetErrorString(err));
     }
-#if 0
+#if 1
     err = cudaMemcpy(values.data(), values_d.data(), values.size() * sizeof(double), cudaMemcpyDeviceToHost);
     if (err != cudaSuccess)
     {
@@ -615,5 +623,5 @@ void MultiPatch_d::eval_into(const Eigen::MatrixXi &numPointsPerDir, Eigen::Matr
                cudaGetErrorString(err));
     }
 #endif
-    std::cout << values.transpose() << std::endl;
+    //std::cout << values.transpose() << std::endl;
 }

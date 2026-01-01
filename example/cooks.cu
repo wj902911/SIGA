@@ -16,6 +16,8 @@
 #include <GaussPoints_d.h>
 #include <Postprocessor.h>
 
+#include <filesystem>
+
 #if 0
 __device__
 int lower_bound(double* arr, int size, double val);
@@ -121,6 +123,15 @@ __global__ void constructDOADouble(DeviceObjectArray<double>* d_knot_DOA,
 
 int main()
 {
+	if (!std::filesystem::exists("./TwoPatchesTest"))
+		std::filesystem::create_directory("./TwoPatchesTest");
+	std::string filenameParaview = "TwoPatchesTest_";
+	std::string outputFolder = "./TwoPatchesTest/" + filenameParaview + "output";
+	if (!std::filesystem::exists(outputFolder))
+		std::filesystem::create_directory(outputFolder);
+	std::string fileNameWithPath = outputFolder + "/" + filenameParaview;
+	ParaviewCollection collection(fileNameWithPath);
+
 	int knot_u_order = 1;
 	int knot_v_order = 1;
 	std::vector<double> knot_u{ 0., 0., 1., 1. };
@@ -523,6 +534,8 @@ int main()
 	Eigen::VectorXd bodyForce(2);
 	bodyForce << 0.0, 0.0;
 
+
+	int step = 0;
 #if 0
 	numKnots = multiPatch.getBasisNumKnots();
 	knots = multiPatch.getBasisKnots();
@@ -643,16 +656,17 @@ int main()
 
 	MultiPatch displacement;
 	solver.constructSolution(displacement);
+	DisplacementFunction displacementFunction(displacement);
 
 #if 1
 	Eigen::VectorXi numPoints(2);
 	numPoints << 10, 10;
+
+	collection.initalize();
 	PostProcessor postProcessor(multiPatch);
-	Eigen::MatrixXi numPointsPerDir;
-	postProcessor.distributePoints(numPoints, numPointsPerDir);
-	Eigen::MatrixXd values;
-	postProcessor.evalGeometryAtPoints(numPointsPerDir, values);
-	std::cout << "Num points per dir:\n" << numPointsPerDir << std::endl;
+	postProcessor.addFunction("Displacement", &displacementFunction);
+	postProcessor.outputToParaview(fileNameWithPath, numPoints, step, collection);
+	collection.save();
 #endif
 	return 0;
 }

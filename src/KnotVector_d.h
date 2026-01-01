@@ -113,7 +113,7 @@ public:
         while (low < high)
         {
             int mid = low + (high - low) / 2;
-            if (m_knots[mid] < value)
+            if (m_knots[mid] <= value)
             {
                 low = mid + 1;
             }

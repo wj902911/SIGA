@@ -5,7 +5,7 @@
 class Function
 {
 public:
-    virtual void eval_into(const Eigen::MatrixXd &points,
+    virtual void eval_into(const Eigen::MatrixXi &numPointsPerDir,
                            Eigen::MatrixXd &values) const = 0;
 };
 
@@ -15,8 +15,8 @@ public:
     DisplacementFunction(const MultiPatch &displacement)
         : m_displacement(displacement) {}
 
-    void eval_into(const Eigen::MatrixXd &points,
-                   Eigen::MatrixXd &values) const override;
+    void eval_into(const Eigen::MatrixXi &numPointsPerDir,
+                         Eigen::MatrixXd &values) const override;
 private:
     MultiPatch m_displacement;
 };

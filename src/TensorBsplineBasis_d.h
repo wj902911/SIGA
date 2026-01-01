@@ -497,7 +497,12 @@ public:
                 result[k].setZero();
             return;
         }
-        int span = upperBound(dir, u) - 1;
+        int span = 0;
+        if (u == m_knotVectors[dir].domainEnd())
+            span = m_knotVectors[dir].getNumKnots() - m_knotVectors[dir].getOrder() - 2;
+        else
+            span = upperBound(dir, u) - 1;
+        //printf("span: %d, upperBound: %d\n", span, upperBound(dir, u));
         ndu[0] = 1.0;
         for (int j = 1; j <= p; ++j)
         {
@@ -825,7 +830,10 @@ public:
         for (int d = 0; d < m_dim; ++d)
         {
             int order = m_knotVectors[d].getOrder();
-            firstAct(d) = upperBound(d, pt(d)) - order - 1;
+            firstAct(d) = pt(d) == 
+            m_knotVectors[d].domainEnd() ? 
+            m_knotVectors[d].getNumKnots() - order - 2 - order : 
+            upperBound(d, pt(d)) - order - 1;
             sizes(d) = order + 1;
         }
         for (int r = 0; r < numAct; r++)
