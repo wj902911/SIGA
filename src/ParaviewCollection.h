@@ -57,19 +57,19 @@ public:
     	f.close();
     }
 
-    void save()
-    {
-    	assert(m_counter != -1, "Error: gsParaviewCollection::save() already called.");
-    	m_file << "</Collection>\n";
-    	m_file << "</VTKFile>\n";
+	void save()
+	{
+		assert(m_counter != -1);
+		m_file << "</Collection>\n";
+		m_file << "</VTKFile>\n";
 
-    	std::ofstream f(m_fn.c_str());
-    	assert(f.is_open(), "Error creating " << m_fn);
-    	f << m_file.str();
-    	f.close();
-    	m_file.str("");
-    	m_counter = -1;
-    }
+		std::ofstream f(m_fn.c_str());
+		assert(f.is_open());
+		f << m_file.str();
+		f.close();
+		m_file.str("");
+		m_counter = -1;
+	}
 
 private:
     std::stringstream m_file;

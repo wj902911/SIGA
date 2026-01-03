@@ -111,6 +111,13 @@ public:
                                      Eigen::Vector<bool, -1>& dirO,
                                      double tol, int reference = 0);
 
+    void clear()
+    {
+        m_bases.clear();
+        m_patches.clear();
+        m_topology.clearAll();
+    }
+
 private:
     int m_basisDim = 0;
     int m_CPDim = 0;

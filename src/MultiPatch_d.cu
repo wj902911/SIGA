@@ -601,8 +601,8 @@ void MultiPatch_d::eval_into(const Eigen::MatrixXi &numPointsPerDir, Eigen::Matr
     cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
                                         evalAtDistributedPointsKernel, 0, values_d.rows());
     int gridSize = (values_d.rows() + blockSize - 1) / blockSize;
-    //evalAtDistributedPointsKernel<<<gridSize, blockSize>>>(this, d_numPointsPerDir.pointer(), d_values.pointer());
-    evalAtDistributedPointsKernel<<<1, 1>>>(this, d_numPointsPerDir.pointer(), d_values.pointer());
+    evalAtDistributedPointsKernel<<<gridSize, blockSize>>>(this, d_numPointsPerDir.pointer(), d_values.pointer());
+    //evalAtDistributedPointsKernel<<<1, 1>>>(this, d_numPointsPerDir.pointer(), d_values.pointer());
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess)
     {

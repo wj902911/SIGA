@@ -5,6 +5,8 @@
 #include "Utility_d.h"
 #include <type_traits>
 
+//class KnotVector_d;
+
 template <typename T>
 __global__ void deviceAssign(T* data, int size, const T* value);
 
@@ -403,10 +405,10 @@ public:
                 destructKernel<<<numBlocks, blockSize>>>(m_data, m_size);
                 cudaError_t err = cudaGetLastError();
                 if (err != cudaSuccess) 
-                    printf("Error in destructKernel: %s\n", cudaGetErrorString(err));
+                    printf("Error in destructKernel<%s>: %s\n", typeid(T).name(), cudaGetErrorString(err));
                 err = cudaDeviceSynchronize();
                 if (err != cudaSuccess) 
-                    printf("Error in destructKernel: %s\n", cudaGetErrorString(err));
+                    printf("Error in destructKernel<%s>: %s\n", typeid(T).name(), cudaGetErrorString(err));
             }
             
         }
@@ -779,10 +781,10 @@ public:
                 destructKernel<<<numBlocks, blockSize>>>(m_data, m_size);
                 cudaError_t err = cudaGetLastError();
                 if (err != cudaSuccess) 
-                    printf("Error in destructKernel: %s\n", cudaGetErrorString(err));
+                    printf("Error in destructKernel<%s>: %s\n", typeid(T).name(), cudaGetErrorString(err));
                 err = cudaDeviceSynchronize();
                 if (err != cudaSuccess) 
-                    printf("Error in destructKernel: %s\n", cudaGetErrorString(err));
+                    printf("Error in destructKernel<%s>: %s\n", typeid(T).name(), cudaGetErrorString(err));
             }
             
         }

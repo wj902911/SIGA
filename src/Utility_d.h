@@ -178,9 +178,9 @@ inline void printElement(U element)
     if constexpr (std::is_same<U, int>::value)
         printf("%d ", element);
     else if constexpr (std::is_same<U, float>::value)
-        printf("%f ", element);
+        printf("%e ", element);
     else if constexpr (std::is_same<U, double>::value)
-        printf("%f ", element);
+        printf("%e ", element);
     else if constexpr (std::is_same<U, bool>::value)
         printf("%d ", element);
     else

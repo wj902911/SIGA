@@ -26,4 +26,5 @@ private:
     double m_updateNorm = 0.0;
     double m_initUpdateNorm = 0.0;
     int m_numIterations = 0;
+    std::vector<Eigen::VectorXd> fixedDoFs;
 };

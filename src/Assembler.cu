@@ -985,7 +985,8 @@ void gaussPointsTest(GaussPoints_d* gspts)
     gspts->gaussPointsOnDir(1).print();
 }
 
-void Assembler::assemble(const DeviceVector<double>& solVector, int numIter)
+void Assembler::assemble(const DeviceVector<double>& solVector, int numIter, 
+                         const std::vector<Eigen::VectorXd> &fixedDoFs)
 {
     //if (numIter == 1)
         //for (int i = 0; i < m_ddof.size(); ++i)
@@ -1014,13 +1015,20 @@ void Assembler::assemble(const DeviceVector<double>& solVector, int numIter)
                cudaMemcpyHostToDevice);
 #endif
 
-    DeviceObjectArray<DeviceVector<double>> fixedDoFs_d(m_ddof.size());
-    for (int i = 0; i < m_ddof.size(); ++i)
+    DeviceObjectArray<DeviceVector<double>> fixedDoFs_d(fixedDoFs.size());
+    for (int i = 0; i < fixedDoFs.size(); ++i)
     {
-        DeviceVector<double> fixedDoF_d(m_ddof[i].size(), m_ddof[i].data());
-        if (numIter == 0)
+        DeviceVector<double> fixedDoF_d(fixedDoFs[i].size(), fixedDoFs[i].data());
+#if 0
+        if (m_initialAssemble)
+        {
             fixedDoF_d.setZero();
+            m_initialAssemble = false;
+        }
+#endif
         fixedDoFs_d.at(i) = fixedDoF_d;
+        //std::cout << "Fixed dofs construct solution for unk " << i << ":\n";
+        //fixedDoF_d.print();
     }
     DeviceObjectArray<DeviceVector<double>>* d_fixedDoFs = nullptr;
     cudaMalloc((void**)&d_fixedDoFs, sizeof(DeviceObjectArray<DeviceVector<double>>));
@@ -1034,6 +1042,8 @@ void Assembler::assemble(const DeviceVector<double>& solVector, int numIter)
         if (numIter != 0)
             fixedDoF_d.setZero();
         fixedDoFs_assem_d.at(i) = fixedDoF_d;
+        //std::cout << "Fixed dofs assemble for unk " << i << ":\n";
+        //fixedDoF_d.print();
     }
     DeviceObjectArray<DeviceVector<double>>* d_fixedDoFs_assem = nullptr;
     cudaMalloc((void**)&d_fixedDoFs_assem, sizeof(DeviceObjectArray<DeviceVector<double>>));
@@ -1080,7 +1090,15 @@ void Assembler::assemble(const DeviceVector<double>& solVector, int numIter)
         std::cerr << "CUDA error during device synchronization (constructSolutionKernel): " 
                   << cudaGetErrorString(err) << std::endl;
 #endif
-
+#if 0
+    d_displacement->retrieveControlPoints(displacement);
+    std::cout << "nodal displacements after construct solution:\n";
+    for (int p = 0; p < displacement.getNumPatches(); ++p) 
+    {
+        std::cout << "Patch " << p << " control points:\n";
+        std::cout << displacement.patch(p).getControlPoints() << std::endl;
+    }
+#endif
     //int numBundaries = m_multiPatch.getNumPatches()*basisDim*pow(2, basisDim-1);
     //MultiPatch_d boundaryPatches_d(numBundaries);
     //MultiPatch_d* d_boundaryPatches = nullptr;
@@ -1146,8 +1164,13 @@ void Assembler::assemble(const DeviceVector<double>& solVector, int numIter)
     cudaMemcpy(d_gaussPoints, &gaussPoints, sizeof(DeviceObjectArray<GaussPoints_d>), 
                cudaMemcpyHostToDevice);
 #endif
-
-    
+#if 0
+    std::cout << "Before assemble kernel:\n";
+    std::cout << "Matrix:\n";
+    matrix().print();
+    std::cout << "RHS:\n";
+    rhs().print();
+#endif
 
     //size_t curr, limit;
     //cudaDeviceGetLimit(&limit, cudaLimitStackSize);
@@ -1167,6 +1190,13 @@ void Assembler::assemble(const DeviceVector<double>& solVector, int numIter)
     if (err != cudaSuccess)
         std::cerr << "CUDA error during device synchronization (assembleDomain): " 
                   << cudaGetErrorString(err) << std::endl;
+#endif
+#if 0
+    std::cout << "After assemble kernel:\n";
+    std::cout << "Matrix:\n";
+    matrix().print();
+    std::cout << "RHS:\n";
+    rhs().print();
 #endif
     
     cudaFree(d_patches);
@@ -1418,9 +1448,11 @@ void Assembler::computeDirichletDofs(int unk_, const std::vector<DofMapper> &map
     }
 }
 
-void Assembler::constructSolution(const DeviceVector<double> &solVector, MultiPatch &displacement) const
+void Assembler::constructSolution(const DeviceVector<double> &solVector, MultiPatch &displacement,
+                                  const std::vector<Eigen::VectorXd> &fixedDoFs) const
 {
     //solVector.print();
+    displacement.clear();
     int geoDim = m_multiPatch.getCPDim();
     for (int i = 0; i < m_multiPatch.getNumPatches(); ++i) 
     {
@@ -1430,8 +1462,12 @@ void Assembler::constructSolution(const DeviceVector<double> &solVector, MultiPa
     MultiPatch_d displacement_d(displacement);
     DeviceObjectPointer<MultiPatch_d> d_displacement(displacement_d);
     DeviceObjectPointer<DeviceVector<double>> d_solVector(solVector);
-    DeviceObjectArray<DeviceVector<double>> fixedDoFs_d;
-    fixedDofs(fixedDoFs_d);
+    DeviceObjectArray<DeviceVector<double>> fixedDoFs_d(fixedDoFs.size());
+    for (int i = 0; i < fixedDoFs.size(); ++i)
+    {
+        DeviceVector<double> fixedDoF_d(fixedDoFs[i].size(), fixedDoFs[i].data());
+        fixedDoFs_d.at(i) = fixedDoF_d;
+    }
     DeviceObjectPointer<DeviceObjectArray<DeviceVector<double>>> d_fixedDoFs(fixedDoFs_d);
     MultiBasis_d bases(m_multiBasis);
     DeviceObjectPointer<MultiBasis_d> d_bases(bases);
@@ -1524,4 +1560,14 @@ void Assembler::fixedDofs(DeviceObjectArray<DeviceVector<double>> &fixedDoFs_d) 
         DeviceVector<double> fixedDoF_d(m_ddof[i].size(), m_ddof[i].data());
         fixedDoFs_d.at(i) = fixedDoF_d;
     }
+}
+
+void Assembler::refresh()
+{
+    int targetDim = m_multiPatch.getCPDim();
+    std::vector<DofMapper> dofMappers_stdVec(targetDim);
+    m_multiBasis.getMappers(true, m_boundaryConditions, dofMappers_stdVec, true);
+    m_sparseSystem = SparseSystem(dofMappers_stdVec, Eigen::VectorXi::Ones(targetDim));
+    for (int unk = 0; unk < targetDim; ++unk)
+        computeDirichletDofs(unk, dofMappers_stdVec);
 }

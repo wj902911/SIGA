@@ -54,6 +54,11 @@
 Solver::Solver(Assembler &assembler): m_assembler(assembler)
 {
     m_solVector.setZero(assembler.numDofs());
+    fixedDoFs = assembler.allFixedDofs();
+    for (int d = 0; d < fixedDoFs.size(); d++)
+    {
+        fixedDoFs[d].setZero();
+    }
 }
 
 Solver::~Solver()
@@ -111,7 +116,17 @@ bool Solver::solveSingleIteration()
     CUSPARSE_CHECK(cusparseDestroyDnMat(dnA));
     CUSPARSE_CHECK(cusparseDestroy(cusparseH));
 #endif
-    m_assembler.assemble(m_solVector, m_numIterations);
+#if 0
+    std::cout << "m_solVector:\n";
+    m_solVector.print();
+    std::cout << "Before assemble:\n";
+    std::cout << "Matrix:\n";
+    m_assembler.matrix().print();
+    std::cout << "RHS:\n";
+    m_assembler.rhs().print();
+#endif
+
+    m_assembler.assemble(m_solVector, m_numIterations, fixedDoFs);
 
     const DeviceMatrix<double>& Adev = m_assembler.matrix();
     const DeviceVector<double>& bdev = m_assembler.rhs();
@@ -120,12 +135,13 @@ bool Solver::solveSingleIteration()
     int ld       = num_cols;
     DeviceVector<double> solutionVector(num_rows);
 
-    //std::cout << "m_solVector:\n";
-    //m_solVector.print();
-    //std::cout << "Adev:\n";
-    //Adev.print();
-    //std::cout << "bdev:\n";
-    //bdev.print();
+#if 0
+    std::cout << "After assemble:\n";
+    std::cout << "Matrix:\n";
+    Adev.print();
+    std::cout << "RHS:\n";
+    bdev.print();
+#endif
     
     //--------------------------------------------------------------------------
     // Device memory management
@@ -164,7 +180,7 @@ bool Solver::solveSingleIteration()
                                          &nnz) )
     // allocate CSR column indices and values
     CHECK_CUDA( cudaMalloc((void**) &d_csr_columns, nnz * sizeof(int))   )
-    CHECK_CUDA( cudaMalloc((void**) &d_csr_values,  nnz * sizeof(float)) )
+    CHECK_CUDA( cudaMalloc((void**) &d_csr_values,  nnz * sizeof(double)) )
     // reset offsets, column indices, and values pointers
     CHECK_CUSPARSE( cusparseCsrSetPointers(matB, d_csr_offsets, d_csr_columns,
                                            d_csr_values) )
@@ -182,9 +198,10 @@ bool Solver::solveSingleIteration()
     double tol = 1e-12;
     int    reorder = 1;
     int singularity = -1;
+    int nnz_i = (int)nnz;
     CUSOLVER_CHECK(cusolverSpDcsrlsvchol(solverH,
                                         num_rows,
-                                        nnz,
+                                        nnz_i,
                                         descrA_legacy,
                                         d_csr_values,
                                         d_csr_offsets,
@@ -207,7 +224,11 @@ bool Solver::solveSingleIteration()
     delete[] host_sol;
     delete[] host_residual;
 #endif
-    //std::cout << "Solution vector:\n" << solvec << std::endl;
+    //std::cout << "Step solution vector:\n" << std::endl;
+    //solutionVector.print();
+    //std::cout << "Total solution vector:\n" << std::endl;
+    //m_solVector.print();
+
     //m_updateNorm = solvec.norm();
     m_updateNorm = solutionVector.norm();
     //m_residualNorm = resvec.norm();
@@ -220,7 +241,7 @@ bool Solver::solveSingleIteration()
         m_initUpdateNorm = m_updateNorm;
     }
 
-    m_numIterations++;
+    //m_numIterations++;
 
     // destroy matrix/vector descriptors
     CHECK_CUSPARSE( cusparseDestroyDnMat(matA) )
@@ -244,6 +265,7 @@ void Solver::solve()
     double absTol = 1e-10;
     double relTol = 1e-9;
     int maxIterations = 50;
+    m_numIterations = 0;
     m_status = working;
     std::cout << std::scientific;
     while (m_status == working)
@@ -261,6 +283,11 @@ void Solver::solve()
             m_status = converged;
         else if (m_numIterations >= maxIterations)
             m_status = interrupted;
+        if (m_numIterations == 0)
+            for (int d = 0; d < fixedDoFs.size(); d++)
+                fixedDoFs[d] += m_assembler.fixedDofs(d);
+
+        m_numIterations++;
     }
 
     std::cout << status() << std::endl;
@@ -279,7 +306,7 @@ else if (m_status == bad_solution)
     statusString = "Iterative solver was interrupted after " +
             std::to_string(m_numIterations) + " iteration(s) due to an invalid solution";
 else if (m_status == working)
-    statusString = "It: " + to_string_sientific(m_numIterations) +
+    statusString = "It: " + std::to_string(m_numIterations) +
              ", updAbs: " + to_string_sientific(m_updateNorm) +
              ", updRel: " + to_string_sientific(m_updateNorm/m_initUpdateNorm) +
              ", resAbs: " + to_string_sientific(m_residualNorm) +
@@ -294,5 +321,5 @@ DeviceVector<double> Solver::solution() const
 
 void Solver::constructSolution(MultiPatch &displacement) const
 {
-    m_assembler.constructSolution(m_solVector, displacement);
+    m_assembler.constructSolution(m_solVector, displacement, fixedDoFs);
 }

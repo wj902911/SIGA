@@ -13,10 +13,10 @@ class DisplacementFunction : public Function
 {
 public:
     DisplacementFunction(const MultiPatch &displacement)
-        : m_displacement(displacement) {}
+        : m_displacement(&displacement) {}
 
     void eval_into(const Eigen::MatrixXi &numPointsPerDir,
                          Eigen::MatrixXd &values) const override;
 private:
-    MultiPatch m_displacement;
+    const MultiPatch* m_displacement;
 };
