@@ -45,3 +45,10 @@ void deviceConstructKnotVector(KnotVector_d* knotVector, KnotVector_d* input)
 {
     new (knotVector) KnotVector_d(*input);
 }
+
+__global__ void destructKernel(TensorBsplineBasis_d* ptr, size_t count)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < count) 
+        ptr[idx].~TensorBsplineBasis_d();
+}

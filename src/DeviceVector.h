@@ -115,7 +115,7 @@ public:
         squareNormKernel<T><<<numBlocks, blockSize>>>(this->data(), d_result, size);
         //squareNormKernel<T><<<1, 1>>>(this->data(), d_result, size);
         if (err != cudaSuccess) 
-            printf("Error in operator+: %s\n", cudaGetErrorString(err));
+            printf("Error in squareNormKernel: %s\n", cudaGetErrorString(err));
         err = cudaDeviceSynchronize();
         if (err != cudaSuccess) 
             printf("Error in cudaDeviceSynchronize: %s\n", cudaGetErrorString(err));
@@ -217,3 +217,4 @@ public:
     DeviceVectorView(int size, T* data) : DeviceVector<T>(size, data, false) {} // No ownership of data
     
 };
+

@@ -105,6 +105,7 @@ public:
     __host__ __device__
     int getNumControlPoints() const { return m_knots.size() - m_order - 1; }
 
+#if 1
     __device__
     int upperBound(double value) const
     {
@@ -124,6 +125,10 @@ public:
         }
         return low;
     }
+#else
+    __device__
+    int upperBound(double value) const;
+#endif
 
     __host__ __device__
     int getOrder() const { return m_order; }

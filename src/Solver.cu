@@ -117,8 +117,9 @@ bool Solver::solveSingleIteration()
     CUSPARSE_CHECK(cusparseDestroy(cusparseH));
 #endif
 #if 0
+    
     std::cout << "m_solVector:\n";
-    m_solVector.print();
+    std::cout << m_solVector << "\n";
     std::cout << "Before assemble:\n";
     std::cout << "Matrix:\n";
     m_assembler.matrix().print();
@@ -126,14 +127,14 @@ bool Solver::solveSingleIteration()
     m_assembler.rhs().print();
 #endif
 
-    m_assembler.assemble(m_solVector, m_numIterations, fixedDoFs);
+    DeviceVector<double> solutionVector_d(m_solVector);
+    m_assembler.assemble(solutionVector_d, m_numIterations, fixedDoFs);
 
     const DeviceMatrix<double>& Adev = m_assembler.matrix();
     const DeviceVector<double>& bdev = m_assembler.rhs();
     int num_rows = Adev.rows();
     int num_cols = Adev.cols();
     int ld       = num_cols;
-    DeviceVector<double> solutionVector(num_rows);
 
 #if 0
     std::cout << "After assemble:\n";
@@ -209,7 +210,7 @@ bool Solver::solveSingleIteration()
                                         bdev.data(),
                                         tol,
                                         reorder,
-                                        solutionVector.data(),
+                                        solutionVector_d.data(),
                                         &singularity));
     if (singularity >= 0)
         printf("WARNING: The matrix is singular at row %d under tol %E\n", singularity, tol);
@@ -229,11 +230,16 @@ bool Solver::solveSingleIteration()
     //std::cout << "Total solution vector:\n" << std::endl;
     //m_solVector.print();
 
+    Eigen::VectorXd host_sol(num_rows);
+    Eigen::VectorXd host_residual(num_rows);
+    CHECK_CUDA( cudaMemcpy(host_sol.data(), solutionVector_d.data(), sizeof(double)*num_rows, cudaMemcpyDeviceToHost) )
+    CHECK_CUDA( cudaMemcpy(host_residual.data(), bdev.data(), sizeof(double)*num_rows, cudaMemcpyDeviceToHost) )
     //m_updateNorm = solvec.norm();
-    m_updateNorm = solutionVector.norm();
+    m_updateNorm = host_sol.norm();
     //m_residualNorm = resvec.norm();
-    m_residualNorm = bdev.norm();
-    m_solVector = m_solVector + solutionVector;
+    m_residualNorm = host_residual.norm();
+    //std::cout << "Step solution vector (host):\n" << host_sol << std::endl;
+    m_solVector = m_solVector + host_sol;
 
     if (m_numIterations == 0)
     {
@@ -314,7 +320,7 @@ else if (m_status == working)
 return statusString;
 }
 
-DeviceVector<double> Solver::solution() const
+Eigen::VectorXd Solver::solution() const
 {
     return m_solVector;
 }

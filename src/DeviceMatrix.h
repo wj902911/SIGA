@@ -11,9 +11,12 @@ template <typename T>
 class DeviceMatrix;
 
 
-template <typename T>
+//template <typename T>
+//__global__
+//void parallPlus(T* a, T* b, T* c, int n);
+
 __global__
-void parallPlus(T* a, T* b, T* c, int n);
+void parallPlus(double* a, double* b, double* c, int n);
 
 #if 1
 template <typename T>
@@ -140,164 +143,11 @@ public:
     // int rows() const;
     // int cols() const;
     // T operator()(int i, int j) const;
+
 };
 
 
-template <typename DerivedA, typename DerivedB, typename T>
-__host__ __device__
-DeviceMatrix<T> operator+(const DeviceMatrixBase<DerivedA, T>& A,
-                          const DeviceMatrixBase<DerivedB, T>& B)
-{
-    const DerivedA& derivedA = static_cast<const DerivedA&>(A);
-    const DerivedB& derivedB = static_cast<const DerivedB&>(B);
-    assert(derivedA.rows() == derivedB.rows() &&
-           derivedA.cols() == derivedB.cols() &&
-           "Matrix dimensions mismatch for addition");
 
-    DeviceMatrix<T> result(derivedA.rows(), derivedB.cols());
-#if defined(__CUDA_ARCH__)
-    for (int i = 0; i < derivedA.rows(); ++i)
-        for (int j = 0; j < derivedA.cols(); ++j)
-            result(i, j) = derivedA(i, j) + derivedB(i, j);
-#else
-    int size = derivedA.rows() * derivedA.cols(); 
-    //int minGrid, blockSize;
-    //cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, parallPlus<T>, 0, size);
-    int blockSize = 256;
-    int numBlocks = (size + blockSize - 1) / blockSize;
-    T* d_A = derivedA.data();
-    T* d_B = derivedB.data();
-
-    parallPlus<T><<<numBlocks, blockSize>>>(d_A, d_B, result.data(), size);
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess) 
-        printf("Error in operator+: %s\n", cudaGetErrorString(err));
-    err = cudaDeviceSynchronize();
-    if (err != cudaSuccess) 
-        printf("Error in cudaDeviceSynchronize: %s\n", cudaGetErrorString(err));
-#endif
-    return result;
-}
-
-template <typename Derived, typename T>
-__host__ __device__
-Derived operator+(const DeviceMatrixBase<Derived, T>& matrix, T s) 
-{
-    // Downcast to the actual derived type.
-    const Derived& derived = static_cast<const Derived&>(matrix);
-    // Construct a result object with the same dimensions.
-    Derived result(derived.rows(), derived.cols());
-
-#if defined(__CUDA_ARCH__)
-    for (int i = 0; i < derived.rows(); ++i) 
-        for (int j = 0; j < derived.cols(); ++j) 
-            result(i, j) = derived(i, j) + s;
-#else
-    int size = derived.rows() * derived.cols();
-    int blockSize = 256;
-    int numBlocks = (size + blockSize - 1) / blockSize;
-    parallPlus<T><<<numBlocks, blockSize>>>(derived.data(), s, result.data(), size);
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess) 
-        printf("Error in operator+: %s\n", cudaGetErrorString(err));
-    err = cudaDeviceSynchronize();
-    if (err != cudaSuccess) 
-        printf("Error in cudaDeviceSynchronize: %s\n", cudaGetErrorString(err));
-#endif
-    return result;
-}
-
-template <typename Derived, typename T>
-__device__
-Derived operator+(T s, const DeviceMatrixBase<Derived, T>& matrix) 
-{
-    return matrix + s;
-}
-
-template <typename DerivedA, typename DerivedB, typename T>
-__device__
-DeviceMatrix<T> operator-(const DeviceMatrixBase<DerivedA, T>& A,
-                          const DeviceMatrixBase<DerivedB, T>& B)
-{
-    const DerivedA& derivedA = static_cast<const DerivedA&>(A);
-    const DerivedB& derivedB = static_cast<const DerivedB&>(B);
-    assert(derivedA.rows() == derivedB.rows() && derivedA.cols() == derivedB.cols() 
-           && "Matrix dimensions mismatch for subtraction");
-
-    DeviceMatrix<T> result(derivedA.rows(), derivedA.cols());
-
-    for (int i = 0; i < derivedA.rows(); ++i)
-        for (int j = 0; j < derivedA.cols(); ++j)
-            result(i, j) = derivedA(i, j) - derivedB(i, j);
-
-    return result;
-}
-
-template <typename DerivedA, typename DerivedB, typename T>
-__device__
-DeviceMatrix<T> operator*(const DeviceMatrixBase<DerivedA, T>& A,
-                          const DeviceMatrixBase<DerivedB, T>& B)
-{
-    const DerivedA& derivedA = static_cast<const DerivedA&>(A);
-    const DerivedB& derivedB = static_cast<const DerivedB&>(B);
-    assert(derivedA.cols() == derivedB.rows() && "Matrix dimensions mismatch for multiplication");
-
-    DeviceMatrix<T> result(derivedA.rows(), derivedB.cols());
-
-    for (int i = 0; i < derivedA.rows(); ++i)
-    {
-        for (int j = 0; j < derivedB.cols(); ++j)
-        {
-            T sum = 0;
-            for (int k = 0; k < derivedA.cols(); ++k)
-            {
-                sum += derivedA(i, k) * derivedB(k, j);
-            }
-            result(i, j) = sum;
-        }
-    }
-
-    return result;
-}
-
-template <typename Derived, typename T>
-__device__
-Derived operator*(const DeviceMatrixBase<Derived, T>& matrix, T s) 
-{
-    // Downcast to the actual derived type.
-    const Derived& derived = static_cast<const Derived&>(matrix);
-    // Construct a result object with the same dimensions.
-    Derived result(derived.rows(), derived.cols());
-
-    for (int i = 0; i < derived.rows(); ++i) 
-        for (int j = 0; j < derived.cols(); ++j) 
-            result(i, j) = derived(i, j) * s;
-        
-    return result;
-}
-
-template <typename Derived, typename T>
-__device__
-Derived operator*(T s, const DeviceMatrixBase<Derived, T>& matrix) 
-{
-    return matrix * s;
-}
-
-template <typename Derived, typename T>
-__device__
-Derived operator/(const DeviceMatrixBase<Derived, T>& matrix, T s) 
-{
-    // Downcast to the actual derived type.
-    const Derived& derived = static_cast<const Derived&>(matrix);
-    // Construct a result object with the same dimensions.
-    Derived result(derived.rows(), derived.cols());
-
-    for (int i = 0; i < derived.rows(); ++i) 
-        for (int j = 0; j < derived.cols(); ++j) 
-            result(i, j) = derived(i, j) / s;
-        
-    return result;
-}
 
 
 template <typename T>
@@ -511,6 +361,45 @@ public:
     {
         return m_data[row * m_cols + col];
     }
+
+#if 0
+    __device__ __host__
+    DeviceMatrix<T> operator+(const DeviceMatrix<T>& other) const
+    {
+        assert(m_rows == other.m_rows && m_cols == other.m_cols && 
+               "Matrix dimensions must match for addition");
+        DeviceMatrix<T> result(m_rows, m_cols);
+#if defined(__CUDA_ARCH__)
+        for (int i = 0; i < m_rows; ++i)
+            for (int j = 0; j < m_cols; ++j)
+                result(i, j) = (*this)(i, j) + other(i, j);
+#else
+        int size = m_rows * m_cols;
+        int blockSize = 256;
+        int numBlocks = (size + blockSize - 1) / blockSize;
+        parallPlus<<<numBlocks, blockSize>>>(m_data, other.m_data, result.m_data, size);
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess) 
+            printf("Error in parallPlus for %s 3: %s\n", typeid(T).name(), cudaGetErrorString(err));
+        err = cudaDeviceSynchronize();
+        if (err != cudaSuccess) 
+            printf("Error in parallPlus cudaDeviceSynchronize: %s\n", cudaGetErrorString(err));
+#endif
+        return result;
+    }
+#else
+    __device__
+    DeviceMatrix<T> operator+(const DeviceMatrix<T>& other) const
+    {
+        assert(m_rows == other.m_rows && m_cols == other.m_cols && 
+               "Matrix dimensions must match for addition");
+        DeviceMatrix<T> result(m_rows, m_cols);
+        for (int i = 0; i < m_rows; ++i)
+            for (int j = 0; j < m_cols; ++j)
+                result(i, j) = (*this)(i, j) + other(i, j);
+        return result;
+    }
+#endif
 
     __device__
     const T& operator()(int row, int col) const
@@ -1132,6 +1021,202 @@ private:
     bool m_owns_data;
 };
 
+#if 0
+template <typename DerivedA, typename DerivedB, typename T>
+__host__ __device__
+DeviceMatrix<T> operator+(const DeviceMatrixBase<DerivedA, T>& A,
+                          const DeviceMatrixBase<DerivedB, T>& B)
+{
+    const DerivedA& derivedA = static_cast<const DerivedA&>(A);
+    const DerivedB& derivedB = static_cast<const DerivedB&>(B);
+    assert(derivedA.rows() == derivedB.rows() &&
+           derivedA.cols() == derivedB.cols() &&
+           "Matrix dimensions mismatch for addition");
+
+    DeviceMatrix<T> result(derivedA.rows(), derivedB.cols());
+#if defined(__CUDA_ARCH__)
+    for (int i = 0; i < derivedA.rows(); ++i)
+        for (int j = 0; j < derivedA.cols(); ++j)
+            result(i, j) = derivedA(i, j) + derivedB(i, j);
+#else
+    int size = derivedA.rows() * derivedA.cols(); 
+    //int minGrid, blockSize;
+    //cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, parallPlus<T>, 0, size);
+    int blockSize = 256;
+    int numBlocks = (size + blockSize - 1) / blockSize;
+    T* d_A = derivedA.data();
+    T* d_B = derivedB.data();
+
+    //printf("Launching parallPlus for %s.\n", typeid(T).name());
+    parallPlus<<<numBlocks, blockSize>>>(d_A, d_B, result.data(), size);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) 
+        printf("Error in parallPlus for %s 1: %s\n", typeid(T).name(), cudaGetErrorString(err));
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) 
+        printf("Error in parallPlus cudaDeviceSynchronize: %s\n", cudaGetErrorString(err));
+#endif
+    return result;
+}
+
+template <typename DerivedA, typename DerivedB>
+__host__ __device__
+DeviceMatrix<double> operator+(const DeviceMatrixBase<DerivedA, double>& A,
+                               const DeviceMatrixBase<DerivedB, double>& B)
+{
+    const DerivedA& derivedA = static_cast<const DerivedA&>(A);
+    const DerivedB& derivedB = static_cast<const DerivedB&>(B);
+    assert(derivedA.rows() == derivedB.rows() &&
+           derivedA.cols() == derivedB.cols() &&
+           "Matrix dimensions mismatch for addition");
+
+    DeviceMatrix<double> result(derivedA.rows(), derivedB.cols());
+#if defined(__CUDA_ARCH__)
+    for (int i = 0; i < derivedA.rows(); ++i)
+        for (int j = 0; j < derivedA.cols(); ++j)
+            result(i, j) = derivedA(i, j) + derivedB(i, j);
+#else
+    int size = derivedA.rows() * derivedA.cols(); 
+    //int minGrid, blockSize;
+    //cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, parallPlus<T>, 0, size);
+    int blockSize = 256;
+    int numBlocks = (size + blockSize - 1) / blockSize;
+    double* d_A = derivedA.data();
+    double* d_B = derivedB.data();
+
+    //printf("Launching parallPlus for %s.\n", typeid(T).name());
+    parallPlus<<<numBlocks, blockSize>>>(d_A, d_B, result.data(), size);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) 
+        printf("Error in parallPlus for double 2: %s\n", cudaGetErrorString(err));
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) 
+        printf("Error in parallPlus cudaDeviceSynchronize: %s\n", cudaGetErrorString(err));
+#endif
+    return result;
+}
+#endif
+
+template <typename Derived, typename T>
+__host__ __device__
+Derived operator+(const DeviceMatrixBase<Derived, T>& matrix, T s) 
+{
+    // Downcast to the actual derived type.
+    const Derived& derived = static_cast<const Derived&>(matrix);
+    // Construct a result object with the same dimensions.
+    Derived result(derived.rows(), derived.cols());
+
+#if defined(__CUDA_ARCH__)
+    for (int i = 0; i < derived.rows(); ++i) 
+        for (int j = 0; j < derived.cols(); ++j) 
+            result(i, j) = derived(i, j) + s;
+#else
+    int size = derived.rows() * derived.cols();
+    int blockSize = 256;
+    int numBlocks = (size + blockSize - 1) / blockSize;
+    parallPlus<<<numBlocks, blockSize>>>(derived.data(), s, result.data(), size);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) 
+        printf("Error in parallPlus: %s\n", cudaGetErrorString(err));
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) 
+        printf("Error in parallPlus cudaDeviceSynchronize: %s\n", cudaGetErrorString(err));
+#endif
+    return result;
+}
+
+template <typename Derived, typename T>
+__device__
+Derived operator+(T s, const DeviceMatrixBase<Derived, T>& matrix) 
+{
+    return matrix + s;
+}
+
+template <typename DerivedA, typename DerivedB, typename T>
+__device__
+DeviceMatrix<T> operator-(const DeviceMatrixBase<DerivedA, T>& A,
+                          const DeviceMatrixBase<DerivedB, T>& B)
+{
+    const DerivedA& derivedA = static_cast<const DerivedA&>(A);
+    const DerivedB& derivedB = static_cast<const DerivedB&>(B);
+    assert(derivedA.rows() == derivedB.rows() && derivedA.cols() == derivedB.cols() 
+           && "Matrix dimensions mismatch for subtraction");
+
+    DeviceMatrix<T> result(derivedA.rows(), derivedA.cols());
+
+    for (int i = 0; i < derivedA.rows(); ++i)
+        for (int j = 0; j < derivedA.cols(); ++j)
+            result(i, j) = derivedA(i, j) - derivedB(i, j);
+
+    return result;
+}
+
+template <typename DerivedA, typename DerivedB, typename T>
+__device__
+DeviceMatrix<T> operator*(const DeviceMatrixBase<DerivedA, T>& A,
+                          const DeviceMatrixBase<DerivedB, T>& B)
+{
+    const DerivedA& derivedA = static_cast<const DerivedA&>(A);
+    const DerivedB& derivedB = static_cast<const DerivedB&>(B);
+    assert(derivedA.cols() == derivedB.rows() && "Matrix dimensions mismatch for multiplication");
+
+    DeviceMatrix<T> result(derivedA.rows(), derivedB.cols());
+
+    for (int i = 0; i < derivedA.rows(); ++i)
+    {
+        for (int j = 0; j < derivedB.cols(); ++j)
+        {
+            T sum = 0;
+            for (int k = 0; k < derivedA.cols(); ++k)
+            {
+                sum += derivedA(i, k) * derivedB(k, j);
+            }
+            result(i, j) = sum;
+        }
+    }
+
+    return result;
+}
+
+template <typename Derived, typename T>
+__device__
+Derived operator*(const DeviceMatrixBase<Derived, T>& matrix, T s) 
+{
+    // Downcast to the actual derived type.
+    const Derived& derived = static_cast<const Derived&>(matrix);
+    // Construct a result object with the same dimensions.
+    Derived result(derived.rows(), derived.cols());
+
+    for (int i = 0; i < derived.rows(); ++i) 
+        for (int j = 0; j < derived.cols(); ++j) 
+            result(i, j) = derived(i, j) * s;
+        
+    return result;
+}
+
+template <typename Derived, typename T>
+__device__
+Derived operator*(T s, const DeviceMatrixBase<Derived, T>& matrix) 
+{
+    return matrix * s;
+}
+
+template <typename Derived, typename T>
+__device__
+Derived operator/(const DeviceMatrixBase<Derived, T>& matrix, T s) 
+{
+    // Downcast to the actual derived type.
+    const Derived& derived = static_cast<const Derived&>(matrix);
+    // Construct a result object with the same dimensions.
+    Derived result(derived.rows(), derived.cols());
+
+    for (int i = 0; i < derived.rows(); ++i) 
+        for (int j = 0; j < derived.cols(); ++j) 
+            result(i, j) = derived(i, j) / s;
+        
+    return result;
+}
+
 template <typename T>
 class DeviceMatrixView : public DeviceMatrix<T>
 {
@@ -1151,6 +1236,7 @@ public:
     ~DeviceMatrixView() {}
 };
 
+#if 0
 template <typename T>
 __global__
 void parallPlus(T* a, T* b, T* c, int n)
@@ -1159,6 +1245,7 @@ void parallPlus(T* a, T* b, T* c, int n)
     if (i < n) 
         c[i] = a[i] + b[i];
 }
+#endif
 
 template <typename T>
 __global__

@@ -3,6 +3,7 @@
 #include <TensorBsplineBasis_d.h>
 //#include <DeviceMatrix.h>
 #include <DeviceVector.h>
+#include <Patch.h>
 
 class Patch_d
 {

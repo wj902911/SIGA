@@ -5,7 +5,11 @@
 #include "Utility_d.h"
 #include <type_traits>
 
-//class KnotVector_d;
+class KnotVector_d;
+class TensorBsplineBasis_d;
+template <typename T> class DeviceVector;
+class Patch_d;
+class GaussPoints_d;
 
 template <typename T>
 __global__ void deviceAssign(T* data, int size, const T* value);
@@ -15,9 +19,17 @@ __global__ void deviceRead(T* value, int size, const T* data);
 
 template <typename T>
 __global__ void deviceDeepCopyKernel(T* device_dst, T* host_src);
+__global__ void deviceDeepCopyKernel(KnotVector_d* device_dst, KnotVector_d* host_src);
 
 template <typename T>
 __global__ void destructKernel(T* ptr, size_t count);
+
+__global__ void destructKernel(KnotVector_d* ptr, size_t count);
+__global__ void destructKernel(TensorBsplineBasis_d* ptr, size_t count);
+__global__ void destructKernel(DeviceVector<double>* ptr, size_t count);
+__global__ void destructKernel(Patch_d* ptr, size_t count);
+__global__ void destructKernel(GaussPoints_d* ptr, size_t count);
+
 
 template <typename T>
 class DeviceObjectArray
@@ -400,6 +412,7 @@ public:
         {
             if (m_size >0)
             {
+                //printf("Launching destructKernel for %s.\n", typeid(T).name());
                 int blockSize = 256;
                 int numBlocks = (m_size + blockSize - 1) / blockSize;
                 destructKernel<<<numBlocks, blockSize>>>(m_data, m_size);
@@ -602,10 +615,10 @@ public:
                 //retrieveDataKernel<<<1, 1>>>(d_value.data(),d_thisArray, m_index);
                 err = cudaGetLastError();
                 if (err != cudaSuccess) 
-                    printf("Error in deviceDeepCopyKernel: %s\n", cudaGetErrorString(err));
+                    printf("Error in deviceDeepCopyKernel for %s: %s\n", typeid(T).name(), cudaGetErrorString(err));
                 err = cudaDeviceSynchronize();
                 if (err != cudaSuccess) 
-                    printf("Error in deviceDeepCopyKernel: %s\n", cudaGetErrorString(err));
+                    printf("Error in deviceDeepCopyKernel for %s: %s\n", typeid(T).name(), cudaGetErrorString(err));
                 err = cudaMemcpy(&value, d_value, sizeof(T), cudaMemcpyDeviceToHost);
                 assert(err == cudaSuccess &&
                 "cudaMemcpy failed in DeviceObjectArray Proxy conversion operator");
@@ -677,10 +690,10 @@ public:
                 deviceDeepCopyKernel<<<1, 1>>>(m_array->m_data + m_index, d_value);
                 err = cudaGetLastError();
                 if (err != cudaSuccess) 
-                    printf("Error in deviceDeepCopyKernel: %s\n", cudaGetErrorString(err));
+                    printf("Error in deviceDeepCopyKernel for %s: %s\n", typeid(T).name(), cudaGetErrorString(err));
                 err = cudaDeviceSynchronize();
                 if (err != cudaSuccess) 
-                    printf("Error in deviceDeepCopyKernel: %s\n", cudaGetErrorString(err));
+                    printf("Error in deviceDeepCopyKernel for %s: %s\n", typeid(T).name(), cudaGetErrorString(err));
                 cudaFree(d_value);
             }
             return value;

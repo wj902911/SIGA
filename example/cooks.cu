@@ -78,7 +78,7 @@ template __global__ void destructKernel<GaussPoints_d>(GaussPoints_d* a, size_t 
 template __global__ void deviceDeepCopyKernel<DeviceObjectArray<double>>(DeviceObjectArray<double>* a, 
 	                                                                     DeviceObjectArray<double>* b);
 #endif
-template __global__ void parallPlus<double>(double* a, double* b, double* c, int n);
+//template __global__ void parallPlus<double>(double* a, double* b, double* c, int n);
 template __global__ void parallPlus<double>(double* a, double b, double* c, int n);
 template __global__ void squareNormKernel<double>(double* a, double* result, int n);
 
@@ -327,7 +327,7 @@ int main()
 		solver.constructSolution(displacement);
 
 		postProcessor.outputToParaview(fileNameWithPath, numPoints, step + 1, collection);
-		
+
 		totalDisplacement += deltaDisplacement;
 		step++;
 	}

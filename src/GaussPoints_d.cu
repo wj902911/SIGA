@@ -17,3 +17,10 @@ void retrieveData(int dir, const DeviceObjectArray<double>* array,
          idx < array->size(); idx += blockDim.x * gridDim.x)
         data[idx] = (*array)[idx];
 }
+
+__global__ void destructKernel(GaussPoints_d* ptr, size_t count)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < count) 
+        ptr[idx].~GaussPoints_d();
+}
