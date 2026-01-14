@@ -2,6 +2,7 @@
 #include <cusparse.h>
 #include <cusolverSp.h>
 #include <Utility_h.h>
+#include <chrono>
 
 #if 0
 #define CUDA_CHECK(err) do { \
@@ -126,9 +127,16 @@ bool Solver::solveSingleIteration()
     std::cout << "RHS:\n";
     m_assembler.rhs().print();
 #endif
+    //auto start = std::chrono::high_resolution_clock::now();
 
     DeviceVector<double> solutionVector_d(m_solVector);
     m_assembler.assemble(solutionVector_d, m_numIterations, fixedDoFs);
+
+    //auto end = std::chrono::high_resolution_clock::now();
+    //std::chrono::duration<double> assemble_duration = end - start;
+    //std::cout << "Assemble time: " << assemble_duration.count() << " seconds\n";
+
+    //start = std::chrono::high_resolution_clock::now();
 
     const DeviceMatrix<double>& Adev = m_assembler.matrix();
     const DeviceVector<double>& bdev = m_assembler.rhs();
@@ -261,7 +269,9 @@ bool Solver::solveSingleIteration()
     CHECK_CUDA( cudaFree(d_csr_columns) )
     CHECK_CUDA( cudaFree(d_csr_values) )
     
-
+    //end = std::chrono::high_resolution_clock::now();
+    //std::chrono::duration<double> solve_duration = end - start;
+    //std::cout << "Solve time: " << solve_duration.count() << " seconds\n";
 
     return true;
 }

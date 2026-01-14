@@ -106,6 +106,7 @@ void PostProcessor::outputToParaview(const std::string &fn,
 {
     Eigen::MatrixXi numPointsPerDir;
     distributePoints(numPoints, numPointsPerDir);
+    //std::cout << "Number of points per direction per patch:\n" << numPointsPerDir << std::endl;
     Eigen::MatrixXd points;
     evalGeometryAtPoints(numPointsPerDir, points);
     std::map<std::string, Eigen::MatrixXd> data;

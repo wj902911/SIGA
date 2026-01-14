@@ -125,10 +125,11 @@ __global__ void constructDOADouble(DeviceObjectArray<double>* d_knot_DOA,
 
 int main()
 {
+	int numRefinements = 1;
 	double deltaDisplacement = 0.1;
 	double maxDisplacement = 0.6;
 	Eigen::VectorXi numPoints(2);
-	numPoints << 10, 10;
+	numPoints << 1000, 1000;
 
 	if (!std::filesystem::exists("./TwoPatchesTest"))
 		std::filesystem::create_directory("./TwoPatchesTest");
@@ -279,7 +280,8 @@ int main()
 
 	MultiBasis bases(multiPatch);
 
-	bases.uniformRefine();
+	for (int r = 0; r < numRefinements; ++r)
+		bases.uniformRefine();
 
 	BoundaryConditions bcInfo;
 	for (int d = 0; d < 2; ++d)

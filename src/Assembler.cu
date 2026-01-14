@@ -12,6 +12,9 @@
 //#include "Utility_d.h"
 #include <BoundaryCondition_d.h>
 #include <DeviceObjectPointer.h>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 
 #if 0
 __device__
@@ -991,6 +994,16 @@ void Assembler::assemble(const DeviceVector<double>& solVector, int numIter,
     //if (numIter == 1)
         //for (int i = 0; i < m_ddof.size(); ++i)
             //m_ddof[i].assign(m_ddof[i].size(), 0.0);
+#if 0
+    std::ofstream outfile;
+    if (!std::filesystem::exists("./assembPrepTimeEachStep.txt"))
+    {
+        outfile.open("./assembPrepTimeEachStep.txt");
+        outfile << "Assemble preparation time (ms) for each step:\n";
+        outfile.close();
+    }
+#endif
+    //auto start = std::chrono::high_resolution_clock::now();
     
     m_sparseSystem.matrix().setZero();
     m_sparseSystem.rhs().setZero();
@@ -1077,10 +1090,19 @@ void Assembler::assemble(const DeviceVector<double>& solVector, int numIter,
     int minGrid, blockSize;
     cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, constructSolutionKernel, 0, numdofs);
     int gridSize = (numdofs + blockSize - 1) / blockSize;
+    //auto mid_1 = std::chrono::high_resolution_clock::now();
+    //std::cout << "Assemble - before construct solution kernel launch, time elapsed: " 
+    //          << std::chrono::duration<double, std::milli>(mid_1 - start).count() << " ms\n";
+    //outfile.open("./assembPrepTimeEachStep.txt", std::ios_base::app);
+    //outfile << std::chrono::duration<double, std::milli>(mid_1 - start).count() << "\n";
+    //outfile.close();
     constructSolutionKernel<<<gridSize, blockSize>>>(d_solVector, d_fixedDoFs, d_bases, 
                                       d_sparseSystem, d_displacement, numdofs);
     //constructSolutionKernel<<<1, 2>>>(d_solVector, d_fixedDoFs, d_bases, 
     //                                  d_sparseSystem, d_displacement);                                  
+    //auto mid_2 = std::chrono::high_resolution_clock::now();
+    //std::cout << "Assemble - after construct solution kernel launch, time elapsed: " 
+    //          << std::chrono::duration<double, std::milli>(mid_2 - mid_1).count() << " ms\n";
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess)
         std::cerr << "Error after kernel constructSolutionKernel launch: " 
@@ -1181,7 +1203,13 @@ void Assembler::assemble(const DeviceVector<double>& solVector, int numIter,
     int totalGPs = m_multiBasis.totalNumGPs();
     cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, assembleDomain, 0, totalGPs);
     gridSize = (totalGPs + blockSize - 1) / blockSize;
+    //auto mid_3 = std::chrono::high_resolution_clock::now();
+    //std::cout << "Assemble - before assembleDomain kernel launch, time elapsed: " 
+    //          << std::chrono::duration<double, std::milli>(mid_3 - mid_2).count() << " ms\n";
     assembleDomain<<<gridSize, blockSize>>>(totalGPs, d_displacement, d_patches, d_gaussPoints, d_bodyForce, d_sparseSystem, d_fixedDoFs_assem);
+    //auto mid_4 = std::chrono::high_resolution_clock::now();
+    //std::cout << "Assemble - after assembleDomain kernel launch, time elapsed: " 
+    //          << std::chrono::duration<double, std::milli>(mid_4 - mid_3).count() << " ms\n";
     err = cudaGetLastError();
     if (err != cudaSuccess)
         std::cerr << "Error after kernel assembleDomain launch: " 
@@ -1207,6 +1235,9 @@ void Assembler::assemble(const DeviceVector<double>& solVector, int numIter,
     cudaFree(d_solVector);
     cudaFree(d_sparseSystem);
     cudaFree(d_bodyForce);
+    //auto mid_5 = std::chrono::high_resolution_clock::now();
+    //std::cout << "Assemble - cleanning time elapsed: " 
+    //          << std::chrono::duration<double, std::milli>(mid_5 - mid_4).count() << " ms\n";
 
 #if 0
     assemble_kernel<<<1, 1>>>(m_multiPatchData.getBasisDim(),
