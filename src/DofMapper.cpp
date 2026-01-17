@@ -268,6 +268,40 @@ void DofMapper::matchDofs(int u, const Eigen::MatrixXi &b1, int v, const Eigen::
         matchDof(u, b1(k,0), v, b2(k,0), comp);
 }
 
+void DofMapper::getDofMapperDataVec(std::vector<int> &data) const
+{
+    int totalSize = getDataSize();
+        data.reserve(totalSize);
+        data.push_back(totalSize); // total size [0]
+        data.push_back(m_dofs.size()); // number of components [1]
+#if singleDofs_DofMapper
+        // singleDofs implies m_dofs is a 1D vector
+        data.insert(data.end(), m_dofs.begin(), m_dofs.end()); // directly copy the 1D vector
+#else
+        for (size_t i = 0; i < m_dofs.size(); ++i)
+        {
+            data.push_back(m_dofs[i].size()); // size of each dof vector [2 + [1]]
+        }
+        for (size_t i = 0; i < m_dofs.size(); ++i)
+        {
+            data.insert(data.end(), m_dofs[i].begin(), m_dofs[i].end());
+        }
+#endif
+        data.push_back(m_offset.size());
+        data.insert(data.end(), m_offset.begin(), m_offset.end());
+        data.push_back(m_shift);
+        data.push_back(m_bshift);
+        data.push_back(m_numFreeDofs.size());
+        data.insert(data.end(), m_numFreeDofs.begin(), m_numFreeDofs.end());
+        data.push_back(m_numElimDofs.size());
+        data.insert(data.end(), m_numElimDofs.begin(), m_numElimDofs.end());
+        data.push_back(m_numCpldDofs.size());
+        data.insert(data.end(), m_numCpldDofs.begin(), m_numCpldDofs.end());
+        data.push_back(m_curElimId);
+        data.push_back(m_tagged.size());
+        data.insert(data.end(), m_tagged.begin(), m_tagged.end());
+}
+
 void DofMapper::replaceDofGlobally(int oldIdx, int newIdx)
 {
     for(size_t i = 0; i!= m_dofs.size(); ++i)

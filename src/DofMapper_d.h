@@ -49,6 +49,48 @@ DofMapper_d(int* mapperData)
         int numTagged = mapperData[start++];
         m_tagged = DeviceObjectArray<int>(numTagged, mapperData + start);
     }
+#else
+    __device__
+    DofMapper_d(int* mapperData)
+    {
+        int start = 1;
+        int numComponents = mapperData[start];
+        start += numComponents + 1;
+        m_dofs = DeviceObjectArray<int>(mapperData[2], mapperData + start);
+        printf("m_dofs:\n");
+        m_dofs.print();
+        start += mapperData[2];
+        int numOffset = mapperData[start++];
+        m_offset = DeviceObjectArray<int>(numOffset, mapperData + start);
+        printf("m_offset:\n");
+        m_offset.print();
+        start += numOffset;
+        m_shift = mapperData[start++];
+        printf("m_shift: %d\n", m_shift);
+        m_bshift = mapperData[start++];
+        printf("m_bshift: %d\n", m_bshift);
+        int numFreeDofs = mapperData[start++];
+        m_numFreeDofs = DeviceObjectArray<int>(numFreeDofs, mapperData + start);
+        printf("m_numFreeDofs:\n");
+        m_numFreeDofs.print();
+        start += numFreeDofs;
+        int numElimDofs = mapperData[start++];
+        m_numElimDofs = DeviceObjectArray<int>(numElimDofs, mapperData + start);
+        printf("m_numElimDofs:\n");
+        m_numElimDofs.print();
+        start += numElimDofs;
+        int numCpldDofs = mapperData[start++];
+        m_numCpldDofs = DeviceObjectArray<int>(numCpldDofs, mapperData + start);
+        printf("m_numCpldDofs:\n");
+        m_numCpldDofs.print();
+        start += numCpldDofs;
+        m_curElimId = mapperData[start++];
+        printf("m_curElimId: %d\n", m_curElimId);
+        int numTagged = mapperData[start++];
+        m_tagged = DeviceObjectArray<int>(numTagged, mapperData + start);
+        printf("m_tagged:\n");
+        m_tagged.print();
+    }
 #endif
 
     __device__

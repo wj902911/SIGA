@@ -127,9 +127,9 @@ int main()
 {
 	int numRefinements = 1;
 	double deltaDisplacement = 0.1;
-	double maxDisplacement = 0.6;
+	double maxDisplacement = 0.2;
 	Eigen::VectorXi numPoints(2);
-	numPoints << 1000, 1000;
+	numPoints << 10, 10;
 
 	if (!std::filesystem::exists("./TwoPatchesTest"))
 		std::filesystem::create_directory("./TwoPatchesTest");

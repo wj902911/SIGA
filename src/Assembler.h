@@ -5,7 +5,7 @@
 #include "MultiBasis.h"
 #include "BoundaryCondition.h"
 #include "DeviceVector.h"
-#include "SparseSystem.h"
+#include "SparseSystem_d.h"
 #include "MultiPatch_d.h"
 
 class Assembler
@@ -54,7 +54,7 @@ private:
     BoundaryConditions m_boundaryConditions;
     //std::vector<std::vector<double>> m_ddof;
     std::vector<Eigen::VectorXd> m_ddof;
-    SparseSystem m_sparseSystem;
+    SparseSystem_d m_sparseSystem;
     Eigen::VectorXd m_bodyForce;
     bool m_initialAssemble = true;
 

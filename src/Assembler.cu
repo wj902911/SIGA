@@ -202,124 +202,15 @@ void tensorGrid_device(int idx, int* vecs_sizes, int dim, int num_patch,
 }
 
 __global__
-void functionTestkernel(MultiPatch_d* patches, double* patchLengthes)
+void functionTestkernel(int* mapperData)
 {
-    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
-        idx < patches->totalNumBdGPs(); idx += blockDim.x * gridDim.x)
-    {
-        int patch(0);
-        int point_idx = patches->threadPatch_edge(idx, patch);
-        int dir(0);
-        point_idx = patches->threadEdgeDir(point_idx, patch, dir);
-        int edgeIdx(0);
-        point_idx = patches->threadEdge(point_idx, patch, dir, edgeIdx);
-        int basisDim = patches->getBasisDim();
-        Patch_d edge;
-        switch (basisDim)
-        {
-            case 2:
-            {
-                edge = patches->boundary(patch, edgeIdx + 1);
-                break;
-            }
-            case 3:
-            {
-                int faceIdx = edgeIdx / 2;
-                int localEdgeIdx = edgeIdx % 2;
-                Patch_d face = patches->boundary(patch, faceIdx + 1);
-                switch (faceIdx)
-                {
-                    case 0: case 1: case 2: case 3:
-                    {
-                        edge = face.boundary(localEdgeIdx + 1);
-                        break;
-                    }
-                    case 4: case 5:
-                    {
-                        edge = face.boundary(localEdgeIdx + 3);
-                        break;
-                    }
-                }
-                break;
-            }
-        }
-        DeviceObjectArray<int> numGPs(1);
-        numGPs[0]=edge.basis().numGPsInDir(0);
-        GaussPoints_d GPs(1, numGPs);
-        DeviceVector<double> pt;
-        double wt = edge.basis().gsPoint(point_idx, GPs, pt);
-        DeviceMatrix<double> activeCPs = edge.getActiveControlPoints(pt);
-        //printf("activeCPs:\n");
-        //activeCPs.print();
-        DeviceObjectArray<DeviceVector<double>> values;
-        edge.basis().evalAllDers_into(pt, 1, values);
-        //printf("values[0]:\n");
-        //values[0].print();
-        //printf("values[1]:\n");
-        //values[1].print();
-        DeviceObjectArray<DeviceMatrix<double>> md;
-        md.resize(2);
-        md[0] = values[0].transpose() * activeCPs;
-        md[1] = values[1].reshape(1, activeCPs.rows()) * activeCPs;
-        //printf("md[0]:\n");
-        //md[0].print();
-        //printf("md[1]:\n");
-        //md[1].print();
-        DeviceMatrix<double> jacobian = md[1].transpose();
-        //printf("wt %f\n", wt);
-        //printf("jacobian:\n");
-        //jacobian.print();
-        double length = wt * jacobian.norm();
-        //printf("length %f\n", length);
-        int edgeIdxOffset = patch*patches->getNumEdgesInPatch(0) + edgeIdx;
-        //printf("edgeIdxOffset %d length %f patchLengthes[edgeIdxOffset] %f\n", edgeIdxOffset, length, patchLengthes[edgeIdxOffset]);
-        atomicAdd(&patchLengthes[edgeIdxOffset], length);
-        //printf("Patch %d, dir %d, edge %d, point_idx %d, numGPs %d\n", patch, dir, edgeIdx, point_idx, numGPs[0]);
-    }
-#if 0
-    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
-        idx < boundaryPatches->getNumPatches(); idx += blockDim.x * gridDim.x)
-    {
-        int basisDim = patches->getBasisDim();
-        int numBoundariesPerPatch = pow(2, basisDim - 1) * basisDim;
-        int patch = idx / numBoundariesPerPatch;
-        int localBoundary = idx % numBoundariesPerPatch;
-        switch (basisDim)
-        {
-            case 2:
-            {
-                boundaryPatches->setPatch(idx, patches->boundary(patch, localBoundary + 1));
-                printf("Processing boundary patch %d\n", idx);
-                break;
-            }
-            case 3:
-            {
-                int faceIdx = localBoundary / 2;
-                int edgeIdx = localBoundary % 2;
-                Patch_d face = patches->boundary(patch, faceIdx + 1);
-                switch (faceIdx)
-                {
-                    case 0: case 1: case 2: case 3:
-                    {
-                        boundaryPatches->setPatch(idx, face.boundary(edgeIdx + 1));
-                        break;
-                    }
-                    case 4: case 5:
-                    {
-                        boundaryPatches->setPatch(idx, face.boundary(edgeIdx + 3));
-                        break;
-                    }
-                }
-            }
-        }
-    }
-#endif
+    DofMapper_d mapper(mapperData);
 }
 
 __global__
 void assembleDomain(int totalGPs, MultiPatch_d* displacement, MultiPatch_d* patches,
                     DeviceObjectArray<GaussPoints_d>* gaussPoints, DeviceVector<double>* bodyForce,
-                    SparseSystem* system, DeviceObjectArray<DeviceVector<double>>* eliminatedDofs)
+                    SparseSystem_d* system, DeviceObjectArray<DeviceVector<double>>* eliminatedDofs)
 {
     //MultiBasis_d bases(*displacement);
     for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
@@ -448,9 +339,17 @@ void assembleDomain(int totalGPs, MultiPatch_d* displacement, MultiPatch_d* patc
 }
 
 __global__
+void constructSolutionKernel(const double* solVector,
+                             const double* fixedDoFs,
+                             const int* fixedDofsOffsets)
+{
+    
+}
+
+__global__
 void constructSolutionKernel(const DeviceVector<double>* solVector,
                              const DeviceObjectArray<DeviceVector<double>>* fixedDoFs,
-                             const MultiBasis_d* bases, const SparseSystem* system,
+                             const MultiBasis_d* bases, const SparseSystem_d* system,
                              MultiPatch_d* result, int numDofs)
 {
     //int numDofs = result->getTotalNumControlPoints()*result->getCPDim();
@@ -903,6 +802,18 @@ Assembler::Assembler(const MultiPatch& multiPatch, const MultiBasis& multiBasis,
     //m_dofMappers.clear();
     multiBasis.getMappers(true, m_boundaryConditions, dofMappers_stdVec, true);
 
+    std::vector<int> dofMapperData;
+    dofMappers_stdVec[0].getDofMapperDataVec(dofMapperData);
+    DeviceObjectArray<int> dofMapperData_d(dofMapperData.size(), dofMapperData.data());
+    functionTestkernel<<<1, 1>>>(dofMapperData_d.data());
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess)
+        std::cerr << "Error after functionTestkernel launch: " 
+                  << cudaGetErrorString(err) << std::endl;
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+        std::cerr << "CUDA error during device synchronization (functionTestkernel): " 
+                  << cudaGetErrorString(err) << std::endl;
 #if 0
     //DofMapper_d* h_dofMappers = new DofMapper_d[targetDim];
     //for (int i = 0; i < targetDim; ++i)
@@ -944,7 +855,7 @@ Assembler::Assembler(const MultiPatch& multiPatch, const MultiBasis& multiBasis,
 #endif
 
     //m_sparseSystem = SparseSystem(dofMappers, Eigen::VectorXi::Ones(targetDim));
-    m_sparseSystem = SparseSystem(dofMappers_stdVec, Eigen::VectorXi::Ones(targetDim));
+    m_sparseSystem = SparseSystem_d(dofMappers_stdVec, Eigen::VectorXi::Ones(targetDim));
 
     m_ddof.resize(targetDim);
     for (int unk = 0; unk < targetDim; ++unk)
@@ -1068,9 +979,9 @@ void Assembler::assemble(const DeviceVector<double>& solVector, int numIter,
     cudaMalloc((void**)&d_patches, sizeof(MultiPatch_d));
     cudaMemcpy(d_patches, &patches, sizeof(MultiPatch_d), cudaMemcpyHostToDevice);
 
-    SparseSystem* d_sparseSystem = nullptr;
-    cudaMalloc((void**)&d_sparseSystem, sizeof(SparseSystem));
-    cudaMemcpy(d_sparseSystem, &m_sparseSystem, sizeof(SparseSystem), 
+    SparseSystem_d* d_sparseSystem = nullptr;
+    cudaMalloc((void**)&d_sparseSystem, sizeof(SparseSystem_d));
+    cudaMemcpy(d_sparseSystem, &m_sparseSystem, sizeof(SparseSystem_d), 
                cudaMemcpyHostToDevice);
 
     MultiBasis_d bases(m_multiBasis);
@@ -1088,7 +999,14 @@ void Assembler::assemble(const DeviceVector<double>& solVector, int numIter,
 #if 1
     int numdofs = displacement.getTotalNumControlPoints()*displacement.getCPDim();
     int minGrid, blockSize;
-    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, constructSolutionKernel, 0, numdofs);
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, 
+                                       &blockSize, 
+                                       (void(*)(const DeviceVector<double>*, 
+                                                const DeviceObjectArray<DeviceVector<double>>*, 
+                                                const MultiBasis_d*, 
+                                                const SparseSystem_d*, 
+                                                MultiPatch_d*, int))constructSolutionKernel, 
+                                       0, numdofs);
     int gridSize = (numdofs + blockSize - 1) / blockSize;
     //auto mid_1 = std::chrono::high_resolution_clock::now();
     //std::cout << "Assemble - before construct solution kernel launch, time elapsed: " 
@@ -1201,7 +1119,7 @@ void Assembler::assemble(const DeviceVector<double>& solVector, int numIter,
 
 #if 1
     int totalGPs = m_multiBasis.totalNumGPs();
-    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, assembleDomain, 0, totalGPs);
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, (void(*)(int, MultiPatch_d*, MultiPatch_d*, DeviceObjectArray<GaussPoints_d>*, DeviceVector<double>*, SparseSystem_d*, DeviceObjectArray<DeviceVector<double>>*))assembleDomain, 0, totalGPs);
     gridSize = (totalGPs + blockSize - 1) / blockSize;
     //auto mid_3 = std::chrono::high_resolution_clock::now();
     //std::cout << "Assemble - before assembleDomain kernel launch, time elapsed: " 
@@ -1502,10 +1420,17 @@ void Assembler::constructSolution(const DeviceVector<double> &solVector, MultiPa
     DeviceObjectPointer<DeviceObjectArray<DeviceVector<double>>> d_fixedDoFs(fixedDoFs_d);
     MultiBasis_d bases(m_multiBasis);
     DeviceObjectPointer<MultiBasis_d> d_bases(bases);
-    DeviceObjectPointer<SparseSystem> d_sparseSystem(m_sparseSystem);
+    DeviceObjectPointer<SparseSystem_d> d_sparseSystem(m_sparseSystem);
     int numdofs = displacement.getTotalNumControlPoints()*displacement.getCPDim();
     int minGrid, blockSize;
-    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, constructSolutionKernel, 0, numdofs);
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, 
+                                      &blockSize, 
+                                      (void(*)(const DeviceVector<double>*, 
+                                               const DeviceObjectArray<DeviceVector<double>>*, 
+                                               const MultiBasis_d*, 
+                                               const SparseSystem_d*, 
+                                               MultiPatch_d*, int))constructSolutionKernel, 
+                                      0, numdofs);
     int gridSize = (numdofs + blockSize - 1) / blockSize;
     constructSolutionKernel<<<gridSize, blockSize>>>(d_solVector.pointer(), 
                                                       d_fixedDoFs.pointer(), 
@@ -1598,7 +1523,7 @@ void Assembler::refresh()
     int targetDim = m_multiPatch.getCPDim();
     std::vector<DofMapper> dofMappers_stdVec(targetDim);
     m_multiBasis.getMappers(true, m_boundaryConditions, dofMappers_stdVec, true);
-    m_sparseSystem = SparseSystem(dofMappers_stdVec, Eigen::VectorXi::Ones(targetDim));
+    m_sparseSystem = SparseSystem_d(dofMappers_stdVec, Eigen::VectorXi::Ones(targetDim));
     for (int unk = 0; unk < targetDim; ++unk)
         computeDirichletDofs(unk, dofMappers_stdVec);
 }
