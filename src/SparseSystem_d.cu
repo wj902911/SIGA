@@ -151,8 +151,8 @@ SparseSystem_d::SparseSystem_d(const std::vector<DofMapper> &mappers,
             m_row[k] = i;
             ++k;
         }
-        m_col = m_row;
-        //m_col.print("m_col:");
+    m_col = m_row;
+
     if (ms == 1 )
     {
         m_row.setZero();
@@ -173,6 +173,55 @@ SparseSystem_d::SparseSystem_d(const std::vector<DofMapper> &mappers,
                     int(m_cstr[d-1]) + mappers[m_col[d-1]].freeSize());
                     
     m_RHS.setZero(m_matrix.rows());
+}
+
+__device__
+SparseSystem_d::SparseSystem_d(const int *intData, const double *doubleData)
+    : m_mappers(intData[0])
+{
+    int offset = 0;
+    int numMappers = intData[offset++];
+    // Initialize m_mappers
+    for (int i = 0; i < numMappers; ++i)
+    {
+        // Each mapper's data size is stored in intData[offset]
+        int mapperDataSize = intData[offset++];
+        m_mappers[i] = DofMapper_d(intData + offset);
+        offset += mapperDataSize;
+    }
+    // Initialize m_row
+    int numRows = intData[offset++];
+    m_row = DeviceVector<int>(numRows, intData + offset);
+    offset += numRows;
+    // Initialize m_col
+    int numCols = intData[offset++];
+    m_col = DeviceVector<int>(numCols, intData + offset);
+    offset += numCols;
+    // Initialize m_rstr
+    int numRstr = intData[offset++];
+    m_rstr = DeviceVector<int>(numRstr, intData + offset);
+    offset += numRstr;
+    // Initialize m_cstr
+    int numCstr = intData[offset++];
+    m_cstr = DeviceVector<int>(numCstr, intData + offset);
+    offset += numCstr;
+    // Initialize m_cvar
+    int numCvar = intData[offset++];
+    m_cvar = DeviceVector<int>(numCvar, intData + offset);
+    offset += numCvar;
+    // Initialize m_dims
+    int numDims = intData[offset++];
+    m_dims = DeviceVector<int>(numDims, intData + offset);
+    offset += numDims;
+
+    // Initialize m_matrix and m_RHS
+    int numMatrixRows = intData[offset++];
+    int numMatrixCols = intData[offset++];
+    int numRowsRHS = intData[offset++];
+    m_matrix = DeviceMatrix<double>(numMatrixRows, numMatrixCols, doubleData);
+    m_RHS = DeviceVector<double>(numRowsRHS, doubleData + numMatrixRows * numMatrixCols);
+
+
 }
 
 #if 0

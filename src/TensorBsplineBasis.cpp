@@ -575,3 +575,43 @@ void TensorBsplineBasis::matchWith(const BoundaryInterface &bi,
 
 	return;
 }
+
+int TensorBsplineBasis::getIntDataSize() const
+{
+	return getDim() * 2 + 1;
+}
+
+int TensorBsplineBasis::getDoubleDataSize() const
+{
+	return getTotalNumKnots();
+}
+
+// data layout:
+// int data: [orders..., knotsOffsets...]
+// double data: [knots...]
+void TensorBsplineBasis::getData(std::vector<int> &intData, 
+	                             std::vector<double> &doubleData) const
+{
+	intData.clear();
+	doubleData.clear();
+
+	int intDataSize = getIntDataSize();
+	intData.reserve(intDataSize);
+	std::vector<int> orders = getOrders();
+	intData.insert(intData.end(), orders.begin(), orders.end());
+	int knotsOffset = 0;
+	intData.push_back(knotsOffset);
+	for (int d = 0; d < getDim(); ++d)
+	{
+		knotsOffset += getNumKnots(d);
+		intData.push_back(knotsOffset);
+	}
+
+	int doubleDataSize = getDoubleDataSize();
+	doubleData.reserve(doubleDataSize);
+	for (int d = 0; d < getDim(); ++d)
+	{
+		std::vector<double> knots = getKnots(d);
+		doubleData.insert(doubleData.end(), knots.begin(), knots.end());
+	}
+}

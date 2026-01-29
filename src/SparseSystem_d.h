@@ -40,6 +40,10 @@ public:
                  const Eigen::VectorXi& dims);
 
     __device__
+    SparseSystem_d(const int* intData,
+                   const double* doubleData);
+
+    __device__
     DeviceVector<int> mapColIndices(const DeviceVector<int>& actives,
                                     const int patchIndex,
                                     const int c = 0) const

@@ -1217,6 +1217,7 @@ Derived operator/(const DeviceMatrixBase<Derived, T>& matrix, T s)
     return result;
 }
 
+#if 0
 template <typename T>
 class DeviceMatrixView : public DeviceMatrix<T>
 {
@@ -1235,6 +1236,7 @@ public:
     __host__ __device__
     ~DeviceMatrixView() {}
 };
+#endif
 
 #if 0
 template <typename T>

@@ -5,6 +5,7 @@
 #include "Patch.h"
 #include "DofMapper.h"
 #include "BoxTopology.h"
+#include <DeviceArray.h>
 
 class MultiPatch
 {
@@ -66,6 +67,8 @@ public:
     std::vector<double> getGeoKnots() const;
     std::vector<int> getGeoOrders() const;
 
+    int getTotalNumKnots() const;
+
     int getTotalNumGaussPoints() const;
 
     const std::vector<double>& getGeoKnots(int patchIndex, int direction) const;
@@ -110,6 +113,30 @@ public:
                                      const Eigen::Vector<bool, -1>& matched, Eigen::VectorXi &dirMap, 
                                      Eigen::Vector<bool, -1>& dirO,
                                      double tol, int reference = 0);
+#if 0
+    void getData(std::vector<int>& intData,
+                 std::vector<double>& doubleData) const;
+#endif
+
+    void getData(std::vector<int>& intData,
+                 std::vector<double>& knotsPools,
+                 std::vector<int>& patchControlPointsPoolOffsets,
+                 std::vector<double>& controlPointsPools) const;
+    void getData(DeviceArray<int>& intData,
+                 DeviceArray<double>& knotsPools,
+                 DeviceArray<int>& patchControlPointsPoolOffsets,
+                 DeviceArray<double>& controlPointsPools) const
+    {
+        std::vector<int> intData_vec;
+        std::vector<double> knotsPools_vec;
+        std::vector<int> patchControlPointsPoolOffsets_vec;
+        std::vector<double> controlPointsPools_vec;
+        getData(intData_vec, knotsPools_vec, patchControlPointsPoolOffsets_vec, controlPointsPools_vec);
+        intData = intData_vec;
+        knotsPools = knotsPools_vec;
+        patchControlPointsPoolOffsets = patchControlPointsPoolOffsets_vec;
+        controlPointsPools = controlPointsPools_vec;
+    }
 
     void clear()
     {

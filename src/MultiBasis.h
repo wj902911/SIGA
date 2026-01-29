@@ -3,6 +3,7 @@
 #include <vector>
 #include "TensorBsplineBasis.h"
 #include "MultiPatch.h"
+#include <DeviceArray.h>
 
 class MultiBasis
 {
@@ -39,4 +40,16 @@ public:
     int totalNumBdGPs() const;
 
     int totalNumGPsOnBdries(const std::deque<boundary_condition>& bcs) const;
+
+    void getData(std::vector<int>& intData,
+                 std::vector<double>& knotsPools) const;
+    void getData(DeviceArray<int>& intData,
+                 DeviceArray<double>& knotsPools) const
+    {
+        std::vector<int> intDataVec;
+        std::vector<double> knotsPoolsVec;
+        getData(intDataVec, knotsPoolsVec);
+        intData = intDataVec;
+        knotsPools = knotsPoolsVec;
+    }
 };

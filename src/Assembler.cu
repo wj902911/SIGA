@@ -802,19 +802,7 @@ Assembler::Assembler(const MultiPatch& multiPatch, const MultiBasis& multiBasis,
     //m_dofMappers.clear();
     multiBasis.getMappers(true, m_boundaryConditions, dofMappers_stdVec, true);
 
-    std::vector<int> dofMapperData;
-    dofMappers_stdVec[0].getDofMapperDataVec(dofMapperData);
-    DeviceObjectArray<int> dofMapperData_d(dofMapperData.size(), dofMapperData.data());
-    functionTestkernel<<<1, 1>>>(dofMapperData_d.data());
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess)
-        std::cerr << "Error after functionTestkernel launch: " 
-                  << cudaGetErrorString(err) << std::endl;
-    err = cudaDeviceSynchronize();
-    if (err != cudaSuccess)
-        std::cerr << "CUDA error during device synchronization (functionTestkernel): " 
-                  << cudaGetErrorString(err) << std::endl;
-#if 0
+    #if 0
     //DofMapper_d* h_dofMappers = new DofMapper_d[targetDim];
     //for (int i = 0; i < targetDim; ++i)
         //h_dofMappers[i] = DofMapper_d(dofMappers_stdVec[i]);

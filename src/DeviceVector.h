@@ -203,6 +203,7 @@ public:
 
 };
 
+#if 0
 template <typename T>
 class DeviceVectorView : public DeviceVector<T>
 {
@@ -217,4 +218,5 @@ public:
     DeviceVectorView(int size, T* data) : DeviceVector<T>(size, data, false) {} // No ownership of data
     
 };
+#endif
 

@@ -187,3 +187,31 @@ Eigen::MatrixXd Patch::parameterRange() const
 {
     return m_basis.support();
 }
+
+int Patch::getIntDataSize() const
+{
+    return m_basis.getIntDataSize();
+}
+
+int Patch::getDoubleDataSize() const
+{
+    return m_basis.getDoubleDataSize() + m_controlPoints.size();
+}
+
+// data layout:
+// int data: [orders..., knotsOffsets...]
+// knotsPool: [knots...]
+// controlPointsPool: [controlPoints...]
+void Patch::getData(std::vector<int> &intData,
+                    std::vector<double> &knotsPool,
+                    std::vector<double> &controlPointsPool) const
+{
+    intData.clear();
+    knotsPool.clear();
+    controlPointsPool.clear();
+    m_basis.getData(intData, knotsPool);
+    controlPointsPool.reserve(m_controlPoints.size());
+    controlPointsPool.insert(controlPointsPool.end(), 
+                             m_controlPoints.data(), 
+                             m_controlPoints.data() + m_controlPoints.size());
+}

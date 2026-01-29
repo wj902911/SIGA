@@ -51,7 +51,7 @@ DofMapper_d(int* mapperData)
     }
 #else
     __device__
-    DofMapper_d(int* mapperData)
+    DofMapper_d(const int* mapperData)
     {
         int start = 1;
         int numComponents = mapperData[start];

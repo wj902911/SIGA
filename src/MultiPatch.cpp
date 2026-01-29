@@ -388,6 +388,16 @@ std::vector<int> MultiPatch::getGeoOrders() const
     return orders;
 }
 
+int MultiPatch::getTotalNumKnots() const
+{
+    int totalNumKnots = 0;
+    for (int i = 0; i < m_bases.size(); i++)
+    {
+        totalNumKnots += m_bases[i].getTotalNumKnots();
+    }
+    return totalNumKnots;
+}
+
 int MultiPatch::getTotalNumGaussPoints() const
 {
     int totalNumGaussPoints = 0;
@@ -728,6 +738,187 @@ bool MultiPatch::matchVerticesOnSide(const Eigen::MatrixXd &cc1, const std::vect
 
     return false;
 }
+#if 0
+void MultiPatch::getData(std::vector<int> &intData, std::vector<double> &doubleData) const
+{
+    intData.clear();
+    int numPatches = m_patches.size();
+    int targetDim = m_CPDim;
+    int numKnotsOffset = m_basisDim * numPatches + 1;
+    int intDataSize = 2 * numKnotsOffset + numPatches;
+    intData.reserve(intDataSize);
+    intData.push_back(0); // knotsOffset[0]
+    for (int i = 0; i < numPatches; i++)
+    {
+        std::vector<int> numKnots = m_bases[i].getNumKnots();
+        for (int j = 0; j < m_basisDim; j++)
+            intData.push_back(intData.back() + numKnots[j]); // knotsOffset[i]
+    }
+    for (int i = 0; i < numPatches; i++)
+    {
+        std::vector<int> orders = m_bases[i].getOrders();
+        intData.insert(intData.end(), orders.begin(), orders.end()); // orders
+    }
+    intData.push_back(0); // controlPointsOffset[0]
+    for (int i = 0; i < numPatches; i++)
+    {
+        intData.push_back(intData.back() + m_patches[i].getNumControlPoints() * targetDim); // controlPointsOffset[i]
+    }
+
+    doubleData.clear();
+    doubleData.reserve(intData[numKnotsOffset - 1] + intData[intDataSize - 1]);
+    for (int i = 0; i < numPatches; i++)
+    {
+        std::vector<double> knots = m_bases[i].getKnots();
+        doubleData.insert(doubleData.end(), knots.begin(), knots.end());
+    }
+    for (int i = 0; i < numPatches; i++)
+    {
+        Eigen::MatrixXd cp = m_patches[i].getControlPoints();
+        doubleData.insert(doubleData.end(), cp.data(), cp.data() + cp.size());
+    }
+}
+#endif
+// Data layout:
+// intData: [patchIntDataOffsets..., patchKnotsPoolOffsets..., 
+//          patch1 int data..., patch2 int data..., ...]
+// patchControlPointsPoolOffsets: [patchControlPointsPoolOffsets...]
+// knotsPools: [patch1 knots pool..., patch2 knots pool..., ...]
+// controlPointsPools: [patch1 control points pool..., patch2 control points pool..., ...]
+void MultiPatch::getData(std::vector<int>& intData, 
+                         std::vector<double>& knotsPools, 
+                         std::vector<int>& patchControlPointsPoolOffsets,
+                         std::vector<double>& controlPointsPools) const
+{
+    intData.clear();
+    knotsPools.clear();
+    patchControlPointsPoolOffsets.clear();
+    controlPointsPools.clear();
+
+    int numPatches = m_patches.size();
+    intData.reserve(2 * numPatches + 2);
+    int patchIntDataOffsets = 0;
+    intData.push_back(patchIntDataOffsets);
+    for (int i = 0; i < numPatches; i++)
+    {
+        patchIntDataOffsets += patch(i).getIntDataSize();
+        intData.push_back(patchIntDataOffsets);
+    }
+    int patchKnotsPoolOffsets = 0;
+    intData.push_back(patchKnotsPoolOffsets);
+    for (int i = 0; i < numPatches; i++)
+    {
+        patchKnotsPoolOffsets += patch(i).getTotalNumKnots();
+        intData.push_back(patchKnotsPoolOffsets);
+    }
+    patchControlPointsPoolOffsets.reserve(numPatches + 1);
+    int CPOffset = 0;
+    patchControlPointsPoolOffsets.push_back(CPOffset);
+    for (int i = 0; i < numPatches; i++)
+    {
+        CPOffset += patch(i).getControlPoints().size();
+        patchControlPointsPoolOffsets.push_back(CPOffset);
+    }
+    knotsPools.reserve(patchKnotsPoolOffsets);
+    controlPointsPools.reserve(patchControlPointsPoolOffsets.back());
+    for (int i = 0; i < numPatches; i++)
+    {
+        std::vector<int> patchIntData;
+        std::vector<double> patchKnotsPool;
+        std::vector<double> patchControlPointsPool;
+        patch(i).getData(patchIntData, patchKnotsPool, patchControlPointsPool);
+        intData.reserve(intData.size() + patchIntData.size());
+        intData.insert(intData.end(), patchIntData.begin(), patchIntData.end());
+        knotsPools.insert(knotsPools.end(), patchKnotsPool.begin(), patchKnotsPool.end());
+        controlPointsPools.insert(controlPointsPools.end(), patchControlPointsPool.begin(), patchControlPointsPool.end());
+    }
+}
+
+#if 0
+// Data layout:
+// intData: [patchIntDataOffsets..., patchDoubleDataOffsets..., 
+//           patch1 int data..., patch2 int data..., ...]
+// doubleData: [patch1 double data..., patch2 double data...]
+void MultiPatch::getData(std::vector<int> &intData, 
+                         std::vector<double> &doubleData) const
+{
+    intData.clear();
+    doubleData.clear();
+
+    int numPatches = m_patches.size();
+    intData.reserve(2 * numPatches + 2);
+    int patchIntDataOffsets = 0;
+    intData.push_back(patchIntDataOffsets);
+    for (int i = 0; i < numPatches; i++)
+    {
+        patchIntDataOffsets += patch(i).getIntDataSize();
+        intData.push_back(patchIntDataOffsets);
+    }
+    int patchDoubleDataOffsets = 0;
+    intData.push_back(patchDoubleDataOffsets);
+    for (int i = 0; i < numPatches; i++)
+    {
+        patchDoubleDataOffsets += patch(i).getDoubleDataSize();
+        intData.push_back(patchDoubleDataOffsets);
+    }
+    doubleData.reserve(patchDoubleDataOffsets);
+    for (int i = 0; i < numPatches; i++)
+    {
+        std::vector<int> patchIntData;
+        std::vector<double> patchDoubleData;
+        patch(i).getData(patchIntData, patchDoubleData);
+        intData.insert(intData.end(), patchIntData.begin(), patchIntData.end());
+        doubleData.insert(doubleData.end(), patchDoubleData.begin(), patchDoubleData.end());
+    }
+#if 0
+    intData.clear();
+    int numPatches = m_patches.size();
+    int targetDim = m_CPDim;
+    int numKnotsOffset = m_basisDim * numPatches + 1;
+    int intDataSize = 2 * numKnotsOffset + numPatches;
+    intDataOffsets.reserve(4);
+    intDataOffsets.push_back(0);
+    intDataOffsets.push_back(numKnotsOffset);
+    intDataOffsets.push_back(numKnotsOffset + m_basisDim * numPatches);
+    intDataOffsets.push_back(intDataSize);
+    intData.reserve(intDataSize);
+    intData.push_back(0); // knotsOffset[0]
+    for (int i = 0; i < numPatches; i++)
+    {
+        std::vector<int> numKnots = m_bases[i].getNumKnots();
+        for (int j = 0; j < m_basisDim; j++)
+            intData.push_back(intData.back() + numKnots[j]); // knotsOffset[i]
+    }
+    for (int i = 0; i < numPatches; i++)
+    {
+        std::vector<int> orders = m_bases[i].getOrders();
+        intData.insert(intData.end(), orders.begin(), orders.end()); // orders
+    }
+    intData.push_back(0); // controlPointsOffset[0]
+    for (int i = 0; i < numPatches; i++)
+    {
+        intData.push_back(intData.back() + m_patches[i].getNumControlPoints() * targetDim); // controlPointsOffset[i]
+    }
+
+    doubleData.clear();
+    doubleDataOffsets.reserve(3);
+    doubleDataOffsets.push_back(0);
+    doubleDataOffsets.push_back(intData[numKnotsOffset - 1]);
+    doubleDataOffsets.push_back(intData[numKnotsOffset - 1] + intData[intDataSize - 1]);
+    doubleData.reserve(doubleDataOffsets[2]);
+    for (int i = 0; i < numPatches; i++)
+    {
+        std::vector<double> knots = m_bases[i].getKnots();
+        doubleData.insert(doubleData.end(), knots.begin(), knots.end());
+    }
+    for (int i = 0; i < numPatches; i++)
+    {
+        Eigen::MatrixXd cp = m_patches[i].getControlPoints();
+        doubleData.insert(doubleData.end(), cp.data(), cp.data() + cp.size());
+    }
+#endif
+}
+#endif
 
 #if 0
 int MultiPatch::getNumKnots(int patchIndex, int direction) const

@@ -270,6 +270,7 @@ void DofMapper::matchDofs(int u, const Eigen::MatrixXi &b1, int v, const Eigen::
 
 void DofMapper::getDofMapperDataVec(std::vector<int> &data) const
 {
+    data.clear();
     int totalSize = getDataSize();
         data.reserve(totalSize);
         data.push_back(totalSize); // total size [0]

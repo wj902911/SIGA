@@ -103,3 +103,37 @@ int MultiBasis::totalNumGPsOnBdries(const std::deque<boundary_condition> &bcs) c
     }
     return 0;
 }
+
+void MultiBasis::getData(std::vector<int> &intData, 
+                         std::vector<double> &knotsPools) const
+{
+    intData.clear();
+    knotsPools.clear();
+
+    int numPatches = static_cast<int>(m_bases.size());
+    intData.reserve(2 * numPatches + 2);
+    int patchIntDataOffsets = 0;
+    intData.push_back(patchIntDataOffsets);
+    for (int i = 0; i < numPatches; i++)
+    {
+        patchIntDataOffsets += m_bases[i].getIntDataSize();
+        intData.push_back(patchIntDataOffsets);
+    }
+    int patchKnotsPoolOffsets = 0;
+    intData.push_back(patchKnotsPoolOffsets);
+    for (int i = 0; i < numPatches; i++)
+    {
+        patchKnotsPoolOffsets += m_bases[i].getTotalNumKnots();
+        intData.push_back(patchKnotsPoolOffsets);
+    }
+    knotsPools.reserve(patchKnotsPoolOffsets);
+    for (int i = 0; i < numPatches; i++)
+    {
+        std::vector<int> patchIntData;
+        std::vector<double> patchKnotsPool;
+        m_bases[i].getData(patchIntData, patchKnotsPool);
+        intData.reserve(intData.size() + patchIntData.size());
+        intData.insert(intData.end(), patchIntData.begin(), patchIntData.end());
+        knotsPools.insert(knotsPools.end(), patchKnotsPool.begin(), patchKnotsPool.end());
+    }
+}

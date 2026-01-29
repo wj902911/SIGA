@@ -102,6 +102,13 @@ public:
 	void matchWith(const BoundaryInterface & bi, const TensorBsplineBasis & other,
                    Eigen::MatrixXi & bndThis, Eigen::MatrixXi & bndOther) const;
 
+	int getIntDataSize() const;
+
+	int getDoubleDataSize() const;
+
+	void getData(std::vector<int>& intData,
+	             std::vector<double>& doubleData) const;
+
 #if 0
 	template <typename T, int d>
 	void flipTensorVector(const int dir, 
