@@ -52,4 +52,6 @@ public:
         intData = intDataVec;
         knotsPools = knotsPoolsVec;
     }
+
+    void giveBasis(MultiPatch& multiPatch, int targetDim) const;
 };

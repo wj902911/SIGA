@@ -3,6 +3,8 @@
 #include <cstdio>
 #include <DeviceVectorView.h>
 
+#define MAPPER_PATCH_DOF2(a,b) m_dofs[m_offset[b]+a]
+
 class DofMapperDeviceView
 {
 private:
@@ -39,20 +41,36 @@ public:
     void print() const
     {
         printf("DofMapperDeviceView:\n");
-        printf("  Dofs:\n");
+        printf("Dofs:\n");
         m_dofs.print();
-        printf("  Offset:\n");
+        printf("Offset:\n");
         m_offset.print();
-        printf("  Num Free Dofs:\n");
+        printf("Num Free Dofs:\n");
         m_numFreeDofs.print();
-        printf("  Num Elim Dofs:\n");
+        printf("Num Elim Dofs:\n");
         m_numElimDofs.print();
-        printf("  Num Cpld Dofs:\n");
+        printf("Num Cpld Dofs:\n");
         m_numCpldDofs.print();
-        printf("  Tagged:\n");
+        printf("Tagged:\n");
         m_tagged.print();
-        printf("  Shift: %d\n", m_shift);
-        printf("  BShift: %d\n", m_bshift);
-        printf("  CurElimId: %d\n", m_curElimId);
+        printf("Shift: %d\n", m_shift);
+        printf("BShift: %d\n", m_bshift);
+        printf("CurElimId: %d\n", m_curElimId);
     }
+
+    __device__
+    bool is_free_index(int gl) const 
+    { return gl < m_curElimId + m_shift; }
+
+    __device__
+    int index(int dof, int patch, int comp = 0) const
+    { return MAPPER_PATCH_DOF2(dof, patch) + m_shift; }
+
+    __device__
+    bool is_free(int i, int k = 0) const
+    { return is_free_index(index(i, k)); }
+
+    __device__
+    int bindex(int i, int k = 0, int c = 0) const
+    { return MAPPER_PATCH_DOF2(i, k) - m_numFreeDofs.back() + m_bshift; }
 };

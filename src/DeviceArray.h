@@ -12,14 +12,33 @@ private:
     T* m_data = nullptr;
     int m_size = 0;
 public:
-    __host__
+    __host__ __device__
+    DeviceArrayView() = default;
+
+    __host__ __device__
     DeviceArrayView(T* data, int size) : m_data(data), m_size(size) {}
+
+    __host__ __device__
+    DeviceArrayView(const DeviceVectorView<T>& vecView) 
+    : m_data(vecView.data()), m_size(vecView.size()) {}
 
     __host__ __device__
     T* data() const { return m_data; }
 
     __host__ __device__
     int size() const { return m_size; }
+
+    __device__
+    T& operator[](int index)
+    {
+        return m_data[index];
+    }
+
+    __device__
+    const T& operator[](int index) const
+    {
+        return m_data[index];
+    }
 };
 
 template <typename T>
@@ -28,15 +47,25 @@ class DeviceNestedArrayView : public DeviceArrayView<T>
 private:
     DeviceArrayView<int> m_offsets;
 public:
-    __host__
+    __host__ __device__
+    DeviceNestedArrayView() = default;
+
+    __host__ __device__
     DeviceNestedArrayView(int* offsets, int numOffsets, T* data, int dataSize)
     : DeviceArrayView<T>(data, dataSize),
       m_offsets(offsets, numOffsets)
     {
     }
 
-    __host__
-    DeviceNestedArrayView(const DeviceArrayView<int>& offsets, DeviceArrayView<T> data)
+    __host__ __device__
+    DeviceNestedArrayView(const DeviceArrayView<int>& offsets, const DeviceArrayView<T>& data)
+    : DeviceArrayView<T>(data),
+      m_offsets(offsets)
+    {
+    }
+
+    __host__ __device__
+    DeviceNestedArrayView(const DeviceVectorView<int>& offsets, const DeviceVectorView<T>& data)
     : DeviceArrayView<T>(data),
       m_offsets(offsets)
     {
@@ -45,8 +74,8 @@ public:
     __device__
     DeviceVectorView<T> operator[](int index) const
     {
-        int start = (index == 0) ? 0 : m_offsets.data()[index - 1];
-        int end = m_offsets.data()[index];
+        int start = (index == 0) ? 0 : m_offsets[index - 1];
+        int end = m_offsets[index];
         return DeviceVectorView<T>(this->data() + start, end - start);
     }
 
@@ -70,6 +99,9 @@ public:
             vec.print();
         }
     }
+
+    __device__
+    int size() const { return m_offsets.size(); }
 };
 
 template <typename T>

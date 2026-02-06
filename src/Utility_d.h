@@ -21,6 +21,23 @@ inline void getTensorCoordinate(int dim, int* numVlues, int index, int* out)
     }
 }
 
+__device__
+inline void getTensorCoordinate(int dim, int numVlue, int index, 
+                                int* out)
+{
+    for (int i = 0; i < dim; i++)
+    {
+        out[i] = index % numVlue;
+        index /= numVlue;
+    }
+}
+
+__host__ __device__
+inline int getTensorCoordinate(int dir, int numVlue, int index)
+{
+    
+}
+
 __host__ __device__
 inline int getTotalNumber(int dim, int* numVlues)
 {

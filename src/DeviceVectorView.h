@@ -35,6 +35,10 @@ public:
         else
             return DeviceMatrixView<T>::operator()(i, 0); 
     }
+
+    __device__
+    T back() const
+    { return DeviceMatrixView<T>::operator()(this->size() - 1, 0); }
 };
 
 

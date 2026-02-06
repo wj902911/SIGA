@@ -246,6 +246,11 @@ int MultiPatch::getTotalNumControlPoints() const
     return total;
 }
 
+int MultiPatch::CPSize() const
+{
+    return getTotalNumControlPoints() * m_CPDim;
+}
+
 std::vector<int> MultiPatch::getNumGpAndEle(int patchIndex) const
 {
     return m_bases[patchIndex].getNumGpAndEle();

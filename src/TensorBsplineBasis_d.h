@@ -1269,7 +1269,7 @@ public:
     double gsPoint(int idx, const GaussPoints_d& gspts,
                    DeviceVector<double>& result) const
     {
-        DeviceVector<double> gsPoint(m_dim);
+        //DeviceVector<double> gsPoint(m_dim);
         DeviceObjectArray<int> coords = ptCoords(idx);
         DeviceVector<double> lower, upper;
         elementSupport(coords, lower, upper);

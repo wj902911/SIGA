@@ -52,6 +52,7 @@ public:
     Eigen::MatrixXd getControlPoints(int patchIndex) const;
     int getNumControlPoints(int patchIndex) const;
     int getTotalNumControlPoints() const;
+    int CPSize() const;
     std::vector<int> getNumGpAndEle(int patchIndex) const;
     std::vector<int> getGeoNumKnots(int patchIndex) const;
     std::vector<double> getGeoKnots(int patchIndex) const;

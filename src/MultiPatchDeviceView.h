@@ -2,6 +2,7 @@
 
 #include <PatchDeviceView.h>
 #include <MultiBasisDeviceView.h>
+#include <GaussPointsDeviceView.h>
 
 class MultiPatchDeviceView
 {
@@ -119,16 +120,10 @@ public:
 #endif
 
     __device__
-    int* intDataPtr() const
-    {
-        return m_intData.data();
-    }
+    int* intDataPtr() const { return m_intData.data(); }
 
     __device__
-    DeviceVectorView<double> knotsPools() const
-    {
-        return m_knotsPools;
-    }
+    DeviceVectorView<double> knotsPools() const { return m_knotsPools; }
 
     __device__
     void print() const
@@ -139,4 +134,84 @@ public:
             patch(p).print();
         }
     }
+
+    __host__ __device__
+    int numPatches() const { return m_numPatches; }
+
+    __host__ __device__
+    int domainDim() const { return m_domainDim; }
+
+    __host__ __device__
+    int targetDim() const { return m_targetDim; }
+
+    __device__
+    int numControlPoints(int patchIdx) const
+    { return patch(patchIdx).numControlPoints(); }
+
+    __device__
+    int totalNumControlPoints() const
+    {
+        int total = 0;
+        for (int i = 0; i < m_numPatches; i++)
+        {
+            total += numControlPoints(i);
+        }
+        return total;
+    }
+
+    __device__
+    int threadPatchAndDof(int idx, int& p, int& unk) const
+    {
+        int dim = targetDim();
+        int point_idx_patch = idx;
+        int point_idx_dof = idx;
+        int total_points = totalNumControlPoints();
+        for (int d = 0; d < dim; d++)
+        {
+            if (point_idx_dof < total_points)
+            {
+                unk = d;
+                break;
+            }
+            point_idx_dof -= total_points;
+            point_idx_patch = point_idx_dof;
+        }
+        for (int i = 0; i < numPatches(); i++)
+        {
+            int patch_points = numControlPoints(i);
+            if (point_idx_patch < patch_points) 
+            {
+            	p = i;
+            	break;
+            }
+            point_idx_patch -= patch_points;
+        }
+        return point_idx_patch;
+    }
+
+    __device__
+    void setCoefficients(int patchIndex, int row, int col, double value)
+    { patch(patchIndex).setCoefficients(row, col, value); }
+
+    __device__
+    int threadPatch(int idx, int& patch_idx) const
+    {
+        int point_idx = idx;
+        for (int i = 0; i < m_numPatches; i++)
+        {
+            int patch_points = patch(i).basis().totalNumGPs();
+            if (point_idx < patch_points) 
+            {
+                patch_idx = i;
+                break;
+            }
+            point_idx -= patch_points;
+        }
+        return point_idx;
+    }
+
+    __device__
+    double gsPoint(int idx, int patch_idx, GaussPointsDeviceView gps,
+                   DeviceVectorView<double> result) const
+    { return patch(patch_idx).basis().gsPoint(idx, gps, result); }
 };

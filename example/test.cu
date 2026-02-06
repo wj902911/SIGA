@@ -1,19 +1,10 @@
+#define DEBUG
+
 #include "device_launch_parameters.h"
 
 #include <KnotVectorDeviceView.h>
 #include <Eigen/Core>
-#include <GPUAssembler.h>
-
-#if 0
-__global__ void kernel(MultiPatchDeviceView patches, 
-                       MultiBasisDeviceView bases, 
-                       SparseSystemDeviceView system)
-{
-    patches.print();
-    bases.print();
-    system.print();
-}
-#endif
+#include <GPUSolver.h>
 
 int main()
 {
@@ -91,25 +82,10 @@ int main()
 	bodyForce << 0.0, 0.0;
 
 	GPUAssembler assembler(multiPatch, bases, bcInfo, bodyForce);
-	assembler.print();
+	//assembler.print();
+    GPUSolver solver(assembler);
 
-#if 0
-    std::vector<DofMapper> dofMappers_stdVec(2);
-    bases.getMappers(true, bcInfo, dofMappers_stdVec, true);
-    SparseSystem sparseSystem(dofMappers_stdVec, 
-                              Eigen::VectorXi::Ones(2));
-
-	MultiPatchDeviceData mpData(multiPatch);
-	MultiBasisDeviceData mbData(bases);
-	SparseSystemDeviceData ssData(sparseSystem);
-
-    kernel<<<1, 1>>>(mpData.deviceView(), 
-                     mbData.deviceView(), 
-                     ssData.deviceView());
-
-    cudaError_t err = cudaDeviceSynchronize();
-    assert(err == cudaSuccess && "cudaDeviceSynchronize failed");
-#endif
+	assembler.assemble(solver.solutionView(), 0, solver.allFixedDofsView());
 
     return 0;
 }

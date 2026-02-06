@@ -87,27 +87,31 @@ public:
     void print() const
     {
         printf("SparseSystemDeviceView:\n");
-        printf("  Number of mappers: %d\n", m_dims.size());
+        printf("Number of mappers: %d\n", m_dims.size());
         for (int i = 0; i < m_dims.size(); i++)
         {
-            printf("  Mapper %d:\n", i);
+            printf("Mapper %d:\n", i);
             mapper(i).print();
         }
-        printf(" m_row:\n");
+        printf("m_row:\n");
         m_row.print();
-        printf(" m_col:\n");
+        printf("m_col:\n");
         m_col.print();
-        printf(" m_rstr:\n");
+        printf("m_rstr:\n");
         m_rstr.print();
-        printf(" m_cstr:\n");
+        printf("m_cstr:\n");
         m_cstr.print();
-        printf(" m_cvar:\n");
+        printf("m_cvar:\n");
         m_cvar.print();
-        printf(" m_dims:\n");
+        printf("m_dims:\n");
         m_dims.print();
-        printf("  Matrix (%d x %d):\n", m_matrix.rows(), m_matrix.cols());
+        printf("Matrix (%d x %d):\n", m_matrix.rows(), m_matrix.cols());
         m_matrix.print();
-        printf("  RHS (%d):\n", m_RHS.size());
+        printf("RHS (%d):\n", m_RHS.size());
         m_RHS.print();
     }
+
+    __device__
+    int mapToGlobalColIndex(int active, int patchIndex, int c = 0) const
+    { return mapper(m_col(c)).index(active, patchIndex) + m_cstr(c); }
 };

@@ -137,3 +137,13 @@ void MultiBasis::getData(std::vector<int> &intData,
         knotsPools.insert(knotsPools.end(), patchKnotsPool.begin(), patchKnotsPool.end());
     }
 }
+
+void MultiBasis::giveBasis(MultiPatch &multiPatch, int targetDim) const
+{
+    multiPatch.clear();
+    for (int i = 0; i < m_bases.size(); i++)
+    {
+        Patch patch(m_bases[i], targetDim);
+        multiPatch.addPatch(patch);
+    }
+}

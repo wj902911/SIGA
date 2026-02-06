@@ -24,6 +24,15 @@ public:
     __host__
     GPUSolver(GPUAssembler &assembler);
 
+    __host__
+    void print() const;
 
+    __host__
+    DeviceNestedArrayView<double> allFixedDofsView() const
+    { return fixedDoFs.view(); }
+
+    __host__
+    DeviceVectorView<double> solutionView() const
+    { return DeviceVectorView<double>(m_solVector.data(), m_solVector.size()); }
 
 };

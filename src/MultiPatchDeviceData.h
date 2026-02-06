@@ -7,9 +7,9 @@
 class MultiPatchDeviceData
 {
 private:
-    int m_numPatches;
-    int m_domainDim;
-    int m_targetDim;
+    int m_numPatches = 0;
+    int m_domainDim = 0;
+    int m_targetDim = 0;
     //std::vector<int> m_intDataOffsets;
     //std::vector<int> m_doubleDataOffsets;
     DeviceArray<int> m_intData;
@@ -18,6 +18,9 @@ private:
     DeviceArray<double> m_controlPointsPools;
 
 public:
+    __host__
+    MultiPatchDeviceData() = default;
+    
     __host__
     MultiPatchDeviceData(int numPatches,
                          int domainDim,
