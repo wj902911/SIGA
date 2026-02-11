@@ -2,6 +2,9 @@
 
 #include <cuda_runtime.h>
 #include <cstdio>
+#include <iostream>
+#include <cassert>
+#include <Eigen/Core>
 
 
 template <typename T>
@@ -20,8 +23,7 @@ public:
     __device__ 
     T& operator()(int row, int col) 
     { 
-        if (row > m_rows || col > m_cols)
-            assert("Index out of bounds in DeviceMatrixView");
+        assert(row < m_rows && col < m_cols && "Index out of bounds in DeviceMatrixView");
             
         return m_data[col * m_rows + row]; 
     }
@@ -39,9 +41,10 @@ public:
     __host__ __device__
     int cols() const { return m_cols; }
 
-    __device__
+    __host__ __device__
     void print() const
     {
+    #if defined(__CUDA_ARCH__)
         for (int i = 0; i < m_rows; i++)
         {
             for (int j = 0; j < m_cols; j++)
@@ -59,9 +62,18 @@ public:
             }
             printf("\n");
         }
+    #else
+        Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> hostMat(m_rows, m_cols);
+        cudaError_t err = cudaMemcpy(hostMat.data(), m_data, 
+                                     m_rows * m_cols * sizeof(T), 
+                                     cudaMemcpyDeviceToHost);
+        assert(err == cudaSuccess && "cudaMemcpy failed in DeviceMatrixView::print");
+        std::cout << hostMat << std::endl;
+    #endif
     }
+    
 
-    __device__
+    __host__ __device__
     T* data() const { return m_data; }
 
     __device__
@@ -158,7 +170,35 @@ public:
     }
 
     __device__
-    void times(const DeviceMatrixView<T>& other, DeviceMatrixView<T> result) const
+    void plus(DeviceMatrixView<T> other, DeviceMatrixView<T> result) const
+    {
+        assert(m_rows == other.m_rows && m_cols == other.m_cols && 
+               "Matrix dimensions must match for addition");
+        for (int i = 0; i < m_rows; i++)
+        {
+            for (int j = 0; j < m_cols; j++)
+            {
+                result(i, j) = this->operator()(i, j) + other(i, j);
+            }
+        }
+    }
+
+    __device__
+    void plus(DeviceMatrixView<T> other)
+    {
+        assert(m_rows == other.m_rows && m_cols == other.m_cols && 
+               "Matrix dimensions must match for addition");
+        for (int i = 0; i < m_rows; i++)
+        {
+            for (int j = 0; j < m_cols; j++)
+            {
+                this->operator()(i, j) += other(i, j);
+            }
+        }
+    }
+
+    __device__
+    void times(DeviceMatrixView<T> other, DeviceMatrixView<T> result) const
     {
         assert(m_cols == other.m_rows && "Inner dimensions must match for multiplication");
         for (int i = 0; i < m_rows; i++)
@@ -171,6 +211,62 @@ public:
                     sum += this->operator()(i, k) * other(k, j);
                 }
                 result(i, j) = sum;
+                //if (m_cols == 3)
+                //    printf("result(%d,%d) = %f\n", i, j, sum);
+            }
+        }
+        //if (m_cols == 3)
+        //{
+        //    printf("Result of matrix multiplication:\n");
+        //    result.print();
+        //}
+    }
+
+    __device__
+    void transposeTime(const DeviceMatrixView<T>& other, 
+                       DeviceMatrixView<T> result) const
+    {
+        // this:  (m x n)  -> this^T: (n x m)
+        // other: (m x p)
+        // result:(n x p)
+        assert(m_rows == other.m_rows && 
+               "Inner dimensions must match for A^T * B (A.rows == B.rows)");
+        assert(result.m_rows == m_cols && result.m_cols == other.m_cols &&
+               "Result has wrong dimensions for A^T * B");
+        for (int i = 0; i < m_cols; ++i)          // i over n (rows of A^T)
+        {
+            for (int j = 0; j < other.m_cols; ++j) // j over p
+            {
+                T sum = 0;
+                for (int k = 0; k < m_rows; ++k)   // k over m
+                {
+                    sum += (*this)(k, i) * other(k, j);
+                }
+                result(i, j) = sum;
+            }
+        }
+    }
+
+    __device__
+    void times(T scalar, DeviceMatrixView<T> result) const
+    {
+        for (int i = 0; i < m_rows; i++)
+        {
+            for (int j = 0; j < m_cols; j++)
+            {
+                result(i, j) = this->operator()(i, j) * scalar;
+            }
+        }
+    }
+
+     __device__
+    void times(T scalar)
+    {
+        for (int i = 0; i < m_rows; i++)
+        {
+            for (int j = 0; j < m_cols; j++)
+            {
+                this->operator()(i, j) *= scalar;
             }
         }
     }
@@ -187,4 +283,90 @@ public:
             }
         }
     }
+
+    __device__
+    void plusIdentity()
+    {
+        assert(m_rows == m_cols && "Matrix must be square to add identity");
+        for (int i = 0; i < m_rows; i++)
+        {
+            for (int j = 0; j < m_cols; j++)
+            {
+                this->operator()(i, j) += (i == j ? T(1) : T(0));
+            }
+        }
+    }
+
+    __device__
+    void tracePlus(T scalar, DeviceMatrixView<T> result) const
+    {
+        assert(m_rows == m_cols && "Matrix must be square to add trace");
+        for (int i = 0; i < m_rows; i++)
+        {
+            for (int j = 0; j < m_cols; j++)
+            {
+                result(i, j) = this->operator()(i, j) + (i == j ? scalar : T(0));
+            }
+        }
+    }
+
+    __device__
+    void tracePlus(T scalar)
+    {
+        assert(m_rows == m_cols && "Matrix must be square to add trace");
+        for (int i = 0; i < m_rows; i++)
+        {
+            for (int j = 0; j < m_cols; j++)
+            {
+                this->operator()(i, j) += (i == j ? scalar : T(0));
+            }
+        }
+    }
+
+    __device__
+    void transpose(DeviceMatrixView<T> result) const
+    {
+        for (int i = 0; i < m_rows; i++)
+        {
+            for (int j = 0; j < m_cols; j++)
+            {
+                result(j, i) = this->operator()(i, j);
+            }
+        }
+    }
+
+    
+
+    __device__
+    void transpose()
+    {
+        assert(m_rows == m_cols && "Matrix must be square to transpose in place");
+        for (int i = 0; i < m_rows; i++)
+        {
+            for (int j = i + 1; j < m_cols; j++)
+            {
+                T temp = this->operator()(i, j);
+                this->operator()(i, j) = this->operator()(j, i);
+                this->operator()(j, i) = temp;
+            }
+        }
+    }
+
+    __device__
+    void setIdentity()
+    {
+        assert(m_rows == m_cols && "Matrix must be square to set identity");
+        for (int i = 0; i < m_rows; i++)
+        {
+            for (int j = 0; j < m_cols; j++)
+            {
+                this->operator()(i, j) = (i == j) ? T(1) : T(0);
+            }
+        }
+    }
+
+    __host__
+    void operator+=(DeviceMatrixView<double> other);
 };
+
+

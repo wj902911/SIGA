@@ -193,7 +193,7 @@ bool Solver::solveSingleIteration()
     // reset offsets, column indices, and values pointers
     CHECK_CUSPARSE( cusparseCsrSetPointers(matB, d_csr_offsets, d_csr_columns,
                                            d_csr_values) )
-    // execute Sparse to Dense conversion
+    // execute Dense to Sparse conversion
     CHECK_CUSPARSE( cusparseDenseToSparse_convert(handle, matA, matB,
                                         CUSPARSE_DENSETOSPARSE_ALG_DEFAULT,
                                         dBuffer) )
@@ -312,22 +312,22 @@ void Solver::solve()
 std::string Solver::status()
 {
     std::string statusString;
-if (m_status == converged)
-    statusString = "Iterative solver converged after " +
-             std::to_string(m_numIterations) + " iteration(s).";
-else if (m_status == interrupted)
-    statusString = "Iterative solver was interrupted after " +
-            std::to_string(m_numIterations) + " iteration(s).";
-else if (m_status == bad_solution)
-    statusString = "Iterative solver was interrupted after " +
-            std::to_string(m_numIterations) + " iteration(s) due to an invalid solution";
-else if (m_status == working)
-    statusString = "It: " + std::to_string(m_numIterations) +
-             ", updAbs: " + to_string_sientific(m_updateNorm) +
-             ", updRel: " + to_string_sientific(m_updateNorm/m_initUpdateNorm) +
-             ", resAbs: " + to_string_sientific(m_residualNorm) +
-             ", resRel: " + to_string_sientific(m_residualNorm/m_initResidualNorm);
-return statusString;
+    if (m_status == converged)
+        statusString = "Iterative solver converged after " +
+                 std::to_string(m_numIterations) + " iteration(s).";
+    else if (m_status == interrupted)
+        statusString = "Iterative solver was interrupted after " +
+                std::to_string(m_numIterations) + " iteration(s).";
+    else if (m_status == bad_solution)
+        statusString = "Iterative solver was interrupted after " +
+                std::to_string(m_numIterations) + " iteration(s) due to an invalid solution";
+    else if (m_status == working)
+        statusString = "It: " + std::to_string(m_numIterations) +
+                 ", updAbs: " + to_string_sientific(m_updateNorm) +
+                 ", updRel: " + to_string_sientific(m_updateNorm/m_initUpdateNorm) +
+                 ", resAbs: " + to_string_sientific(m_residualNorm) +
+                 ", resRel: " + to_string_sientific(m_residualNorm/m_initResidualNorm);
+    return statusString;
 }
 
 Eigen::VectorXd Solver::solution() const

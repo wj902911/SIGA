@@ -8,9 +8,9 @@
 
 int main()
 {
-	int numRefinements = 0;
+	int numRefinements = 7;
 	double deltaDisplacement = 0.1;
-	double maxDisplacement = 0.2;
+	double maxDisplacement = 0.6;
 
 
 	int knot_u_order = 1;
@@ -81,11 +81,31 @@ int main()
 	Eigen::VectorXd bodyForce(2);
 	bodyForce << 0.0, 0.0;
 
+	std::cout << "Initializing assembler..." << std::endl;
+	auto start = std::chrono::high_resolution_clock::now();
 	GPUAssembler assembler(multiPatch, bases, bcInfo, bodyForce);
+	auto end = std::chrono::high_resolution_clock::now();
+	std::chrono::duration<double> elapsed = end - start;
+	std::cout << "Initialized assembler in " << elapsed.count() << " s." << std::endl;
 	//assembler.print();
     GPUSolver solver(assembler);
 
-	assembler.assemble(solver.solutionView(), 0, solver.allFixedDofsView());
+	std::cout << "Initialized system with " << assembler.numDofs() << " dofs." << std::endl;
 
+	int step = 1;
+	double totalDisplacement = deltaDisplacement;
+	start = std::chrono::high_resolution_clock::now();
+	while (totalDisplacement <= maxDisplacement)
+	{
+		std::cout << "Step " << step << " with displacement: " << totalDisplacement
+		<< " and step length: " << deltaDisplacement << std::endl;
+		solver.solve();
+
+		totalDisplacement += deltaDisplacement;
+		step++;
+	}
+	end = std::chrono::high_resolution_clock::now();
+	elapsed = end - start;
+	std::cout << "Solved the system in " << elapsed.count() << " s." << std::endl;
     return 0;
 }

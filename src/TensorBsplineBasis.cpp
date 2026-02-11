@@ -223,6 +223,16 @@ int TensorBsplineBasis::getNumGaussPoints(int direction) const
 	return m_knotVectors[direction].getNumGaussPoints();
 }
 
+int TensorBsplineBasis::getNumGaussPoints() const
+{
+	int totalNumGaussPoints = 1;
+	for (int d = 0; d < getDim(); ++d)
+	{
+		totalNumGaussPoints *= getNumGaussPoints(d);
+	}
+	return totalNumGaussPoints;
+}
+
 int TensorBsplineBasis::getTotalNumGaussPoints(int direction) const
 {
 	return m_knotVectors[direction].getTotalNumGaussPoints();
@@ -231,6 +241,16 @@ int TensorBsplineBasis::getTotalNumGaussPoints(int direction) const
 int TensorBsplineBasis::getNumElements(int direction) const
 {
 	return m_knotVectors[direction].getNumElements();
+}
+
+int TensorBsplineBasis::getTotalNumElements() const
+{
+	int totalNumElements = 1;
+	for (int d = 0; d < getDim(); ++d)
+	{
+		totalNumElements *= getNumElements(d);
+	}
+	return totalNumElements;
 }
 
 //void TensorBsplineBasis::getOrders(thrust::device_vector<int>& orders) const

@@ -1,4 +1,42 @@
 #include <GPUSolver.h>
+#include <cusparse.h>
+#include <cusolverSp.h>
+#include <Utility_h.h>
+
+#include <thrust/device_vector.h>
+#include <thrust/sort.h>
+#include <thrust/reduce.h>
+#include <thrust/iterator/zip_iterator.h>
+#include <thrust/tuple.h>
+
+
+#define CUSOLVER_CHECK(stat) do { \
+    cusolverStatus_t _s = (stat); \
+    if (_s != CUSOLVER_STATUS_SUCCESS) { \
+        fprintf(stderr, "cuSOLVER error %s:%d: %d\n", __FILE__, __LINE__, int(_s)); \
+        std::abort(); \
+    } \
+} while(0)
+
+#define CHECK_CUDA(func)                                                       \
+{                                                                              \
+    cudaError_t status = (func);                                               \
+    if (status != cudaSuccess) {                                               \
+        printf("CUDA API failed at line %d with error: %s (%d)\n",             \
+               __LINE__, cudaGetErrorString(status), status);                  \
+        std::abort();                                                          \
+    }                                                                          \
+}
+
+#define CHECK_CUSPARSE(func)                                                   \
+{                                                                              \
+    cusparseStatus_t status = (func);                                          \
+    if (status != CUSPARSE_STATUS_SUCCESS) {                                   \
+        printf("CUSPARSE API failed at line %d with error: %s (%d)\n",         \
+               __LINE__, cusparseGetErrorString(status), status);              \
+        std::abort();                                                          \
+    }                                                                          \
+}
 
 __global__
 void printKernel(DeviceVectorView<double> solVector,
@@ -16,8 +54,9 @@ GPUSolver::GPUSolver(GPUAssembler &assembler): m_assembler(assembler)
     Eigen::VectorXd solVector(assembler.numDofs());
     solVector.setZero();
     m_solVector = solVector;
-    fixedDoFs = assembler.allFixedDofs();
-    fixedDoFs.setZero();
+    m_deltaSolVector = solVector;
+    m_fixedDoFs = assembler.allFixedDofs();
+    m_fixedDoFs.setZero();
 }
 
 __host__
@@ -25,7 +64,202 @@ void GPUSolver::print() const
 {
     m_assembler.print();
     printKernel<<<1,1>>>(m_solVector.vectorView(), 
-                         fixedDoFs.view());
+                         m_fixedDoFs.view());
     cudaError_t err = cudaDeviceSynchronize();
     assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUSolver::print");
+}
+
+bool GPUSolver::solveSingleIteration()
+{
+	auto start = std::chrono::high_resolution_clock::now();
+    m_assembler.assemble(m_solVector.vectorView(), m_numIterations, m_fixedDoFs.view());
+    auto end = std::chrono::high_resolution_clock::now();
+    printf("Assemble time: %f seconds\n", std::chrono::duration<double>(end - start).count());
+
+    //DeviceMatrixView<double> Adev = m_assembler.matrix();
+    DeviceVectorView<double> bdev = m_assembler.rhs();
+    const int n = static_cast<int>(bdev.size());
+
+	start = std::chrono::high_resolution_clock::now();
+    // --- COO from assembler (device pointers) ---
+    auto cooR = m_assembler.rows();    // int, length nnz_coo
+    auto cooC = m_assembler.cols();    // int, length nnz_coo
+    auto cooV = m_assembler.values();  // double, length nnz_coo
+    const int nnz_coo = static_cast<int>(cooV.size());
+
+    // --- Copy to thrust vectors so we can sort/reduce (do not mutate assembler arrays) ---
+    thrust::device_vector<int>    R(cooR.data(), cooR.data() + nnz_coo);
+    thrust::device_vector<int>    C(cooC.data(), cooC.data() + nnz_coo);
+    thrust::device_vector<double> V(cooV.data(), cooV.data() + nnz_coo);
+
+    // key = (row,col)
+    auto keys_begin = thrust::make_zip_iterator(thrust::make_tuple(R.begin(), C.begin()));
+    auto keys_end   = thrust::make_zip_iterator(thrust::make_tuple(R.end(),   C.end()));
+
+    // 1) Sort by (row,col)
+    thrust::sort_by_key(keys_begin, keys_end, V.begin());
+
+    // 2) Reduce duplicates: (row,col) identical -> sum values
+    thrust::device_vector<int>    R2(nnz_coo);
+    thrust::device_vector<int>    C2(nnz_coo);
+    thrust::device_vector<double> V2(nnz_coo);
+
+    auto out_keys_begin = thrust::make_zip_iterator(thrust::make_tuple(R2.begin(), C2.begin()));
+
+    auto new_ends = thrust::reduce_by_key(
+        keys_begin, keys_end,
+        V.begin(),
+        out_keys_begin,
+        V2.begin());
+
+    // new nnz after merging duplicates
+    const int nnz = static_cast<int>(new_ends.second - V2.begin());
+
+    // --- Build CSR arrays (device malloc) ---
+    int*    d_csr_offsets = nullptr;
+    int*    d_csr_cols    = nullptr;
+    double* d_csr_vals    = nullptr;
+
+    CHECK_CUDA(cudaMalloc(&d_csr_offsets, (n + 1) * sizeof(int)));
+    CHECK_CUDA(cudaMalloc(&d_csr_cols,    nnz * sizeof(int)));
+    CHECK_CUDA(cudaMalloc(&d_csr_vals,    nnz * sizeof(double)));
+
+    // Copy reduced (col,val) into CSR col/val buffers
+    CHECK_CUDA(cudaMemcpy(d_csr_cols,
+                          thrust::raw_pointer_cast(C2.data()),
+                          nnz * sizeof(int),
+                          cudaMemcpyDeviceToDevice));
+    CHECK_CUDA(cudaMemcpy(d_csr_vals,
+                          thrust::raw_pointer_cast(V2.data()),
+                          nnz * sizeof(double),
+                          cudaMemcpyDeviceToDevice));
+
+    // COO row-indices (reduced) -> CSR row offsets
+    cusparseHandle_t cH = nullptr;
+    CHECK_CUSPARSE(cusparseCreate(&cH));
+    CHECK_CUSPARSE(cusparseXcoo2csr(
+        cH,
+        thrust::raw_pointer_cast(R2.data()),
+        nnz,
+        n,
+        d_csr_offsets,
+        CUSPARSE_INDEX_BASE_ZERO));
+    auto mid = std::chrono::high_resolution_clock::now();
+    printf("COO->CSR conversion time: %f seconds\n", std::chrono::duration<double>(mid - start).count());
+    
+    // --- Solve Ax=b from CSR ---
+    cusolverSpHandle_t sH = nullptr;
+    CUSOLVER_CHECK(cusolverSpCreate(&sH));
+
+    cusparseMatDescr_t descrA = nullptr;
+    CHECK_CUSPARSE(cusparseCreateMatDescr(&descrA));
+
+    // IMPORTANT for csrlsvchol:
+    CHECK_CUSPARSE(cusparseSetMatType(descrA, CUSPARSE_MATRIX_TYPE_GENERAL)); // <- change this
+    CHECK_CUSPARSE(cusparseSetMatIndexBase(descrA, CUSPARSE_INDEX_BASE_ZERO));
+
+    // Optional (usually fine to set; solver uses one triangle)
+    CHECK_CUSPARSE(cusparseSetMatFillMode(descrA, CUSPARSE_FILL_MODE_LOWER));
+    CHECK_CUSPARSE(cusparseSetMatDiagType(descrA, CUSPARSE_DIAG_TYPE_NON_UNIT));
+
+    const double tol = 1e-12;
+    const int reorder = 1;
+    int singularity = -1;
+
+    CUSOLVER_CHECK(cusolverSpDcsrlsvchol(
+        sH, n, nnz,
+        descrA,
+        d_csr_vals,
+        d_csr_offsets,
+        d_csr_cols,
+        bdev.data(),
+        tol,
+        reorder,
+        m_deltaSolVector.data(),
+        &singularity
+    ));
+
+    if (singularity >= 0)
+        printf("WARNING: matrix is singular at row %d under tol %E\n", singularity, tol);
+    end = std::chrono::high_resolution_clock::now();
+    printf("Linear solve time: %f seconds\n", std::chrono::duration<double>(end - mid).count());
+    m_updateNorm = m_deltaSolVector.vectorView().norm();
+    m_residualNorm = bdev.norm();
+    m_solVector.vectorView() += m_deltaSolVector.vectorView();
+    CHECK_CUDA (cudaMemset(m_deltaSolVector.data(), 0, m_deltaSolVector.size() * sizeof(double)) );
+    //std::cout << "Solution after iteration " << m_numIterations << ":\n";
+    //m_solVector.vectorView().print();
+    if (m_numIterations == 0)
+    {
+        m_initResidualNorm = m_residualNorm;
+        m_initUpdateNorm = m_updateNorm;
+    }
+
+    CHECK_CUSPARSE(cusparseDestroyMatDescr(descrA));
+    CUSOLVER_CHECK(cusolverSpDestroy(sH));
+    CHECK_CUSPARSE(cusparseDestroy(cH));
+
+    CHECK_CUDA(cudaFree(d_csr_offsets));
+    CHECK_CUDA(cudaFree(d_csr_cols));
+    CHECK_CUDA(cudaFree(d_csr_vals));
+
+    return true;    
+}
+
+void GPUSolver::solve()
+{
+    double absTol = 1e-10;
+    double relTol = 1e-9;
+    int maxIterations = 50;
+    m_numIterations = 0;
+    m_status = working;
+    std::cout << std::scientific;
+    while (m_status == working)
+    {
+        if(!solveSingleIteration())
+        {
+            m_status = bad_solution;
+            break;
+        }
+        std::cout << status() << std::endl;
+        if (m_residualNorm < absTol || 
+            m_updateNorm < absTol || 
+            m_residualNorm/m_initResidualNorm < relTol ||
+            m_updateNorm/m_initUpdateNorm < relTol)
+            m_status = converged;
+        else if (m_numIterations >= maxIterations)
+            m_status = interrupted;
+        if (m_numIterations == 0)
+        {
+            m_fixedDoFs.view().wholeView() += m_assembler.allFixedDofs().view().wholeView();
+
+            //std::cout << "Initial fixed DoFs after first iteration:\n";
+            //m_fixedDoFs.view().wholeView().print();
+        }
+            
+        m_numIterations++;
+    }
+
+    std::cout << status() << std::endl;
+}
+
+std::string GPUSolver::status()
+{
+    std::string statusString;
+    if (m_status == converged)
+        statusString = "Iterative solver converged after " +
+                 std::to_string(m_numIterations) + " iteration(s).";
+    else if (m_status == interrupted)
+        statusString = "Iterative solver was interrupted after " +
+                std::to_string(m_numIterations) + " iteration(s).";
+    else if (m_status == bad_solution)
+        statusString = "Iterative solver was interrupted after " +
+                std::to_string(m_numIterations) + " iteration(s) due to an invalid solution";
+    else if (m_status == working)
+        statusString = "It: " + std::to_string(m_numIterations + 1) +
+                 ", updAbs: " + to_string_sientific(m_updateNorm) +
+                 ", updRel: " + to_string_sientific(m_updateNorm/m_initUpdateNorm) +
+                 ", resAbs: " + to_string_sientific(m_residualNorm) +
+                 ", resRel: " + to_string_sientific(m_residualNorm/m_initResidualNorm);
+    return statusString;
 }

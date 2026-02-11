@@ -102,11 +102,43 @@ public:
 		return m_controlPoints(activeIndex, c);
 	}
 
+    __device__
+	void jacobian(DeviceVectorView<double> pt,
+                  DeviceMatrixView<double> basisValuesAndDers,
+                  int numDerivatives,
+				  DeviceMatrixView<double> result) const
+    {
+		int dim = m_basis.dim();
+		int P = m_basis.knotsOrder(0); //assume same order in all directions
+        int numActiveCPs = m_basis.numActiveControlPoints();
+        for (int r = 0; r < numActiveCPs; r++)
+		{
+            int tensorCoordData[3]; //max 3D
+			DeviceVectorView<int> tensorCoord(tensorCoordData, m_basis.dim());
+			getTensorCoordinate(dim, P+1, r, tensorCoordData);
+			for (int j = 0; j < dim; j++)
+			{
+                double dN_rj = 1.0;
+                for (int d = 0; d < dim; d++)
+				{
+					// DeviceMatrixView<double> oneDimGeoValuesAndDers(
+					//	valuesAndDersData+(P+1)*(numDerivatives+1)*d, P+1, numDerivatives+1);
+					if (d == j)
+						dN_rj *= basisValuesAndDers(tensorCoord[d], (numDerivatives + 1)* d + 1);
+					else
+						dN_rj *= basisValuesAndDers(tensorCoord[d], (numDerivatives + 1) * d);
+				}
+                for (int i = 0; i < dim; i++)
+					result(i, j) += activeControlPointComponent(pt, r, i) * dN_rj;
+			}
+		}
+    }
+
 	__device__
 	void jacobian(DeviceVectorView<double> pt,
-				  DeviceMatrixView<double> jacobian) const
+                  int numDerivatives,
+				  DeviceMatrixView<double> result) const
 	{
-		int numDerivatives = 1;
 		int P = m_basis.knotsOrder(0); //assume same order in all directions
 		int dim = m_basis.dim();
 		double valuesAndDersData[5*2*3]; //max 4th order, 3D, first derivatives
@@ -114,6 +146,9 @@ public:
 		                                            P+1, 
 		                                            (numDerivatives+1)*domainDim());
 		m_basis.evalAllDers_into(pt, numDerivatives, basisValuesAndDers);
+#if 1
+        jacobian(pt, basisValuesAndDers, numDerivatives, result);
+#else
 		int numActiveCPs = m_basis.numActiveControlPoints();
         for (int r = 0; r < numActiveCPs; r++)
 		{
@@ -133,8 +168,9 @@ public:
 						dN_rj *= oneDimGeoValuesAndDers(tensorCoord[d], 0);
 				}
                 for (int i = 0; i < dim; i++)
-					jacobian(i, j) += activeControlPointComponent(pt, r, i) * dN_rj;
+					result(i, j) += activeControlPointComponent(pt, r, i) * dN_rj;
 			}
 		}
+#endif
 	}
 };

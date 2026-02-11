@@ -102,6 +102,16 @@ public:
 
     __device__
     int size() const { return m_offsets.size(); }
+
+    __host__ __device__
+    int totalSize() const { return DeviceArrayView<T>::size(); }
+
+    __host__
+    void operator+=(DeviceNestedArrayView<double> other);
+
+    __host__
+    DeviceVectorView<T> wholeView() const
+    { return DeviceVectorView<T>(this->data(), DeviceArrayView<T>::size()); }
 };
 
 template <typename T>
@@ -114,7 +124,21 @@ private:
 public:
     __host__ __device__
     DeviceArray() = default;
-    
+
+    __host__
+    DeviceArray(int size) : m_size(size)
+    {
+        if (size > 0)
+        {
+            cudaError_t err = cudaMalloc(&m_data, size * sizeof(T));
+            assert(err == cudaSuccess && "cudaMalloc failed in DeviceArray constructor");
+            err = cudaMemset(m_data, 0, size * sizeof(T));
+            assert(err == cudaSuccess && "cudaMemset failed in DeviceArray constructor");
+        }
+        else
+            m_data = nullptr;
+    }
+
     __host__
     DeviceArray(T* data, int size) : m_size(size)
     {
@@ -274,6 +298,26 @@ public:
             cudaError_t err = cudaMemset(m_data, 0, m_size * sizeof(T));
             assert(err == cudaSuccess);
         }
+    }
+
+    __host__
+    void resize(int newSize)
+    {
+        if (m_data)
+        {
+            cudaError_t err = cudaFree(m_data);
+            assert(err == cudaSuccess && "cudaFree failed in DeviceArray resize");
+        }
+        m_size = newSize;
+        if (m_size > 0)
+        {
+            cudaError_t err = cudaMalloc(&m_data, m_size * sizeof(T));
+            assert(err == cudaSuccess && "cudaMalloc failed in DeviceArray resize");
+            err = cudaMemset(m_data, 0, m_size * sizeof(T));
+            assert(err == cudaSuccess && "cudaMemset failed in DeviceArray resize");
+        }
+        else
+            m_data = nullptr;
     }
 };
 

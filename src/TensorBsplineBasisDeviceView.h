@@ -81,6 +81,15 @@ public:
     }
 
     __device__
+    int numGPsInElement() const 
+    { 
+        int numGPs = 1;
+        for (int d = 0; d < m_dim; d++)
+            numGPs *= knotVector(d).numGaussPoints();
+        return numGPs;
+    }
+
+    __device__
     int totalNumGPsInDir(int d) const { return knotVector(d).totalNumGaussPoints(); }
 
     __device__
@@ -92,6 +101,19 @@ public:
             numGPS *= totalNumGPsInDir(d);
 
         return numGPS;
+    }
+
+    __device__
+    int numElementsInDir(int d) const { return knotVector(d).numElements(); }
+    __device__
+    int totalNumElements() const
+    {
+        int numElems = 1;
+
+        for (int d = 0; d < m_dim; d++)
+            numElems *= numElementsInDir(d);
+
+        return numElems;
     }
 
     __device__

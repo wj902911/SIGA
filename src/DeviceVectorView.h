@@ -39,6 +39,18 @@ public:
     __device__
     T back() const
     { return DeviceMatrixView<T>::operator()(this->size() - 1, 0); }
+
+    __device__
+    T dot(const DeviceVectorView<T>& other) const
+    {
+        T result = T(0);
+        for (int i = 0; i < this->size(); i++)
+            result += (*this)(i) * other(i);
+        return result;
+    }
+
+    __host__
+    double norm() const;
 };
 
 

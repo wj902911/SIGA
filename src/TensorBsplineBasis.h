@@ -55,8 +55,10 @@ public:
 	//const thrust::device_vector<double>& getKnots(int direction) const;
 	const std::vector<double>& getKnots(int direction) const;
 	int getNumGaussPoints(int direction) const;
+	int getNumGaussPoints() const;
 	int getTotalNumGaussPoints(int direction) const;
 	int getNumElements(int direction) const;
+	int getTotalNumElements() const;
 
 	//void getOrders(thrust::device_vector<int>& orders) const;
 	void getOrders(std::vector<int>& orders) const;

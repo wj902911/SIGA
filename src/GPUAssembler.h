@@ -11,6 +11,7 @@ class GPUAssembler
 private:
     MultiPatchDeviceData m_multiPatch;
     MultiPatchDeviceData m_displacement;
+    MultiPatch m_displacementHost;
     const MultiPatch& m_multiPatchHost;
     MultiBasisDeviceData m_multiBasis;
     const MultiBasis& m_multiBasisHost;
@@ -18,6 +19,7 @@ private:
     DeviceNestedArray<double> m_ddof;
     DeviceNestedArray<double> m_ddof_zero;
     SparseSystemDeviceData m_sparseSystem;
+    //SparseSystem m_sparseSystemHost;
     DeviceArray<double> m_bodyForce;
     MultiGaussPointsDeviceData m_multiGaussPoints;
     bool m_initialAssemble = true;
@@ -53,4 +55,33 @@ public:
     void assemble(const DeviceVectorView<double>& solVector, int numIter,
                   const DeviceNestedArrayView<double>& fixedDoFs);
 
+    //__host__
+    //DeviceMatrixView<double> matrix() const
+    //{ return m_sparseSystem.deviceView().matrix(); }
+
+    __host__
+    DeviceVectorView<double> rhs() const
+    { return m_sparseSystem.deviceView().rhs(); }
+
+    __host__
+    DeviceVectorView<int> rows() const
+    { return m_sparseSystem.deviceView().rows(); }
+
+    __host__
+    DeviceVectorView<int> cols() const
+    { return m_sparseSystem.deviceView().cols(); }
+
+    __host__
+    DeviceVectorView<double> values() const
+    { return m_sparseSystem.deviceView().values(); }    
+#if 0
+    __host__
+    int numDofs() const
+    {
+        int sum = 0;
+        for (int c = 0; c < m_sparseSystemHost.numColBlocks(); c++)
+            sum += m_sparseSystemHost.colMapper(c).freeSize();
+        return sum;
+    }
+#endif
 };

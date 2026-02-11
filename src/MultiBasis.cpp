@@ -70,6 +70,11 @@ void MultiBasis::matchInterface(const BoundaryInterface &bi, DofMapper &mapper) 
         mapper.matchDofs(bi.first().patchIndex(), b1, bi.second().patchIndex(), b2, i );
 }
 
+int MultiBasis::numGPs() const
+{
+    return m_bases[0].getNumGaussPoints();
+}
+
 int MultiBasis::totalNumGPs() const
 {
     int totalNumGaussPoints = 0;
@@ -88,6 +93,16 @@ int MultiBasis::totalNumBdGPs() const
         totalNumBoundaryGaussPoints += m_bases[i].getTotalNumBoundaryGaussPoints();
     }
     return totalNumBoundaryGaussPoints;
+}
+
+int MultiBasis::totalNumElements() const
+{
+    int totalNumElements = 0;
+    for (int i = 0; i < m_bases.size(); i++)
+    {
+        totalNumElements += m_bases[i].getTotalNumElements();
+    }
+    return totalNumElements;
 }
 
 int MultiBasis::totalNumGPsOnBdries(const std::deque<boundary_condition> &bcs) const

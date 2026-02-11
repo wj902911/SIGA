@@ -73,4 +73,15 @@ public:
     __device__
     int bindex(int i, int k = 0, int c = 0) const
     { return MAPPER_PATCH_DOF2(i, k) - m_numFreeDofs.back() + m_bshift; }
+
+    __device__
+    int globalIndex(int localIndex, int patchIndex, int comp = 0) const
+    { return index(localIndex, patchIndex, comp); }
+
+    __device__
+    int global_to_bindex(int gl) const
+    {
+        assert(!is_free_index(gl) && "DofMapperDeviceView::global_to_bindex() called with free dof");
+        return gl - m_numFreeDofs.back() + m_bshift - m_shift;
+    }
 };

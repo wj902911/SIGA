@@ -4,6 +4,7 @@
 #include <thrust/device_vector.h>
 //#include <DeviceVector.h>
 //#include "Matrix.h"
+#include <DeviceVectorView.h>
 
 template <typename T>
 class DeviceMatrix;
@@ -286,11 +287,34 @@ inline void matrixTraceTensor(DeviceMatrix<T> &C, const DeviceMatrix<T> &R, cons
 
 template <class T>
 __device__
+inline void matrixViewTraceTensor(DeviceMatrixView<T> &C, const DeviceMatrixView<T> &R, const DeviceMatrixView<T> &S)
+{
+    int dim = R.cols();
+    int dimTensor = (dim * (dim + 1)) / 2;
+    for (int i = 0; i < dimTensor; i++)
+        for (int j = 0; j < dimTensor; j++)
+            C(i, j) = R(voigt(dim, i, 0), voigt(dim, i, 1)) * S(voigt(dim, j, 0), voigt(dim, j, 1));
+}
+
+template <class T>
+__device__
 inline void symmetricIdentityTensor(DeviceMatrix<T> &C, const DeviceMatrix<T> &R)
 {
     int dim = R.cols();
     int dimTensor = (dim * (dim + 1)) / 2;
     C.setZero(dimTensor,dimTensor);
+    for (int i = 0; i < dimTensor; i++)
+        for (int j = 0; j < dimTensor; j++)
+            C(i, j) = (R(voigt(dim, i, 0), voigt(dim, j, 0)) * R(voigt(dim, i, 1), voigt(dim, j, 1))
+                           + R(voigt(dim, i, 0), voigt(dim, j, 1)) * R(voigt(dim, i, 1), voigt(dim, j, 0)));
+}
+
+template <class T>
+__device__
+inline void symmetricIdentityViewTensor(DeviceMatrixView<T> &C, const DeviceMatrixView<T> &R)
+{
+    int dim = R.cols();
+    int dimTensor = (dim * (dim + 1)) / 2;
     for (int i = 0; i < dimTensor; i++)
         for (int j = 0; j < dimTensor; j++)
             C(i, j) = (R(voigt(dim, i, 0), voigt(dim, j, 0)) * R(voigt(dim, i, 1), voigt(dim, j, 1))
@@ -322,11 +346,39 @@ inline void setB(DeviceMatrix<T>& B, const DeviceMatrix<T>& F, const DeviceVecto
 
 template <class T>
 __device__
+inline void setBSingleDim(int dir, DeviceVectorView<T> B, DeviceMatrixView<T> F, DeviceVectorView<T> bGrad)
+{
+    int dim = F.cols();
+    int dimTensor = (dim * (dim + 1)) / 2;
+    for (int i = 0; i < dim; i++)
+        B(i) = F(dir,i) * bGrad(i);
+    if (dim == 2)
+        B(2) = F(dir,0) * bGrad(1) + F(dir,1) * bGrad(0);
+    if (dim == 3)
+        for (int i = 0; i < dim; i++)
+        {
+            int k = (i+1)%3;
+            B(i+dim) = F(dir,i) * bGrad(k) + F(dir,k) * bGrad(i);
+        }
+}
+
+template <class T>
+__device__
 inline void voigtStress(DeviceVector<T>& Svec, const DeviceMatrix<T>& S)
 {
     int dim = S.cols();
     int dimTensor = (dim * (dim + 1)) / 2;
     Svec.setZero(dimTensor);
+    for (int i = 0; i < dimTensor; i++)
+        Svec(i) = S(voigt(dim, i, 0), voigt(dim, i, 1));
+}
+
+template <class T>
+__device__
+inline void voigtStressView(DeviceVectorView<T> Svec, DeviceMatrixView<T> S)
+{
+    int dim = S.cols();
+    int dimTensor = (dim * (dim + 1)) / 2;
     for (int i = 0; i < dimTensor; i++)
         Svec(i) = S(voigt(dim, i, 0), voigt(dim, i, 1));
 }

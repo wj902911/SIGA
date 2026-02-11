@@ -166,6 +166,7 @@ public:
         int point_idx_patch = idx;
         int point_idx_dof = idx;
         int total_points = totalNumControlPoints();
+        //printf("total_points %d\n", total_points);
         for (int d = 0; d < dim; d++)
         {
             if (point_idx_dof < total_points)
@@ -209,6 +210,24 @@ public:
         }
         return point_idx;
     }
+
+    __device__
+    int threadPatch_element(int idx, int& patch_idx) const
+    {
+        int point_idx = idx;
+        for (int i = 0; i < m_numPatches; i++)
+        {
+            int patch_elements = patch(i).basis().totalNumElements();
+            if (point_idx < patch_elements) 
+            {
+                patch_idx = i;
+                break;
+            }
+            point_idx -= patch_elements;
+        }
+        return point_idx;
+    }
+
 
     __device__
     double gsPoint(int idx, int patch_idx, GaussPointsDeviceView gps,

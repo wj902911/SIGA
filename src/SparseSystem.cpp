@@ -34,12 +34,18 @@ SparseSystem::SparseSystem(std::vector<DofMapper> &mappers, const Eigen::VectorX
     for (int c = 1; c < d; ++c)
         m_cstr[c] = int(m_cstr[c-1]) + mappers[m_col[c-1]].freeSize(); // Use the original mappers to get freeSize
 
+#ifdef STORE_MATRIX
     m_matrix.setZero(int(m_rstr[d-1]) + mappers[m_row[d-1]].freeSize(),
                     int(m_cstr[d-1]) + mappers[m_col[d-1]].freeSize());
                     
     m_RHS.setZero(m_matrix.rows());
+#else
+    m_matrixRows = int(m_rstr[d-1]) + mappers[m_row[d-1]].freeSize();
+    m_matrixCols = int(m_cstr[d-1]) + mappers[m_col[d-1]].freeSize();
+#endif
 }
 
+#ifdef STORE_MATRIX
 void SparseSystem::getDataVector(std::vector<int>& intDataOffsets, 
                                  std::vector<int> &data_int, 
                                  std::vector<double> &data_double) const
@@ -146,3 +152,40 @@ void SparseSystem::getDataVector(std::vector<int>& intDataOffsets,
     data_double.insert(data_double.end(), m_RHS.data(), m_RHS.data() + m_RHS.size());
 #endif
 }
+#else
+void SparseSystem::getDataVector(std::vector<int>& intDataOffsets, 
+                                 std::vector<int> &data_int) const
+{
+    intDataOffsets.clear();
+    data_int.clear();
+
+    intDataOffsets.reserve(8);
+    intDataOffsets.push_back(0);
+    int mappersSize = 0;
+    for (const auto &mapper : m_mappers)
+    {
+        mappersSize += mapper.getDataSize();
+    }
+    intDataOffsets.push_back(intDataOffsets.back() + mappersSize);
+    intDataOffsets.push_back(intDataOffsets.back() + m_row.size());
+    intDataOffsets.push_back(intDataOffsets.back() + m_col.size());
+    intDataOffsets.push_back(intDataOffsets.back() + m_rstr.size());
+    intDataOffsets.push_back(intDataOffsets.back() + m_cstr.size());
+    intDataOffsets.push_back(intDataOffsets.back() + m_cvar.size());
+    intDataOffsets.push_back(intDataOffsets.back() + m_dims.size()); 
+
+    data_int.reserve(intDataOffsets.back());
+    for (const auto &mapper : m_mappers)
+    {
+        std::vector<int> mapper_data;
+        mapper.getDofMapperDataVec(mapper_data);
+        data_int.insert(data_int.end(), mapper_data.begin(), mapper_data.end());
+    }
+    data_int.insert(data_int.end(), m_row.data(), m_row.data() + m_row.size());
+    data_int.insert(data_int.end(), m_col.data(), m_col.data() + m_col.size());
+    data_int.insert(data_int.end(), m_rstr.data(), m_rstr.data() + m_rstr.size());
+    data_int.insert(data_int.end(), m_cstr.data(), m_cstr.data() + m_cstr.size());
+    data_int.insert(data_int.end(), m_cvar.data(), m_cvar.data() + m_cvar.size());
+    data_int.insert(data_int.end(), m_dims.data(), m_dims.data() + m_dims.size()); 
+}
+#endif

@@ -12,13 +12,14 @@ class GPUSolver
 private:
     GPUAssembler& m_assembler;
     DeviceArray<double> m_solVector;
+    DeviceArray<double> m_deltaSolVector;
     solver_status m_status;
     double m_residualNorm = 0.0;
     double m_initResidualNorm = 0.0;
     double m_updateNorm = 0.0;
     double m_initUpdateNorm = 0.0;
     int m_numIterations = 0;
-    DeviceNestedArray<double> fixedDoFs;
+    DeviceNestedArray<double> m_fixedDoFs;
 
 public:
     __host__
@@ -29,10 +30,13 @@ public:
 
     __host__
     DeviceNestedArrayView<double> allFixedDofsView() const
-    { return fixedDoFs.view(); }
+    { return m_fixedDoFs.view(); }
 
     __host__
     DeviceVectorView<double> solutionView() const
     { return DeviceVectorView<double>(m_solVector.data(), m_solVector.size()); }
 
+    bool solveSingleIteration();
+    void solve();
+    std::string status();
 };

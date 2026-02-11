@@ -36,8 +36,10 @@ public:
 
     void matchInterface(const BoundaryInterface & bi, DofMapper & mapper) const;
 
+    int numGPs() const;
     int totalNumGPs() const;
     int totalNumBdGPs() const;
+    int totalNumElements() const;
 
     int totalNumGPsOnBdries(const std::deque<boundary_condition>& bcs) const;
 

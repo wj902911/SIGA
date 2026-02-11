@@ -76,7 +76,7 @@ public:
                    const DeviceObjectArray<DeviceVector<int>>& actives_vec, 
                    const DeviceVector<int>& r_vec)
     {
-    int rstrLocal = 0;
+        int rstrLocal = 0;
         for (int r_ind = 0; r_ind != r_vec.size(); r_ind++)
         {
             int r = r_vec(r_ind);
