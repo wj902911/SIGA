@@ -84,4 +84,29 @@ public:
         return sum;
     }
 #endif
+    __host__
+    const MultiPatchDeviceData& geometryData() const { return m_multiPatch; }
+
+    __host__
+    const MultiBasis& basisHost() const { return m_multiBasisHost; }
+
+    __host__
+    const MultiPatch& geometryHost() const { return m_multiPatchHost; }
+
+    __host__
+    const MultiPatchDeviceView geometryView() const
+    { return m_multiPatch.deviceView(); }
+
+    __host__
+    const MultiGaussPointsDeviceView gaussPointsView() const
+    { return m_multiGaussPoints.view(); }
+
+    __host__
+    int numPatches() const { return m_multiPatch.numPatches(); }
+
+    __host__
+    int domainDim() const { return m_multiPatch.domainDim(); }
+
+    __host__
+    int targetDim() const { return m_multiPatch.targetDim(); }
 };

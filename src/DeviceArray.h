@@ -292,6 +292,13 @@ public:
     { return DeviceVectorView<T>(m_data, m_size); }
 
     __host__
+    DeviceMatrixView<T> matrixView(int rows, int cols) const 
+    { 
+        assert(rows * cols == m_size && "Size mismatch in DeviceArray matrixView");
+        return DeviceMatrixView<T>(m_data, rows, cols); 
+    }
+
+    __host__
     void setZero()
     {
         if (m_data && m_size > 0) {
@@ -318,6 +325,27 @@ public:
         }
         else
             m_data = nullptr;
+    }
+
+    __host__
+    void copyToHost(std::vector<T>& hostVec) const
+    {
+        hostVec.resize(m_size);
+        if (m_size > 0)
+        {
+            cudaError_t err = cudaMemcpy(hostVec.data(), m_data, m_size * sizeof(T), cudaMemcpyDeviceToHost);
+            assert(err == cudaSuccess && "cudaMemcpy failed in DeviceArray copyToHost");
+        }
+    }
+
+    __host__
+    void copyToHost(T* hostVec) const
+    {
+        if (m_size > 0)
+        {
+            cudaError_t err = cudaMemcpy(hostVec, m_data, m_size * sizeof(T), cudaMemcpyDeviceToHost);
+            assert(err == cudaSuccess && "cudaMemcpy failed in DeviceArray copyToHost");
+        }
     }
 };
 

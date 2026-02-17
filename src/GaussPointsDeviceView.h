@@ -57,4 +57,23 @@ public:
         }
         return weight * hprod;
     }
+    
+    __device__
+    double threadGaussPoint(int d, double lower, double upper,
+                            int coord, double& gausspt) const
+    {
+        if (d < 0 || d >= m_dim)
+        {
+            assert("threadGaussPoint: dimension out of range");
+            return 0.0;
+        }
+        gausspt = m_gaussPoints[d][coord];
+        //printf("Gauss pt before mapping: %f\n", gausspt);
+        double weight = m_gaussWeights[d][coord];
+        double h = (upper - lower) / 2.0;
+        //printf("h: %f\n", h);
+        gausspt = h * (gausspt + 1.0) + lower;
+        //printf("Mapped gauss pt: %f\n", gausspt);
+        return weight * (h == 0.0 ? 0.5 : h);
+    }
 };

@@ -5,12 +5,30 @@
 #include <KnotVectorDeviceView.h>
 #include <Eigen/Core>
 #include <GPUSolver.h>
+#include <GPUPostProcessor.h>
+#include <filesystem>
+
+__global__
+void printKernel(MultiPatchDeviceView displacement)
+{
+	displacement.print();
+}
 
 int main()
 {
-	int numRefinements = 7;
+	int numRefinements = 1;
 	double deltaDisplacement = 0.1;
 	double maxDisplacement = 0.6;
+	std::vector<int> numPointsPerPatch{ 10000, 10000 };
+
+	if (!std::filesystem::exists("./TwoPatchesTest"))
+		std::filesystem::create_directory("./TwoPatchesTest");
+	std::string filenameParaview = "TwoPatchesTest_";
+	std::string outputFolder = "./TwoPatchesTest/" + filenameParaview + "output";
+	if (!std::filesystem::exists(outputFolder))
+		std::filesystem::create_directory(outputFolder);
+	std::string fileNameWithPath = outputFolder + "/" + filenameParaview;
+	ParaviewCollection collection(fileNameWithPath);
 
 
 	int knot_u_order = 1;
@@ -90,6 +108,35 @@ int main()
 	//assembler.print();
     GPUSolver solver(assembler);
 
+	std::cout << "Initializing post-processor..." << std::endl;
+	start = std::chrono::high_resolution_clock::now();
+	GPUPostProcessor postProcessor(assembler, numPointsPerPatch);
+	end = std::chrono::high_resolution_clock::now();
+	elapsed = end - start;
+	std::cout << "Initialized post-processor in " << elapsed.count() << " s." << std::endl;
+
+	MultiPatch displacementHost;
+	bases.giveBasis(displacementHost, 2);
+	MultiPatchDeviceData displacementDeviceData(displacementHost);
+	//assembler.constructSolution(solver.solutionView(), 
+	//                            solver.allFixedDofsView(), 
+	//							displacementDeviceData.deviceView());
+
+	
+
+	GPUDisplacementFunction displacementFunction(displacementDeviceData.deviceView());
+
+	//printKernel<<<1, 1>>>(displacementFunction.displacementDeviceView());
+	//cudaDeviceSynchronize();
+
+	postProcessor.addFunction("displacement", &displacementFunction);
+	collection.initalize();
+	start = std::chrono::high_resolution_clock::now();
+	postProcessor.outputToParaview(fileNameWithPath, 0, collection);
+	end = std::chrono::high_resolution_clock::now();
+	elapsed = end - start;
+	std::cout << "Output initial geometry in " << elapsed.count() << " s." << std::endl;
+
 	std::cout << "Initialized system with " << assembler.numDofs() << " dofs." << std::endl;
 
 	int step = 1;
@@ -101,9 +148,20 @@ int main()
 		<< " and step length: " << deltaDisplacement << std::endl;
 		solver.solve();
 
+		assembler.constructSolution(solver.solutionView(),
+			solver.allFixedDofsView(),
+			displacementDeviceData.deviceView());
+		start = std::chrono::high_resolution_clock::now();
+		postProcessor.outputToParaview(fileNameWithPath, step, collection);
+		end = std::chrono::high_resolution_clock::now();
+		elapsed = end - start;
+		std::cout << "Output deformed geometry in " << elapsed.count() << " s." << std::endl;
+
 		totalDisplacement += deltaDisplacement;
 		step++;
 	}
+	collection.save();
+
 	end = std::chrono::high_resolution_clock::now();
 	elapsed = end - start;
 	std::cout << "Solved the system in " << elapsed.count() << " s." << std::endl;

@@ -228,9 +228,82 @@ public:
         return point_idx;
     }
 
-
     __device__
     double gsPoint(int idx, int patch_idx, GaussPointsDeviceView gps,
                    DeviceVectorView<double> result) const
     { return patch(patch_idx).basis().gsPoint(idx, gps, result); }
+
+    __host__
+    void patchLengthes(DeviceVectorView<double> lengths) const;
+
+    __host__
+    void edgeLengthes(DeviceVectorView<double> lengths) const;
+
+    __device__
+    int totalNumBdGPs() const
+    {
+        int totalNumBdGPs = 0;
+        for (int i = 0; i < m_numPatches; i++)
+        {
+            totalNumBdGPs += totalNumBdGPsInPatch(i);
+        }
+        return totalNumBdGPs;
+    }
+
+    __device__
+    int totalNumBdGPsInPatch(int patch) const
+    { return basis(patch).totalNumBdGPs(); }
+
+    __device__
+    int threadPatch_edge(int idx, int& patch) const
+    {
+        int point_idx = idx;
+        for (int i = 0; i < m_numPatches; i++)
+        {
+            int patch_points = totalNumBdGPsInPatch(i);
+            if (point_idx < patch_points) 
+            {
+                patch = i;
+                break;
+            }
+            point_idx -= patch_points;
+        }
+        return point_idx;
+    }
+
+    __device__
+    int threadEdgeDir(int idx, int patch, int& dir) const
+    {
+        int point_idx = idx;
+        int dim = m_targetDim;
+        for (int d = 0; d < dim; d++)
+        {
+            int dir_points = basis(patch).totalNumBdGPsInDir(d);
+            if (point_idx < dir_points) 
+            {
+                dir = d;
+                break;
+            }
+            point_idx -= dir_points;
+        }
+        return point_idx;
+    }
+
+    __device__
+    int threadEdge(int idx, int patch, int dir, int& edge) const
+    {
+        int point_idx = idx;
+        int numEdges = basis(patch).numEdgesInEachDir();
+        for (int e = 0; e < numEdges; e++)
+        {
+            int edge_points = basis(patch).totalNumGPsInDir(dir);
+            if (point_idx < edge_points) 
+            {
+                edge = e + dir * numEdges;
+                break;
+            }
+            point_idx -= edge_points;
+        }
+        return point_idx;
+    }
 };

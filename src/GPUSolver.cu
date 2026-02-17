@@ -1,6 +1,7 @@
 #include <GPUSolver.h>
 #include <cusparse.h>
 #include <cusolverSp.h>
+//#include <cudss.h>
 #include <Utility_h.h>
 
 #include <thrust/device_vector.h>
@@ -8,6 +9,9 @@
 #include <thrust/reduce.h>
 #include <thrust/iterator/zip_iterator.h>
 #include <thrust/tuple.h>
+
+#include <Eigen/Sparse>
+#include <Eigen/SparseCholesky>
 
 
 #define CUSOLVER_CHECK(stat) do { \
@@ -206,6 +210,146 @@ bool GPUSolver::solveSingleIteration()
     return true;    
 }
 
+bool GPUSolver::solveSingleIteration_Eigen()
+{
+    auto start = std::chrono::high_resolution_clock::now();
+    m_assembler.assemble(m_solVector.vectorView(), m_numIterations, m_fixedDoFs.view());
+    auto end = std::chrono::high_resolution_clock::now();
+    printf("Assemble time: %f seconds\n", std::chrono::duration<double>(end - start).count());
+
+    DeviceVectorView<double> bdev = m_assembler.rhs();
+    const int n = static_cast<int>(bdev.size());
+
+    start = std::chrono::high_resolution_clock::now();
+
+    // --- COO from assembler (device pointers) ---
+    auto cooR = m_assembler.rows();
+    auto cooC = m_assembler.cols();
+    auto cooV = m_assembler.values();
+    const int nnz_coo = static_cast<int>(cooV.size());
+
+    // --- Copy to thrust vectors so we can sort/reduce (do not mutate assembler arrays) ---
+    thrust::device_vector<int>    R(cooR.data(), cooR.data() + nnz_coo);
+    thrust::device_vector<int>    C(cooC.data(), cooC.data() + nnz_coo);
+    thrust::device_vector<double> V(cooV.data(), cooV.data() + nnz_coo);
+
+    auto keys_begin = thrust::make_zip_iterator(thrust::make_tuple(R.begin(), C.begin()));
+    auto keys_end   = thrust::make_zip_iterator(thrust::make_tuple(R.end(),   C.end()));
+
+    thrust::sort_by_key(keys_begin, keys_end, V.begin());
+
+    thrust::device_vector<int>    R2(nnz_coo);
+    thrust::device_vector<int>    C2(nnz_coo);
+    thrust::device_vector<double> V2(nnz_coo);
+
+    auto out_keys_begin = thrust::make_zip_iterator(thrust::make_tuple(R2.begin(), C2.begin()));
+
+    auto new_ends = thrust::reduce_by_key(
+        keys_begin, keys_end,
+        V.begin(),
+        out_keys_begin,
+        V2.begin());
+
+    const int nnz = static_cast<int>(new_ends.second - V2.begin());
+
+    auto mid = std::chrono::high_resolution_clock::now();
+    printf("COO sort+reduce time: %f seconds\n", std::chrono::duration<double>(mid - start).count());
+
+    // ============================================================
+    //  Move reduced COO + RHS to host (CPU) for Eigen
+    // ============================================================
+
+    // Copy reduced COO to host
+    std::vector<int>    hR(nnz);
+    std::vector<int>    hC(nnz);
+    std::vector<double> hV(nnz);
+
+    CHECK_CUDA(cudaMemcpy(hR.data(),
+                          thrust::raw_pointer_cast(R2.data()),
+                          nnz * sizeof(int),
+                          cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(hC.data(),
+                          thrust::raw_pointer_cast(C2.data()),
+                          nnz * sizeof(int),
+                          cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(hV.data(),
+                          thrust::raw_pointer_cast(V2.data()),
+                          nnz * sizeof(double),
+                          cudaMemcpyDeviceToHost));
+
+    // Copy RHS to host
+    std::vector<double> hb(n);
+    CHECK_CUDA(cudaMemcpy(hb.data(), bdev.data(), n * sizeof(double), cudaMemcpyDeviceToHost));
+
+    auto t_cpu_start = std::chrono::high_resolution_clock::now();
+
+    // ============================================================
+    //  Build Eigen sparse matrix and solve with SimplicialLDLT
+    // ============================================================
+
+    using SpMat = Eigen::SparseMatrix<double, Eigen::ColMajor, int>;
+    using Triplet = Eigen::Triplet<double, int>;
+
+    std::vector<Triplet> triplets;
+    triplets.reserve(nnz);
+
+    // IMPORTANT:
+    // If your matrix is symmetric and you store both triangles, this is fine.
+    // If it’s symmetric but you only want one triangle, you could filter here (r>=c).
+    for (int k = 0; k < nnz; ++k)
+        triplets.emplace_back(hR[k], hC[k], hV[k]);
+
+    SpMat A(n, n);
+    A.setFromTriplets(triplets.begin(), triplets.end()); // duplicates already merged on GPU
+    A.makeCompressed();
+
+    Eigen::Map<const Eigen::VectorXd> b(hb.data(), n);
+
+    Eigen::SimplicialLDLT<SpMat> solver;
+    solver.compute(A);
+
+    if (solver.info() != Eigen::Success)
+    {
+        printf("Eigen SimplicialLDLT factorization failed (matrix not SPD or numerical issue)\n");
+        return false;
+    }
+
+    Eigen::VectorXd x = solver.solve(b);
+
+    if (solver.info() != Eigen::Success)
+    {
+        printf("Eigen SimplicialLDLT solve failed\n");
+        return false;
+    }
+
+    auto t_cpu_end = std::chrono::high_resolution_clock::now();
+    printf("Eigen factor+solve time (CPU): %f seconds\n",
+           std::chrono::duration<double>(t_cpu_end - t_cpu_start).count());
+
+    // ============================================================
+    //  Copy x back to device (m_deltaSolVector)
+    // ============================================================
+    CHECK_CUDA(cudaMemcpy(m_deltaSolVector.data(), x.data(), n * sizeof(double), cudaMemcpyHostToDevice));
+
+    end = std::chrono::high_resolution_clock::now();
+    printf("Total linear solve path (incl H<->D): %f seconds\n",
+           std::chrono::duration<double>(end - mid).count());
+
+    // Update (same as your code)
+    m_updateNorm   = m_deltaSolVector.vectorView().norm();
+    m_residualNorm = bdev.norm();
+    m_solVector.vectorView() += m_deltaSolVector.vectorView();
+    CHECK_CUDA(cudaMemset(m_deltaSolVector.data(), 0, m_deltaSolVector.size() * sizeof(double)));
+
+    if (m_numIterations == 0)
+    {
+        m_initResidualNorm = m_residualNorm;
+        m_initUpdateNorm   = m_updateNorm;
+    }
+
+    return true;
+}
+
 void GPUSolver::solve()
 {
     double absTol = 1e-10;
@@ -216,7 +360,11 @@ void GPUSolver::solve()
     std::cout << std::scientific;
     while (m_status == working)
     {
+#if 1
         if(!solveSingleIteration())
+#else
+        if(!solveSingleIteration_Eigen())
+#endif
         {
             m_status = bad_solution;
             break;

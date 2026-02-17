@@ -103,6 +103,26 @@ public:
 	}
 
     __device__
+	double boundaryActiveControlPointComponent(BoxSide_d const& s, 
+                                               DeviceVectorView<double> pt, 
+                                               int r, int c) const
+    {
+        int activeIndex = m_basis.boundaryActiveIndex(s, pt, r);
+        //printf("Boundary active index: %d\n", activeIndex);
+        return m_controlPoints(activeIndex, c);
+    }
+
+    __device__
+	double boundaryActiveControlPointComponent(BoxSide_d const& s1, 
+                                               BoxSide_d const& s2,
+                                               double pt, 
+                                               int r, int c) const
+    {
+         int activeIndex = m_basis.boundaryActiveIndex_3D_edge(s1, s2, pt, r);
+         return m_controlPoints(activeIndex, c);
+    }
+
+    __device__
 	void jacobian(DeviceVectorView<double> pt,
                   DeviceMatrixView<double> basisValuesAndDers,
                   int numDerivatives,
@@ -128,10 +148,18 @@ public:
 					else
 						dN_rj *= basisValuesAndDers(tensorCoord[d], (numDerivatives + 1) * d);
 				}
-                for (int i = 0; i < dim; i++)
+                for (int i = 0; i < m_targetDim; i++)
 					result(i, j) += activeControlPointComponent(pt, r, i) * dN_rj;
 			}
 		}
+    }
+
+     __device__
+    void boundaryJacobian(DeviceVectorView<double> pt,
+                          DeviceMatrixView<double> basisValuesAndDers,
+                          DeviceMatrixView<double> result) const
+    {
+        
     }
 
 	__device__
@@ -173,4 +201,118 @@ public:
 		}
 #endif
 	}
+
+    __device__
+    void boundaryJacobian(BoxSide_d const& s, DeviceVectorView<double> pt,
+                          DeviceMatrixView<double> result) const
+    {
+        int dir = s.direction();
+		int P = m_basis.knotsOrder(0); //assume same order in all directions
+        int dim = m_basis.dim();
+		double valuesAndDersData[5*2*2]; //max 4th order, 2D, first derivatives
+        DeviceMatrixView<double> basisValuesAndDers(valuesAndDersData, 
+		                                            P+1, 2*(dim-1));
+        for (int d = 0, i = 0; d < dim; d++)
+        {
+            if (d != dir)
+            {
+                DeviceMatrixView<double> oneDimResults(
+                    basisValuesAndDers.data() + i * (basisValuesAndDers.rows() * 2),
+                    basisValuesAndDers.rows(), 2);
+                m_basis.evalAllDers_into(d, pt[i], 1, oneDimResults);
+                i++;
+            }
+        }
+        //printf("Boundary basis values and ders:\n");
+        //basisValuesAndDers.print();
+        int numActiveCPs = m_basis.numActiveControlPointsWithoutDir(dir);
+        for (int r = 0; r < numActiveCPs; r++)
+        {
+            int tensorCoordData[2] = {0}; //max dim 2
+            DeviceVectorView<int> tensorCoord(tensorCoordData, dim - 1);
+            getTensorCoordinate(dim - 1, P + 1, r, tensorCoordData);
+            //printf("tensor coord for r=%d: ", r);
+            //tensorCoord.print();
+			for (int j = 0; j < dim - 1; j++)
+            {
+                double dN_rj = 1.0;
+                for (int d = 0; d < dim - 1; d++)
+                {
+                    DeviceMatrixView<double> oneDimGeoValuesAndDers(
+						valuesAndDersData+(P+1)*2*d, P+1, 2);
+                    if (d == j)
+						dN_rj *= oneDimGeoValuesAndDers(tensorCoord[d], 1);
+					else
+						dN_rj *= oneDimGeoValuesAndDers(tensorCoord[d], 0);
+                }
+                //printf("dN_rj for j=%d: %f\n", j, dN_rj);
+                for (int i = 0; i < m_targetDim; i++)
+					result(i, j) += 
+                        boundaryActiveControlPointComponent(s, pt, r, i) 
+                        * dN_rj;
+            }
+        }
+    }
+
+    __device__
+    void boundaryJacobian(BoxSide_d const& s1, BoxSide_d const& s2, 
+                          double pt,
+                          DeviceMatrixView<double> result) const
+    {
+        int dir1 = s1.direction();
+        int dir2 = s2.direction();
+        if (dir1 == dir2)
+        {
+            assert("boundaryJacobian: directions are the same");
+            return;
+        }
+        int d = 3 - dir1 - dir2;
+        int P = m_basis.knotsOrder(d);
+        int dim = m_basis.dim();
+		double valuesAndDersData[5*2];
+        DeviceMatrixView<double> basisValuesAndDers(valuesAndDersData, 
+		                                            P+1, 2);
+        m_basis.evalAllDers_into(d, pt, 1, basisValuesAndDers);
+        int numActiveCPs = m_basis.numActiveControlPoints(d);
+        for (int r = 0; r < numActiveCPs; r++)
+        {
+            double dN_rj = basisValuesAndDers(r, 1);
+            for (int i = 0; i < m_targetDim; i++)
+                result(i, 0) += 
+                    boundaryActiveControlPointComponent(s1, s2, pt, r, i) 
+                    * dN_rj;
+        }
+    }
+
+    __device__
+    void evaluate(DeviceVectorView<double> pt,
+                      DeviceVectorView<double> result) const
+    {
+        int P = m_basis.knotsOrder(0); //assume same order in all directions
+		int dim = m_basis.dim();
+        double valuesAndDersData[5*1*3]; //max 4th order, 3D, no derivatives
+        DeviceMatrixView<double> basisValuesAndDers(valuesAndDersData, 
+                                                    P+1, 
+                                                    1 * dim);
+		m_basis.evalAllDers_into(pt, 0, basisValuesAndDers);
+        //printf("Basis values at point:\n");
+        //basisValuesAndDers.print();
+        int numActiveCPs = m_basis.numActiveControlPoints();
+        for (int r = 0; r < numActiveCPs; r++)
+        {
+            int tensorCoordData[3] = {0}; //max 3D
+            DeviceVectorView<int> tensorCoord(tensorCoordData, m_basis.dim());
+            getTensorCoordinate(dim, P + 1, r, tensorCoordData);
+            double N_r = 1.0;
+            for (int d = 0; d < dim; d++)
+                N_r *= basisValuesAndDers(tensorCoord[d], d);
+            //printf("N_r for r=%d: %f\n", r, N_r);
+            for (int i = 0; i < m_targetDim; i++)
+            {
+                //printf("Adding to result[%d]: %f * %f\n", i, 
+                //       activeControlPointComponent(pt, r, i), N_r);
+                result(i) += activeControlPointComponent(pt, r, i) * N_r;
+            }
+        }
+    }
 };

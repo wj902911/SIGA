@@ -413,6 +413,14 @@ int MultiPatch::getTotalNumGaussPoints() const
     return totalNumGaussPoints;
 }
 
+int MultiPatch::totalNumBdGPs() const
+{
+    int totalNumBoundaryGaussPoints = 0;
+    for (int i = 0; i < m_bases.size(); i++)
+        totalNumBoundaryGaussPoints += m_bases[i].getTotalNumBoundaryGaussPoints();
+    return totalNumBoundaryGaussPoints;
+}
+
 const std::vector<double> &MultiPatch::getGeoKnots(int patchIndex, int direction) const
 {
     return m_patches[patchIndex].getKnots(direction);

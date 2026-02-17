@@ -37,6 +37,7 @@ public:
     { return DeviceVectorView<double>(m_solVector.data(), m_solVector.size()); }
 
     bool solveSingleIteration();
+    bool solveSingleIteration_Eigen();
     void solve();
     std::string status();
 };

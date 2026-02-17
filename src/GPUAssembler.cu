@@ -623,6 +623,8 @@ void assembleDomainKernel(int totalGPs,
 }
 #endif
 
+
+
 __global__
 void printKernel(MultiPatchDeviceView multiPatch,
                  MultiPatchDeviceView displacement,

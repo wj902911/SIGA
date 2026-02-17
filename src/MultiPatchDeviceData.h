@@ -44,6 +44,20 @@ public:
     }
 
     __host__
+    MultiPatchDeviceData(int numPatches,int domainDim,int targetDim,
+                         int intDataSize, int knotsPoolsSize,
+                         int patchControlPointsPoolOffsetsSize,
+                         int controlPointsPoolsSize)
+                       : m_numPatches(numPatches),
+                         m_domainDim(domainDim),
+                         m_targetDim(targetDim),
+                         m_intData(intDataSize),
+                         m_knotsPools(knotsPoolsSize),
+                         m_patchControlPointsPoolOffsets(patchControlPointsPoolOffsetsSize),
+                         m_controlPointsPools(controlPointsPoolsSize)
+    {}
+
+    __host__
     MultiPatchDeviceData(const MultiPatch& multipatch)
                         :m_numPatches(multipatch.getNumPatches()),
                          m_domainDim(multipatch.getBasisDim()),
@@ -62,4 +76,13 @@ public:
 
     __host__
     MultiPatchDeviceView deviceView() const;
+
+    __host__
+    int numPatches() const { return m_numPatches; }
+
+    __host__
+    int domainDim() const { return m_domainDim; }
+
+    __host__
+    int targetDim() const { return m_targetDim; }
 };

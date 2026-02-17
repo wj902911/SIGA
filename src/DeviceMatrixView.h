@@ -365,6 +365,20 @@ public:
         }
     }
 
+    __device__
+    void copyFrom(const DeviceMatrixView<T>& other)
+    {
+        assert(m_rows == other.m_rows && m_cols == other.m_cols && 
+               "Matrix dimensions must match for assignment");
+        for (int i = 0; i < m_rows; i++)
+        {
+            for (int j = 0; j < m_cols; j++)
+            {
+                this->operator()(i, j) = other(i, j);
+            }
+        }
+    }
+
     __host__
     void operator+=(DeviceMatrixView<double> other);
 };

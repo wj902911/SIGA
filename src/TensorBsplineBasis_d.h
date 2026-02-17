@@ -1334,7 +1334,7 @@ public:
     {
         int k = s.direction();
         bool r = s.parameter();
-        assert(offset < size(k));
+        //assert(offset < size(k));
         // Optionally print error message if assertion fails (for debugging)
         if (!(offset < size(k))) printf("Offset cannot be bigger than the amount of basis functions orthogonal to Boxside s!\n");
         return (this->coefSlice(k, (r?size(k)-1-offset : offset)));

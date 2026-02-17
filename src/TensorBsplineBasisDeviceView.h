@@ -5,6 +5,7 @@
 #include <KnotVectorDeviceView.h>
 #include <GaussPointsDeviceView.h>
 #include <Utility_d.h>
+#include <Boundary_d.h>
 
 class TensorBsplineBasisDeviceView
 {
@@ -104,6 +105,21 @@ public:
     }
 
     __device__
+    int totalNumBdGPs() const
+    {
+        int numGPS = 0;
+
+        for (int d = 0; d < m_dim; d++)
+            numGPS += totalNumGPsInDir(d) * pow(2, m_dim - 1);
+
+        return numGPS;
+    }
+
+    __device__
+    int totalNumBdGPsInDir(int d) const
+    { return totalNumGPsInDir(d) * pow(2, m_dim - 1); }
+
+    __device__
     int numElementsInDir(int d) const { return knotVector(d).numElements(); }
     __device__
     int totalNumElements() const
@@ -115,6 +131,11 @@ public:
 
         return numElems;
     }
+
+    __device__
+    int numEdgesInEachDir() const { return pow(2, m_dim - 1); }
+    __device__
+    int numEdges() const { return m_dim * pow(2, m_dim - 1); }
 
     __device__
     void ptCoords(int idx, DeviceVectorView<int> coords) const
@@ -136,6 +157,21 @@ public:
             coords[d] = idx % numElements;
             idx /= numElements;
         }
+    }
+
+    __device__
+    void ptCoords(int idx, int d, DeviceVectorView<int> coords) const
+    {
+        if (coords.size() != 1 * 2)
+        {
+            assert("ptCoords: coords size mismatch");
+            return;
+        }
+        int numGPs = knotVector(d).numGaussPoints();
+            int numElements = knotVector(d).numElements();
+        coords[0] = idx % numGPs;
+        idx /= numGPs;
+        coords[1] = idx % numElements;
     }
 
     __device__
@@ -163,6 +199,25 @@ public:
     }
 
     __device__
+    void elementSupport(int d, DeviceVectorView<int> coords,
+                        double& lower, double& upper) const
+    {
+        if (coords.size() != 2)
+        {
+            assert("elementSupport: coords size mismatch");
+            return;
+        }
+        int order = knotVector(d).order();
+        //printf("knotVector:\n");
+        //knotVector(d).print();
+        //printf("ElementSupport dim %d, elem %d, order %d\n", d, coords[1], order);
+        lower = knotVector(d).knots()[coords[1] + order];
+        //printf("Lower knot: %f\n", lower);
+        upper = knotVector(d).knots()[coords[1] + order + 1];
+        //printf("Upper knot: %f\n", upper);
+    }
+
+    __device__
     double gsPoint(int idx,
                    GaussPointsDeviceView gspts,
                    DeviceVectorView<double> result) const
@@ -183,6 +238,25 @@ public:
     }
 
     __device__
+    double gsPoint(int idx, int d, GaussPointsDeviceView gspts,
+                   double& result) const
+    {
+        if (d < 0 || d >= m_dim)
+        {
+            assert("gsPoint: dimension out of range");
+            return 0.0;
+        }
+        int coordsData[2]; //size 2 for single direction
+        DeviceVectorView<int> coords(coordsData, 2);
+        ptCoords(idx, d, coords);
+        //printf("idx=%d coords for dim %d: gp %d, elem %d\n", idx, d, coords[0], coords[1]);
+        double lower, upper;
+        elementSupport(d, coords, lower, upper);
+        //printf("Lower: %f, Upper: %f\n", lower, upper);
+        return gspts.threadGaussPoint(d, lower, upper, coords[0], result);
+    }
+
+    __device__
     int upperBound(int direction, double value) const
     { return knotVector(direction).upperBound(value); }
 
@@ -194,6 +268,20 @@ public:
             numAct *= knotVector(d).order() + 1;
         return numAct;
     }
+
+    __device__
+    int numActiveControlPointsWithoutDir(int dir) const
+    {
+        int numAct = 1;
+        for (int d = 0; d < m_dim; d++)
+            if (d != dir)
+                numAct *= knotVector(d).order() + 1;
+        return numAct;
+    }
+
+    __device__
+    int numActiveControlPoints(int d) const
+    { return knotVector(d).order() + 1; }
 
     __device__
     int size(int d) const { return  knotVector(d).numControlPoints(); }
@@ -254,6 +342,84 @@ public:
     }
 
     __device__
+    int activeIndex(int d, double pt, int r) const
+    {
+        int order = knotVector(d).order();
+        int firstAct = pt == 
+            knotVector(d).domainEnd() ?
+            knotVector(d).numKnots() - order - 2 - order :
+            upperBound(d, pt) - order - 1;
+        //int idx = r % (order + 1);
+        return firstAct + r;
+        //return firstAct + idx;
+    }
+
+    __device__
+    int boundaryActiveIndex(BoxSide_d const& s, DeviceVectorView<double>  pt, 
+                            int r) const
+    {
+        int dir = s.direction();
+        //printf("dir: %d\n", dir);
+        int firstActData[2] = {0}; //max dim 2
+        DeviceVectorView<int> firstAct(firstActData, m_dim - 1);
+        int sizesData[2] = {0}; //max dim 2
+        DeviceVectorView<int> sizes(sizesData, m_dim - 1);
+        for (int d = 0, i = 0; d < m_dim; ++d)
+        {
+            if (d != dir)
+            {
+                int order = knotVector(d).order();
+                //printf("order for dim %d: %d\n", d, order);
+                firstAct[i] = pt(i) == 
+                knotVector(d).domainEnd() ?
+                knotVector(d).numKnots() - order - 2 - order :
+                upperBound(d, pt[i]) - order - 1;
+                sizes[i] = order + 1;
+                i++;
+            }
+        }
+        //printf("firstAct: ");
+        //firstAct.print();
+        //printf("sizes: ");
+        //sizes.print();
+        int indexData[2] = {0}; //max dim 2
+        DeviceVectorView<int> index(indexData, m_dim - 1);
+        getTensorCoordinate(m_dim - 1, sizes.data(), r, index.data());
+        //printf("index: ");
+        //index.print();
+        int idx = firstAct[m_dim - 2] + index[m_dim - 2];
+        //printf("idx after last dim: %d\n", idx);
+        if (m_dim == 3)
+            idx = idx * size(0) + firstAct[0] + index[0];
+        return boundaryCoeffIndex(s, 0, idx);
+    }
+
+    __device__
+    int boundaryActiveIndex_2D(BoxSide_d const& s, double pt, int r) const
+    {
+        int dir = s.direction();
+        int d = (dir + 1) % 2;
+        int idx = activeIndex(d, pt, r);
+        return boundaryCoeffIndex(s, 0, idx);
+    }
+
+    __device__
+    int boundaryActiveIndex_3D_edge(BoxSide_d const& s1, BoxSide_d const& s2,
+                                    double pt, int r) const
+    {
+        int dir1 = s1.direction();
+        int dir2 = s2.direction();
+        if (dir1 == dir2)
+        {
+            assert("boundaryActiveIndex_3D_edge: directions are the same");
+            return -1;
+        }
+        int d = 3 - dir1 - dir2;
+        int idx = activeIndex(d, pt, r);
+        return boundaryCoeffIndex_3D_edge(s1, s2, idx);
+    }
+
+    __device__
     void evalAllDers_into(int dir, double u, int n,
                           DeviceMatrixView<double> results) const
     {
@@ -300,6 +466,9 @@ public:
         for(int j = 0; j <= p; j++)
             results(j, 0) = ndu[j * p1 + p];
 
+        if (n == 0)
+            return;
+            
         for (int r = 0; r <= p; r++)
         {
             double* a1 = &a[0];
@@ -359,4 +528,166 @@ public:
         }
     }
 
+    __device__
+    void componentsForSide(BoxSide_d const& s,
+                           TensorBsplineBasisDeviceView result) const
+    {
+        int dir = s.direction();
+        int targetDim = m_dim - 1;
+        if (result.dim() != targetDim || 
+            result.knotsOrders().size() != targetDim || 
+            result.knotsOffsets().size() != m_dim)
+        {
+            assert("ComponentsForSide: result dim mismatch");
+            return;
+        }
+        result.knotsOffsets()[0] = 0;
+        for (int i = 0, n = 0; i < m_dim; i++)
+            if (i != dir)
+            {
+                KnotVectorDeviceView kv = knotVector(i);
+                int numKnots = kv.numKnots();
+                int order = kv.order();
+                result.knotsOrders()[n] = order;
+                result.knotsOffsets()[n + 1] = 
+                    result.knotsOffsets()[n] + numKnots;
+                for (int j = 0; j < numKnots; j++)
+                    result.knotsPool()[result.knotsOffsets()[n] + j] = kv.knots()[j];
+                n++;
+            }
+    }
+
+    __device__
+    int coefSliceSize(BoxSide_d const& s) const
+    {
+        int dir = s.direction();
+        int dim = m_dim;
+        int sliceSize = 1;
+        for(int d = 0; d < dim; ++d)
+            sliceSize *= size(d);
+        sliceSize /= size(dir);
+        return sliceSize;
+    }
+
+    __device__
+    void coefSlice(int dir, int k, DeviceVectorView<int> res) const
+    {
+        int dim = m_dim;
+        if(dir < 0 || dir >= dim)
+            printf("Error: dir is out of range in coefSlice.\n");
+        if(k < 0 || k >= size(dir))
+            printf("Error: k is out of range in coefSlice.\n");
+
+        int sliceSize = 1;
+        int lowData[3] = {0}, uppData[3] = {0}; //max dim 3
+        DeviceVectorView<int> low(lowData, m_dim);
+        DeviceVectorView<int> upp(uppData, m_dim);
+        for(int d = 0; d < dim; ++d)
+        {
+            sliceSize *= size(d);
+            low[d] = 0;
+            upp[d] = size(d);
+        }
+        sliceSize /= upp[dir];
+        low[dir] = k;
+        upp[dir] = k + 1;
+
+        if (res.size() != sliceSize)
+        {
+            assert("coefSlice: res size mismatch");
+            return;
+        }
+        int vData[3] = {0}; //max dim 3
+        DeviceVectorView<int> v(vData, m_dim);
+        v.copyFrom(low);
+        int i = 0;
+        do
+        {
+            res(i++) = index(v);
+        } while (nextLexicographic_d(v, low, upp));
+
+    }
+
+    __device__
+    int index(const DeviceVectorView<int>& coords) const
+    {
+        int index = 0;
+        int dim = m_dim;
+        index = coords(dim - 1);
+        for (int d = dim - 2; d >= 0; --d)
+        {
+            index = index * size(d) + coords(d);
+        }
+        return index;
+    }
+
+    __device__
+    void boundaryCoeffCoords(BoxSide_d const& s, int offset, int idx, 
+                             DeviceVectorView<int> res) const
+    {
+        int dir = s.direction();
+        bool r = s.parameter();
+        int k = r ? size(dir) - 1 - offset : offset;
+        res[dir] = k;
+        for (int d = 0; d < m_dim; ++d)
+        {
+            if (d != dir)
+            {
+                int numCPs = size(d);
+                res[d] = idx % numCPs;
+                idx /= numCPs;
+            }
+        }
+    }
+
+    __device__
+    void boundaryCoeffCoords_3D_edge(BoxSide_d const& s1, BoxSide_d const& s2, 
+                                    int idx, DeviceVectorView<int> res) const
+    {
+        int dir1 = s1.direction();
+        int dir2 = s2.direction();
+        int d = 3 - dir1 - dir2;
+        bool r1 = s1.parameter();
+        bool r2 = s2.parameter();
+        int k1 = r1 ? size(dir1) - 1 : 0;
+        int k2 = r2 ? size(dir2) - 1 : 0;
+        res[dir1] = k1;
+        res[dir2] = k2;
+        //int numCPs = size(d);
+        //res[d] = idx % numCPs;
+        res[d] = idx;
+    }
+
+    __device__
+    int boundaryCoeffIndex(BoxSide_d const& s, int offset, int idx) const
+    {
+        int coordsData[3]; //max dim 3
+        DeviceVectorView<int> coords(coordsData, m_dim);
+        boundaryCoeffCoords(s, offset, idx, coords);
+        return index(coords);
+    }
+
+    __device__
+    int boundaryCoeffIndex_3D_edge(BoxSide_d const& s1, BoxSide_d const& s2, int idx) const
+    {
+        int coordsData[3];
+        DeviceVectorView<int> coords(coordsData, m_dim);
+        boundaryCoeffCoords_3D_edge(s1, s2, idx, coords);
+        return index(coords);
+    }
+
+    __device__
+    void boundaryOffset(BoxSide_d const& s, int offset, 
+                        DeviceVectorView<int> res) const
+    {
+        int k = s.direction();
+        bool r = s.parameter();
+        if (!(offset < size(k))) 
+            printf("Offset cannot be bigger than the amount of basis functions orthogonal to Boxside s!\n");
+        coefSlice(k, (r?size(k)-1-offset : offset), res);
+    }
+
+    __device__
+    void boundary(BoxSide_d const& s, DeviceVectorView<int> res) const
+    { boundaryOffset(s, 0, res); }
 };

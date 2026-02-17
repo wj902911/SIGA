@@ -7,13 +7,21 @@ add_library(SIGA STATIC ${SRC_FILES_CPP} ${SRC_FILES_CU})
 set_property(TARGET SIGA PROPERTY FOLDER "library")
 
 # Include directories for the source files
-target_include_directories(SIGA PUBLIC "${PROJECT_SOURCE_DIR}/src" "${PROJECT_SOURCE_DIR}/external/eigen")
+target_include_directories(SIGA PUBLIC "${PROJECT_SOURCE_DIR}/src" "${PROJECT_SOURCE_DIR}/external/eigen" 
+#"${CUDSS_DIR}/include"
+)
+
+#target_link_directories(SIGA PRIVATE "${CUDSS_DIR}/lib")
 
 target_link_libraries(SIGA
   PUBLIC         # propagate to dependents (your examples)
     CUDA::cudart
     CUDA::cusparse
     CUDA::cusolver
+    CUDA::cublas
+    #CUDA::cudss
+    #cudss
+    #cublas
     #CUDA::cudadevrt
 )
 

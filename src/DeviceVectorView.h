@@ -51,6 +51,27 @@ public:
 
     __host__
     double norm() const;
+
+    __device__
+    double norm_device() const
+    {
+        double sum = 0.0;
+        for (int i = 0; i < this->size(); i++)
+        {
+            double val = static_cast<double>((*this)(i));
+            sum += val * val;
+        }
+        return sqrt(sum);
+    }
+};
+
+template <typename T>
+class OneElementDeviceVectorView : public DeviceVectorView<T>
+{
+public:
+    __host__ __device__
+    OneElementDeviceVectorView(T* data)
+    : DeviceVectorView<T>(data, 1) {}
 };
 
 

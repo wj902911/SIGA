@@ -72,6 +72,8 @@ public:
 
     int getTotalNumGaussPoints() const;
 
+    int totalNumBdGPs() const;
+
     const std::vector<double>& getGeoKnots(int patchIndex, int direction) const;
     const std::vector<double>& getBasisKnots(int patchIndex, int direction) const;
     //const thrust::device_vector<double>& getControlPoints_ref() const;
