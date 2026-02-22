@@ -7,6 +7,8 @@
 #include <utility>
 //#include "Matrix.h"
 #include <Eigen/Core>
+#include <KnotIterator.h>
+#include <math.h>
 
 class KnotVector {
 public:
@@ -14,6 +16,10 @@ public:
 	//typedef thrust::device_vector<double>::const_iterator const_iterator;
 	typedef std::vector<double>::iterator iterator;
 	typedef std::vector<double>::const_iterator const_iterator;
+	typedef UKnotIterator uiterator;
+    typedef KnotIterator  smart_iterator;
+	typedef std::reverse_iterator<uiterator> reverse_uiterator;
+	typedef std::reverse_iterator<smart_iterator>  reverse_smart_iterator;
 
 	KnotVector(
 		int order, 
@@ -31,9 +37,17 @@ public:
 
 	~KnotVector();
 
+	void rebuildMultSum();
+	void increaseMultiplicity(const int i = 1, bool boundary = false);
+	const int* multSumData() const { return m_multSum.data(); }
+	const double* data() const { return m_knots.data(); }
+
+	void degreeElevate(const int & i = 1);
+
 	int getOrder() const;
 	int size() const;
 	int getNumElements() const;
+	int numElements() const { return (domainUEnd() - domainUBegin()); }
 	int getNumGaussPoints() const;
 	int getTotalNumGaussPoints() const;
 	//const thrust::device_vector<double>& getKnots() const;
@@ -41,13 +55,30 @@ public:
 	int uSize() const;
 	const_iterator uBegin() const;
 	const_iterator uEnd() const;
+	uiterator ubegin() const;
+    uiterator uend() const;
+    smart_iterator sbegin()  const;
+    smart_iterator send()    const;  
+
+	smart_iterator domainSBegin() const
+	{ return sbegin() + m_order; }  
+
+	smart_iterator domainSEnd() const
+	{ return send() - (m_order + 1); }
+
+	uiterator domainUBegin() const
+	{ return domainSBegin().uIterator(); }
+
+	uiterator domainUEnd() const
+	{ return domainSEnd().uIterator(); }
+
 	const_iterator Find(double u) const;
 	int getNumControlPoints() const;
 
 	//void getUniformRefinementKnots(int numKnots, thrust::device_vector<double>& knots) const;
-	void getUniformRefinementKnots(int numKnots, std::vector<double>& knots) const;
+	void getUniformRefinementKnots(int numKnots, std::vector<double>& knots, int mult = 1) const;
 	void insert(const_iterator begin, const_iterator end);
-	void uniformRefine(int numKnots = 1);
+	void uniformRefine(int numKnots = 1, int mult = 1);
 
 	const_iterator begin() const;
 	const_iterator end() const;
@@ -77,6 +108,16 @@ public:
 		}
 		return m_knots[i];
 	}
+
+	int numLeftGhosts() const
+    {
+        smart_iterator it(*this,0,0);
+        it += std::min( (int)m_order, size() );
+        return std::distance( uiterator(*this,0,0), it.uIterator() );
+    }
+
+	void trimLeft (const int numKnots);
+	void trimRight(const int numKnots);
 	
 private:
 	int m_order;
@@ -84,4 +125,5 @@ private:
 	int m_numGaussPoints;
 	//thrust::device_vector<double> m_knots;
 	std::vector<double> m_knots;
+	std::vector<int> m_multSum;
 };

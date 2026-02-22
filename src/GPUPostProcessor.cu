@@ -185,14 +185,19 @@ void evalAtDistributedPointsKernel(MultiPatchDeviceView geometry,
 }
 
 __global__
-void testKernel()
+void computeMeshKernel(MultiBasisDeviceView Bases,
+                       DeviceMatrixView<double> meshPointGrid,
+                       DeviceMatrixView<double> meshGeoPoints,
+                       DeviceMatrixView<int> meshEdges,
+                       int numMidPoints)
 {
 
 }
 
 GPUPostProcessor::GPUPostProcessor(const GPUAssembler &assembler, 
-                                   const std::vector<int>& numPointsPerPatch)
-    : m_assembler(assembler)
+                                   const std::vector<int>& numPointsPerPatch,
+                                   bool outputMesh, int numMidPoints)
+    : m_assembler(assembler), outputMesh(outputMesh)
 {
     MultiPatchDeviceView geometry = m_assembler.geometryView();
     int numPatches = geometry.numPatches();
@@ -292,6 +297,48 @@ GPUPostProcessor::GPUPostProcessor(const GPUAssembler &assembler,
     m_geoPointsDeviceArray.copyToHost(m_geoPointsHost.data());
     //std::cout << "Evaluated points at distributed locations:\n" 
     //          << pointsHost << std::endl;
+
+    if (outputMesh)
+    {
+        m_meshPointPatchOffsets.reserve(numPatches + 1);
+        m_meshPointPatchOffsets.clear();
+        m_meshEdgesPatchOffsets.reserve(numPatches + 1);
+        m_meshEdgesPatchOffsets.clear();
+        m_meshPointPatchOffsets.push_back(0);
+        m_meshEdgesPatchOffsets.push_back(0);
+        for (int i = 0; i < numPatches; i++)
+        {
+            int totalNumMeshCornersInPatch = 1;
+            std::vector<int> nv(domainDim);
+            for (int d = 0; d < domainDim; d++)
+            {
+                int numEleInDir = m_assembler.basisHost().basis(i).getNumElements(d);
+                nv[d] = numEleInDir + 1;
+                totalNumMeshCornersInPatch *= nv[d];
+            }
+
+            int totalNumMeshlinesInPatch = 0;
+            for (int d = 0; d < domainDim; ++d)
+            {
+                int prodOther = 1;
+                for (int j = 0; j < domainDim; ++j)
+                {
+                    if (j == d) continue;
+                    prodOther *= nv[j];
+                }
+                totalNumMeshlinesInPatch += (nv[d] - 1) * prodOther;
+            }
+
+            int totalNumMeshPointsInPatch  = totalNumMeshCornersInPatch + totalNumMeshlinesInPatch * numMidPoints;
+            m_meshPointPatchOffsets.push_back(m_meshPointPatchOffsets.back() + totalNumMeshPointsInPatch);
+            int totalNumMeshEdgesInPatch = totalNumMeshlinesInPatch * (numMidPoints + 1);
+            m_meshEdgesPatchOffsets.push_back(m_meshEdgesPatchOffsets.back() + totalNumMeshEdgesInPatch);
+        }
+
+        m_meshPointGrid.resize(m_meshPointPatchOffsets.back() * domainDim);
+        m_meshGeoPoints.resize(m_meshPointPatchOffsets.back() * geometry.targetDim());
+        m_meshEdges.resize(m_meshEdgesPatchOffsets.back() * 2); //edge connectivity
+    }
 }
 
 void GPUPostProcessor::evalFunctionsAtPoints(std::map<std::string, Eigen::MatrixXd> &data) const
@@ -389,6 +436,8 @@ void GPUPostProcessor::writeParaviewSinglePatch(const std::string &fn,
     std::ofstream file(mfn.c_str());
     file << std::fixed; // no exponents
     file << std::setprecision (11);
+
+    //std::cout << np << std::endl;
 
     file <<"<?xml version=\"1.0\"?>\n";
     file <<"<VTKFile type=\"StructuredGrid\" version=\"0.1\">\n";

@@ -17,9 +17,10 @@ void printKernel(MultiPatchDeviceView displacement)
 int main()
 {
 	int numRefinements = 1;
+	int numDegElev = 1;
 	double deltaDisplacement = 0.1;
-	double maxDisplacement = 0.6;
-	std::vector<int> numPointsPerPatch{ 10000, 10000 };
+	double maxDisplacement = 1.0;
+	std::vector<int> numPointsPerPatch{ 1000, 1000 };
 
 	if (!std::filesystem::exists("./TwoPatchesTest"))
 		std::filesystem::create_directory("./TwoPatchesTest");
@@ -86,6 +87,9 @@ int main()
 
 	MultiBasis bases(multiPatch);
 
+	for (int i = 0; i < numDegElev; ++i)
+		bases.degreeElevate();
+
     for (int r = 0; r < numRefinements; ++r)
 		bases.uniformRefine();
 
@@ -110,7 +114,7 @@ int main()
 
 	std::cout << "Initializing post-processor..." << std::endl;
 	start = std::chrono::high_resolution_clock::now();
-	GPUPostProcessor postProcessor(assembler, numPointsPerPatch);
+	GPUPostProcessor postProcessor(assembler, numPointsPerPatch, true, 0);
 	end = std::chrono::high_resolution_clock::now();
 	elapsed = end - start;
 	std::cout << "Initialized post-processor in " << elapsed.count() << " s." << std::endl;
@@ -141,7 +145,7 @@ int main()
 
 	int step = 1;
 	double totalDisplacement = deltaDisplacement;
-	start = std::chrono::high_resolution_clock::now();
+	auto solvestart = std::chrono::high_resolution_clock::now();
 	while (totalDisplacement <= maxDisplacement)
 	{
 		std::cout << "Step " << step << " with displacement: " << totalDisplacement
@@ -162,8 +166,8 @@ int main()
 	}
 	collection.save();
 
-	end = std::chrono::high_resolution_clock::now();
-	elapsed = end - start;
+	auto solveend = std::chrono::high_resolution_clock::now();
+	elapsed = solveend - solvestart;
 	std::cout << "Solved the system in " << elapsed.count() << " s." << std::endl;
     return 0;
 }

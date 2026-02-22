@@ -111,6 +111,17 @@ public:
 	void getData(std::vector<int>& intData,
 	             std::vector<double>& doubleData) const;
 
+	void degreeElevate(int const & i = 1, int const dir = -1)
+	{
+		if (dir == -1)
+		{
+			for (int d = 0; d < getDim(); ++d)
+				m_knotVectors[d].degreeElevate(i);
+		}
+		else
+			m_knotVectors[dir].degreeElevate(i);
+	}
+
 #if 0
 	template <typename T, int d>
 	void flipTensorVector(const int dir, 

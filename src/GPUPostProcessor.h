@@ -16,12 +16,19 @@ private:
     DeviceArray<int> m_numPointsPerDir;
     DeviceArray<double> m_pointGrid;
     DeviceArray<double> m_geoPointsDeviceArray;
+    std::vector<int> m_meshPointPatchOffsets;
+    DeviceArray<double> m_meshPointGrid;
+    DeviceArray<double> m_meshGeoPoints;
+    std::vector<int> m_meshEdgesPatchOffsets;
+    DeviceArray<int> m_meshEdges;
     Eigen::MatrixXi m_numPointsPerDirHost;
     Eigen::MatrixXd m_geoPointsHost;
+    bool outputMesh = false;
 
 public:
     GPUPostProcessor(const GPUAssembler &assembler, 
-                     const std::vector<int>& numPointsPerPatch);
+                     const std::vector<int>& numPointsPerPatch,
+                     bool outputMesh = false, int numMidPoints = 0);
 
     void addFunction(const std::string &name, GPUFunction* function)
     { m_functions[name] = function; }
