@@ -8,24 +8,18 @@
 #include <GPUPostProcessor.h>
 #include <filesystem>
 
-__global__
-void printKernel(MultiPatchDeviceView displacement)
-{
-	displacement.print();
-}
-
 int main()
 {
-	int numRefinements = 4;
+	int numRefinements = 1;
 	int numDegElev = 1;
 	double deltaDisplacement = 0.1;
 	double maxDisplacement = 1.0;
-	std::vector<int> numPointsPerPatch{ 1000, 1000 };
+	std::vector<int> numPointsPerPatch{ 5, 5 };
 
-	if (!std::filesystem::exists("./TwoPatchesTest"))
-		std::filesystem::create_directory("./TwoPatchesTest");
-	std::string filenameParaview = "TwoPatchesTest_";
-	std::string outputFolder = "./TwoPatchesTest/" + filenameParaview + "output";
+	if (!std::filesystem::exists("./TwoPatchesTest_3D"))
+		std::filesystem::create_directory("./TwoPatchesTest_3D");
+	std::string filenameParaview = "TwoPatchesTest_3D_";
+	std::string outputFolder = "./TwoPatchesTest_3D/" + filenameParaview + "output";
 	if (!std::filesystem::exists(outputFolder))
 		std::filesystem::create_directory(outputFolder);
 	std::string fileNameWithPath = outputFolder + "/" + filenameParaview;
@@ -34,27 +28,34 @@ int main()
 
 	int knot_u_order = 1;
 	int knot_v_order = 1;
-	std::vector<double> knot_u{ 0., 0., 0.5, 1., 1. };
+	int knot_w_order = 1;
+	std::vector<double> knot_u{ 0., 0., 1., 1. };
 	std::vector<double> knot_v{ 0., 0., 1., 1. };
-	Eigen::MatrixXd control_points(6, 2);
+	std::vector<double> knot_w{ 0., 0., 1., 1. };
+	Eigen::MatrixXd control_points(8, 3);
 	control_points <<
-		0.000, 0.000, 
-		1.000, 0.000, 
-		2.000, 0.000, 
-		0.000, 1.000,
-		1.000, 1.000,
-		2.000, 1.000;
+		0.000, 0.000, 0.000,
+		2.000, 0.000, 0.000,
+		0.000, 1.000, 0.000,
+		2.000, 1.000, 0.000,
+		0.000, 0.000, 1.000,
+		2.000, 0.000, 1.000,
+		0.000, 1.000, 1.000,
+		2.000, 1.000, 1.000;
 	
-	std::vector<double> knot_u2{ 0., 0., 0.5, 1., 1. };
+	std::vector<double> knot_u2{ 0., 0., 1., 1. };
 	std::vector<double> knot_v2{ 0., 0., 1., 1. };
-	Eigen::MatrixXd control_points2(6, 2);
+	std::vector<double> knot_w2{ 0., 0., 1., 1. };
+	Eigen::MatrixXd control_points2(8, 3);
 	control_points2 <<
-		2.000, 0.000, 
-		3.000, 0.000, 
-		4.000, 0.000,
-		2.000, 1.000,
-		3.000, 1.000,
-		4.000, 1.000;
+		2.000, 0.000, 0.000,
+		4.000, 0.000, 0.000,
+		2.000, 1.000, 0.000,
+		4.000, 1.000, 0.000,
+		2.000, 0.000, 1.000,
+		4.000, 0.000, 1.000,
+		2.000, 1.000, 1.000,
+		4.000, 1.000, 1.000;
 #if 0
     std::vector<double> knot_u3{ 0., 0., 1., 1. };
 	std::vector<double> knot_v3{ 0., 0., 1., 1. };
@@ -70,15 +71,17 @@ int main()
 
     KnotVector u1(knot_u_order,knot_u);
 	KnotVector v1(knot_v_order,knot_v);
+	KnotVector w1(knot_w_order,knot_w);
 	KnotVector u2(knot_u_order,knot_u2);
 	KnotVector v2(knot_v_order,knot_v2);
+	KnotVector w2(knot_w_order,knot_w2);
     //KnotVector u3(knot_u_order,knot_u3);
 	//KnotVector v3(knot_v_order,knot_v3);
 
 	//std::vector<double> breaks = u1.breaks();
 
-    Patch patch(u1, v1, control_points);
-	Patch patch2(u2, v2, control_points2);
+    Patch patch(u1, v1, w1, control_points);
+	Patch patch2(u2, v2, w2, control_points2);
 	//Patch patch3(u3, v3, control_points3);
 
     MultiPatch multiPatch;
@@ -90,7 +93,7 @@ int main()
 	MultiBasis bases(multiPatch);
 
 	for (int i = 0; i < numDegElev; ++i)
-		bases.degreeElevate(false);
+		bases.degreeElevate();
 
     for (int r = 0; r < numRefinements; ++r)
 		bases.uniformRefine();

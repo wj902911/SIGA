@@ -419,7 +419,7 @@ void TensorBsplineBasis::eval_into(int dir,
 	for(int v = 0; v < u.cols(); ++v)
 	{
 		//std::cout << "u(0,v) = " << u(0,v) << "\n\n";
-		unsigned span = m_knotVectors[dir].Find(u(0,v)) - m_knotVectors[dir].begin();
+		unsigned span = m_knotVectors[dir].iFind(u(0,v)) - m_knotVectors[dir].begin();
 		result(0, v) = 1.0;
 		for (int j = 1; j <= order; j++)
 		{
@@ -510,14 +510,16 @@ void TensorBsplineBasis::active_into(const Eigen::MatrixXd &u, Eigen::MatrixXi &
 		for (int i = 0; i < d; ++i)
 			firstAct[i] = m_knotVectors[i].firstActive(u(i,j));
 
+		//std::cout << "firstAct:\n" << firstAct.transpose() << "\n\n";
 		unsigned r = 0;
 		v.setZero();
 		do
 		{
+			//std::cout << "v:\n" << v.transpose() << "\n\n";
 			int gidx = firstAct[d-1] + v(d-1);
 
 			for ( int i=d-2; i>=0; --i )
-				gidx = gidx * size(i) + firstAct[i] + v(i);
+				gidx = gidx * this->size(i) + firstAct[i] + v(i);
 
 			result(r,j) = gidx;
 			++r;

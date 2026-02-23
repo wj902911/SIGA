@@ -51,7 +51,10 @@ void patchLengthesKernel(int numTotalBoundaryGPs,
                 break;
             }
         case 3:
-            break;
+            {
+                int d = dir;
+                break;
+            }
         default:
             break;
         }

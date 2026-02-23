@@ -78,9 +78,34 @@ void KnotVector::increaseMultiplicity(const int i, bool boundary)
 	m_multSum.back() += i * (boundary ? r : r-1 );
 }
 
-void KnotVector::degreeElevate(const int &i)
+void KnotVector::increaseEndMultiplicity(const int i, bool boundary)
 {
-	increaseMultiplicity(i,true);
+	int newSize = size() + i*(uSize()-2);
+	std::vector<double> tmp;
+    tmp.reserve(newSize);
+	tmp.insert(tmp.end(), m_multSum.front() + (boundary ? i : 0),
+               m_knots.front());
+	uiterator uit = ubegin()+1;
+	for (; uit != uend()-1; ++uit)
+		tmp.insert(tmp.end(), uit.multiplicity(), *uit);
+	tmp.insert(tmp.end(), uit.multiplicity() + (boundary ? i : 0) , *uit);
+	m_knots.swap(tmp);
+	int r = ( boundary ?  1 : 0 );
+	for (std::vector<int>::iterator m = m_multSum.begin(); m != m_multSum.end()-1; ++m)
+		if (m == m_multSum.begin())
+			*m += i * r;
+		else
+			*m += r;
+	r++;
+	m_multSum.back() += i * (boundary ? r : r-1 );
+}
+
+void KnotVector::degreeElevate(const int &i, bool eleInternal)
+{
+	if (eleInternal)
+		increaseMultiplicity(i,true);
+	else
+		increaseEndMultiplicity(i,true);
 	m_order += i;
 	m_numElements = numElements();
 	m_numGaussPoints = m_order + 1;
@@ -123,6 +148,20 @@ KnotVector::smart_iterator KnotVector::sbegin() const
 
 KnotVector::smart_iterator KnotVector::send() const
 { return smart_iterator::End(*this); }
+
+KnotVector::uiterator KnotVector::uFind(const double u) const
+{
+    uiterator dend = domainUEnd();
+	if (u==*dend) // knot at domain end ?
+    	return --dend;
+	else
+    	return std::upper_bound( domainUBegin(), dend, u ) - 1;
+}
+
+KnotVector::const_iterator KnotVector::iFind(const double u) const
+{
+    return begin() + uFind(u).lastAppearance();
+}
 
 KnotVector::const_iterator KnotVector::Find(double u) const
 {

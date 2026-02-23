@@ -34,6 +34,9 @@ public:
     int firstAppearance() const
     { return 0 == m_upos ? 0 : m_mlt[m_upos-1]; }
 
+    int lastAppearance() const
+    { return m_mlt[m_upos] - 1; }
+
     reference operator*  () const
     { return m_raw[m_mlt[m_upos]-1]; }
 
@@ -171,6 +174,9 @@ public:
 
     int firstAppearance() const
     { return m_uit.firstAppearance();}
+
+    int lastAppearance() const
+    { return m_uit.lastAppearance(); }
 
     KnotIterator& operator+=(const std::ptrdiff_t & a)
     {

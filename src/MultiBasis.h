@@ -57,9 +57,9 @@ public:
 
     void giveBasis(MultiPatch& multiPatch, int targetDim) const;
 
-    void degreeElevate(int const i = 1, int const dir = -1)
+    void degreeElevate(bool eleInternal = true, int const i = 1, int const dir = -1)
     {
         for (int k = 0; k < m_bases.size(); k++)
-            m_bases[k].degreeElevate(i, dir);
+            m_bases[k].degreeElevate(i, dir, eleInternal);
     }
 };

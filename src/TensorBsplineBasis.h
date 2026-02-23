@@ -114,15 +114,15 @@ public:
 	void getData(std::vector<int>& intData,
 	             std::vector<double>& doubleData) const;
 
-	void degreeElevate(int const & i = 1, int const dir = -1)
+	void degreeElevate(int const & i = 1, int const dir = -1, bool eleInternal = true)
 	{
 		if (dir == -1)
 		{
 			for (int d = 0; d < getDim(); ++d)
-				m_knotVectors[d].degreeElevate(i);
+				m_knotVectors[d].degreeElevate(i, eleInternal);
 		}
 		else
-			m_knotVectors[dir].degreeElevate(i);
+			m_knotVectors[dir].degreeElevate(i, eleInternal);
 	}
 
 #if 0

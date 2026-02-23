@@ -39,10 +39,11 @@ public:
 
 	void rebuildMultSum();
 	void increaseMultiplicity(const int i = 1, bool boundary = false);
+	void increaseEndMultiplicity(const int i = 1, bool boundary = false);
 	const int* multSumData() const { return m_multSum.data(); }
 	const double* data() const { return m_knots.data(); }
 
-	void degreeElevate(const int & i = 1);
+	void degreeElevate(const int & i = 1, bool eleInternal = true);
 
 	int getOrder() const;
 	int size() const;
@@ -59,6 +60,8 @@ public:
     uiterator uend() const;
     smart_iterator sbegin()  const;
     smart_iterator send()    const;  
+	uiterator uFind( const double u ) const;
+	const_iterator iFind( const double u ) const;
 
 	smart_iterator domainSBegin() const
 	{ return sbegin() + m_order; }  

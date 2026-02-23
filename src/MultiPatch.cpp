@@ -652,6 +652,8 @@ bool MultiPatch::computeTopology(double tol, bool cornersOnly, bool tjunctions)
                 std::cout << c.index() << " ";
             std::cout << "\n\n";
 #endif            
+            //std::cout << pCorners[side.patchIndex()        ].col(nCorP+side.index()-1        ) << "\n";
+            //std::cout << pCorners[pSide[other].patchIndex()].col(nCorP+pSide[other].index()-1) << "\n";
             if (!cornersOnly)
                 if ( ( pCorners[side.patchIndex()        ].col(nCorP+side.index()-1        ) -
                        pCorners[pSide[other].patchIndex()].col(nCorP+pSide[other].index()-1)
