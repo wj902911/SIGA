@@ -72,6 +72,9 @@ public:
 	uiterator domainUEnd() const
 	{ return domainSEnd().uIterator(); }
 
+	std::vector<double> breaks() const
+	{ return std::vector<double>(domainUBegin(), domainUEnd() + 1); }
+
 	const_iterator Find(double u) const;
 	int getNumControlPoints() const;
 

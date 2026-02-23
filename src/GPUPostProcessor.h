@@ -23,6 +23,8 @@ private:
     DeviceArray<int> m_meshEdges;
     Eigen::MatrixXi m_numPointsPerDirHost;
     Eigen::MatrixXd m_geoPointsHost;
+    Eigen::MatrixXd m_meshGeoPointsHost;
+    Eigen::MatrixXi m_meshEdgesHost;
     bool outputMesh = false;
 
 public:
@@ -34,6 +36,7 @@ public:
     { m_functions[name] = function; }
 
     void evalFunctionsAtPoints(std::map<std::string, Eigen::MatrixXd>& data) const;
+    void evalFunctionsAtMeshPoints(std::map<std::string, Eigen::MatrixXd>& data) const;
 
     void outputToParaview(const std::string &fn, 
                           int step, 
@@ -45,9 +48,19 @@ public:
                        int step,
                        ParaviewCollection& collection) const;
     
+    void writeParaviewMesh(const std::string &fn, 
+                            const std::map<std::string, 
+                            Eigen::MatrixXd>& data,
+                            int step,
+                            ParaviewCollection& collection) const;
+    
     void writeParaviewSinglePatch(const std::string &fn, 
                                   const Eigen::VectorXi &np, 
                                   const Eigen::MatrixXd &points,
                                   const std::map<std::string, Eigen::MatrixXd>& data) const;
     
+    void writeParaviewSinglePatchMesh(const std::string &fn, 
+                                      const Eigen::MatrixXd &points,
+                                      const Eigen::MatrixXi &edges,
+                                      const std::map<std::string, Eigen::MatrixXd>& data) const;
 };

@@ -381,6 +381,20 @@ public:
 
     __host__
     void operator+=(DeviceMatrixView<double> other);
+
+    __device__
+    T prod() const
+    {
+        T product = 1;
+        for (int i = 0; i < m_rows; i++)
+        {
+            for (int j = 0; j < m_cols; j++)
+            {
+                product *= this->operator()(i, j);
+            }
+        }
+        return product;
+    }
 };
 
 

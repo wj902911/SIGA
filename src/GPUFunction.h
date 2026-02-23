@@ -6,7 +6,7 @@ class GPUFunction
 {
 public:
     virtual void eval_into(DeviceMatrixView<double> gridPoints,
-                           DeviceMatrixView<int> numPointsPerDir,
+                           DeviceVectorView<int> numPointsPerPatch,
                            DeviceMatrixView<double> values) const = 0;
 };
 
@@ -28,7 +28,7 @@ public:
 #endif
 
     void eval_into(DeviceMatrixView<double> gridPoints,
-                   DeviceMatrixView<int> numPointsPerDir,
+                   DeviceVectorView<int> numPointsPerPatch,
                    DeviceMatrixView<double> values) const override;
     
     const MultiPatchDeviceView& displacementDeviceView() const

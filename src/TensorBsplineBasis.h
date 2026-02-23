@@ -74,6 +74,9 @@ public:
 	std::vector<int> getNumGpAndEle() const;
 	int getNumControlPoints() const;
 
+	std::vector<double> breaks(int direction) const
+	{ return std::vector<double>(m_knotVectors[direction].breaks()); }
+
 	int getTotalNumGaussPoints() const;
 	int getTotalNumBoundaryGaussPoints() const;
 

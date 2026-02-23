@@ -16,7 +16,7 @@ void printKernel(MultiPatchDeviceView displacement)
 
 int main()
 {
-	int numRefinements = 1;
+	int numRefinements = 3;
 	int numDegElev = 1;
 	double deltaDisplacement = 0.1;
 	double maxDisplacement = 1.0;
@@ -75,6 +75,8 @@ int main()
     //KnotVector u3(knot_u_order,knot_u3);
 	//KnotVector v3(knot_v_order,knot_v3);
 
+	//std::vector<double> breaks = u1.breaks();
+
     Patch patch(u1, v1, control_points);
 	Patch patch2(u2, v2, control_points2);
 	//Patch patch3(u3, v3, control_points3);
@@ -114,7 +116,7 @@ int main()
 
 	std::cout << "Initializing post-processor..." << std::endl;
 	start = std::chrono::high_resolution_clock::now();
-	GPUPostProcessor postProcessor(assembler, numPointsPerPatch, true, 0);
+	GPUPostProcessor postProcessor(assembler, numPointsPerPatch, true, 2);
 	end = std::chrono::high_resolution_clock::now();
 	elapsed = end - start;
 	std::cout << "Initialized post-processor in " << elapsed.count() << " s." << std::endl;

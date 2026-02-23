@@ -4,7 +4,7 @@ __global__
 void eval_into_Kernel_displacement(
     int numPoints,
     MultiPatchDeviceView displacement,
-    DeviceMatrixView<int> numPointsPerDir,
+    DeviceVectorView<int> numPointsPerPatch,
     DeviceMatrixView<double> gridPoints,
     DeviceMatrixView<double> values)
 {
@@ -17,9 +17,7 @@ void eval_into_Kernel_displacement(
         int threadPatch = 0;
         for (int i = 0; i < displacement.numPatches(); i++)
         {
-            int patchPoints = 1;
-            for (int d = 0; d < displacement.domainDim(); d++)
-                patchPoints *= numPointsPerDir(d, i);
+            int patchPoints = numPointsPerPatch[i];
             if (point_idx < patchPoints)
             {
                 threadPatch = i;
@@ -62,7 +60,7 @@ GPUDisplacementFunction::GPUDisplacementFunction(const MultiPatchDeviceView &vie
 }
 
 void GPUDisplacementFunction::eval_into(DeviceMatrixView<double> gridPoints,
-                                        DeviceMatrixView<int> numPointsPerDir,
+                                        DeviceVectorView<int> numPointsPerPatch,
                                         DeviceMatrixView<double> values) const
 {
     int numPoints = gridPoints.cols();
@@ -71,7 +69,7 @@ void GPUDisplacementFunction::eval_into(DeviceMatrixView<double> gridPoints,
         eval_into_Kernel_displacement, 0, numPoints);
     int gridSize = (numPoints + blockSize - 1) / blockSize;
     eval_into_Kernel_displacement<<<gridSize, blockSize>>>(numPoints,
-        m_displacementDeviceView, numPointsPerDir, gridPoints, values);
+        m_displacementDeviceView, numPointsPerPatch, gridPoints, values);
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess)
     {
