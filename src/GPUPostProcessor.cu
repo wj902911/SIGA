@@ -35,7 +35,7 @@ void patchLengthesKernel(int numTotalBoundaryGPs,
                 double pt(0);
                 double wt = geoBasis.gsPoint(point_idx, d, gspts[patch], pt);
                 //printf("Gauss point: %f, weight: %f\n", pt, wt);
-                double geoJacobianData[2] = {0.0}; //max 3D
+                double geoJacobianData[2] = {0.0};
                 DeviceVectorView<double> geoJacobian(geoJacobianData, dim);
                 geoPatch.boundaryJacobian(edgeIdx + 1, 
                     OneElementDeviceVectorView<double>(&pt), geoJacobian);
@@ -53,6 +53,52 @@ void patchLengthesKernel(int numTotalBoundaryGPs,
         case 3:
             {
                 int d = dir;
+                double pt(0);
+                double wt = geoBasis.gsPoint(point_idx, d, gspts[patch], pt);
+                double geoJacobianData[3] = {0.0};
+                DeviceVectorView<double> geoJacobian(geoJacobianData, dim);
+                switch(edgeIdx)
+                {
+                case 0:
+                        geoPatch.boundaryJacobian(3, 5, pt, geoJacobian);
+                        break;
+                case 1:
+                        geoPatch.boundaryJacobian(3, 6, pt, geoJacobian);
+                        break;
+                case 2:
+                        geoPatch.boundaryJacobian(4, 5, pt, geoJacobian);
+                        break;
+                case 3:                        
+                        geoPatch.boundaryJacobian(4, 6, pt, geoJacobian);
+                        break;
+                case 4:
+                        geoPatch.boundaryJacobian(1, 5, pt, geoJacobian);
+                        break;
+                case 5:
+                        geoPatch.boundaryJacobian(1, 6, pt, geoJacobian);
+                        break;
+                case 6:
+                        geoPatch.boundaryJacobian(2, 5, pt, geoJacobian);
+                        break;
+                case 7:
+                        geoPatch.boundaryJacobian(2, 6, pt, geoJacobian);
+                        break;
+                case 8:
+                        geoPatch.boundaryJacobian(1, 3, pt, geoJacobian);
+                        break;
+                case 9:
+                        geoPatch.boundaryJacobian(1, 4, pt, geoJacobian);
+                        break;
+                case 10:                        
+                        geoPatch.boundaryJacobian(2, 3, pt, geoJacobian);
+                        break;
+                case 11:
+                        geoPatch.boundaryJacobian(2, 4, pt, geoJacobian);
+                        break;
+                }
+                double length = wt * geoJacobian.norm_device();
+                int edgeIdxOffset = patch * 3 + d;
+                atomicAdd(&patchLengthes[edgeIdxOffset], length / 4.0);
                 break;
             }
         default:
@@ -413,7 +459,7 @@ GPUPostProcessor::GPUPostProcessor(const GPUAssembler &assembler,
     //          << pointsHost << std::endl;
     m_geoPointsDeviceArray.copyToHost(m_geoPointsHost.data());
     //std::cout << "Evaluated points at distributed locations:\n" 
-    //          << pointsHost << std::endl;
+    //          << m_geoPointsHost << std::endl;
 
     if (outputMesh)
     {
@@ -503,7 +549,7 @@ GPUPostProcessor::GPUPostProcessor(const GPUAssembler &assembler,
         m_meshGeoPoints.copyToHost(m_meshGeoPointsHost.data());
         m_meshEdges.copyToHost(m_meshEdgesHost.data());
         //std::cout << "m_meshPointGrid:\n" << m_meshGeoPointsHost << std::endl;
-        //std::cout << "m_meshGeoPoints:\n" << m_meshGeoPointsHost << std::endl;
+        //std::cout << "m_meshEdges:\n" << m_meshEdgesHost << std::endl;
     }
 }
 

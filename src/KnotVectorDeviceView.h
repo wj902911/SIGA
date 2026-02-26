@@ -8,11 +8,17 @@ class KnotVectorDeviceView
 private:
     int m_order = 0;
     DeviceVectorView<double> m_knots;
+    DeviceVectorView<int> m_multSum;
 
 public:
     __host__ __device__
     KnotVectorDeviceView(int order, int numKnots, double* knots)
     : m_order(order), m_knots(knots, numKnots) { }
+
+    __host__ __device__
+    KnotVectorDeviceView(int order, int numKnots, double* knots, 
+                         DeviceVectorView<int> multSum)
+    : m_order(order), m_knots(knots, numKnots), m_multSum(multSum) { }
 
     __device__
     DeviceVectorView<double> knots() const { return m_knots; }
@@ -24,7 +30,10 @@ public:
     void print() const
     {
         printf("Knot Vector (order %d):\n", m_order);
+        printf("knots:\n");
         m_knots.print();
+        printf("multiplicities:\n");
+        m_multSum.print();
     }
 
     __host__ __device__

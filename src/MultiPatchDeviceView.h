@@ -18,6 +18,8 @@ private:
     DeviceVectorView<int> m_intData;;
     DeviceVectorView<double> m_knotsPools;
     DeviceVectorView<double> m_controlPointsPools;
+    DeviceNestedArrayView<int> m_multSumsOffsets;
+    DeviceNestedArrayView<int> m_multSums;
 
     //DeviceVectorView<int> m_knotsOffset;
     //DeviceVectorView<int> m_knotsOrders;
@@ -46,6 +48,32 @@ public:
                          m_intData(intData),
                          m_knotsPools(knotsPools),
                          m_controlPointsPools(controlPointsPools)
+    {
+    }
+
+    __host__ __device__
+    MultiPatchDeviceView(int numPatches,
+                         int domainDim,
+                         int targetDim,
+                         DeviceVectorView<int> patchIntDataOffsets,
+                         DeviceVectorView<int> patchKnotsPoolOffsets,
+                         DeviceVectorView<int> patchControlPointsPoolOffsets,
+                         DeviceVectorView<int> intData,
+                         DeviceVectorView<double> knotsPools,
+                         DeviceVectorView<double> controlPointsPools,
+                         DeviceNestedArrayView<int> multSumsOffsets,
+                         DeviceNestedArrayView<int> multSums)
+                       : m_numPatches(numPatches),
+                         m_domainDim(domainDim),
+                         m_targetDim(targetDim),
+                         m_patchIntDataOffsets(patchIntDataOffsets),
+                         m_patchKnotsPoolOffsets(patchKnotsPoolOffsets),
+                         m_patchControlPointsPoolOffsets(patchControlPointsPoolOffsets),
+                         m_intData(intData),
+                         m_knotsPools(knotsPools),
+                         m_controlPointsPools(controlPointsPools),
+                         m_multSumsOffsets(multSumsOffsets),
+                         m_multSums(multSums)
     {
     }
 
@@ -83,7 +111,9 @@ public:
 
         return TensorBsplineBasisDeviceView(m_domainDim,
                                             patchIntData,
-                                            patchKnotsPool);
+                                            patchKnotsPool,
+                                            m_multSumsOffsets[patchIdx],
+                                            m_multSums[patchIdx]);
     }
 
     __device__
@@ -133,6 +163,31 @@ public:
             printf("Patch %d:\n", p);
             patch(p).print();
         }
+    }
+
+    __device__
+    void printRawData() const
+    {
+        printf("MultiPatch raw data:\n");
+        printf("Number of patches: %d\n", m_numPatches);
+        printf("Domain dimension: %d\n", m_domainDim);
+        printf("Target dimension: %d\n", m_targetDim);
+        printf("m_patchIntDataOffsets:\n");
+        m_patchIntDataOffsets.print();
+        printf("m_patchKnotsPoolOffsets:\n");
+        m_patchKnotsPoolOffsets.print();
+        printf("m_patchControlPointsPoolOffsets:\n");
+        m_patchControlPointsPoolOffsets.print();
+        printf("m_intData:\n");
+        m_intData.print();
+        printf("m_knotsPools:\n");
+        m_knotsPools.print();
+        printf("m_controlPointsPools:\n");
+        m_controlPointsPools.print();
+        printf("m_multSumsOffsets:\n");
+        m_multSumsOffsets.print();
+        printf("m_multSums:\n");
+        m_multSums.print();
     }
 
     __host__ __device__

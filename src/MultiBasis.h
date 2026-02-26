@@ -45,6 +45,12 @@ public:
 
     void getData(std::vector<int>& intData,
                  std::vector<double>& knotsPools) const;
+
+    void getData(std::vector<int>& intData,
+                 std::vector<double>& knotsPools,
+                 std::vector<std::vector<int>>& multSumsOffsets,
+                 std::vector<std::vector<int>>& multSums) const;
+
     void getData(DeviceArray<int>& intData,
                  DeviceArray<double>& knotsPools) const
     {
@@ -53,6 +59,23 @@ public:
         getData(intDataVec, knotsPoolsVec);
         intData = intDataVec;
         knotsPools = knotsPoolsVec;
+    }
+
+    void getData(DeviceArray<int>& intData,
+                 DeviceArray<double>& knotsPools,
+                 DeviceNestedArray<int>& multSumsOffsets,
+                 DeviceNestedArray<int>& multSums) const
+    {
+        std::vector<int> intDataVec;
+        std::vector<double> knotsPoolsVec;
+        std::vector<std::vector<int>> multSumsOffsetsVec;
+        std::vector<std::vector<int>> multSumsVec;
+        getData(intDataVec, knotsPoolsVec, 
+                multSumsOffsetsVec, multSumsVec);
+        intData = intDataVec;
+        knotsPools = knotsPoolsVec;
+        multSumsOffsets = DeviceNestedArray<int>(multSumsOffsetsVec);
+        multSums = DeviceNestedArray<int>(multSumsVec);
     }
 
     void giveBasis(MultiPatch& multiPatch, int targetDim) const;

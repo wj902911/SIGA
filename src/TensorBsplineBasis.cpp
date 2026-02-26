@@ -637,3 +637,46 @@ void TensorBsplineBasis::getData(std::vector<int> &intData,
 		doubleData.insert(doubleData.end(), knots.begin(), knots.end());
 	}
 }
+
+void TensorBsplineBasis::getData(std::vector<int> &intData, 
+	std::vector<double> &doubleData, 
+	std::vector<int> &MultSumsOffsets, 
+	std::vector<int> &multSums) const
+{
+	intData.clear();
+	doubleData.clear();
+	MultSumsOffsets.clear();
+	multSums.clear();
+
+
+	int intDataSize = getIntDataSize();
+	intData.reserve(intDataSize);
+	std::vector<int> orders = getOrders();
+	intData.insert(intData.end(), orders.begin(), orders.end());
+	int knotsOffset = 0;
+	intData.push_back(knotsOffset);
+	for (int d = 0; d < getDim(); ++d)
+	{
+		knotsOffset += getNumKnots(d);
+		intData.push_back(knotsOffset);
+	}
+
+	int doubleDataSize = getDoubleDataSize();
+	doubleData.reserve(doubleDataSize);
+	for (int d = 0; d < getDim(); ++d)
+	{
+		std::vector<double> knots = getKnots(d);
+		doubleData.insert(doubleData.end(), knots.begin(), knots.end());
+	}
+
+	MultSumsOffsets.reserve(getDim());
+	int numMultSums = 0;
+	for (int d = 0; d < getDim(); ++d)
+	{
+		numMultSums += m_knotVectors[d].multSum().size();
+		MultSumsOffsets.push_back(numMultSums);
+		multSums.insert(multSums.end(), 
+			m_knotVectors[d].multSum().begin(), 
+			m_knotVectors[d].multSum().end());
+	}
+}

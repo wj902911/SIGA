@@ -9,8 +9,10 @@ private:
     int m_domainDim;
     DeviceVectorView<int> m_patchIntDataOffsets;
     DeviceVectorView<int> m_patchKnotsPoolOffsets;
-    DeviceVectorView<int> m_intData;;
+    DeviceVectorView<int> m_intData;
     DeviceVectorView<double> m_knotsPools;
+    DeviceNestedArrayView<int> m_multSumsOffsets;
+    DeviceNestedArrayView<int> m_multSums;
 
 public:
     __host__ __device__
@@ -29,6 +31,26 @@ public:
     {
     }
 
+    __host__ __device__
+    MultiBasisDeviceView(int numPatches,
+                         int domainDim,
+                         DeviceVectorView<int> patchIntDataOffsets,
+                         DeviceVectorView<int> patchKnotsPoolOffsets,
+                         DeviceVectorView<int> intData,
+                         DeviceVectorView<double> knotsPools,
+                         DeviceNestedArrayView<int> multSumsOffsets,
+                         DeviceNestedArrayView<int> multSums)
+                       : m_numPatches(numPatches),
+                         m_domainDim(domainDim),
+                         m_patchIntDataOffsets(patchIntDataOffsets),
+                         m_patchKnotsPoolOffsets(patchKnotsPoolOffsets),
+                         m_intData(intData),
+                         m_knotsPools(knotsPools),
+                         m_multSumsOffsets(multSumsOffsets),
+                         m_multSums(multSums)
+    {
+    }
+
     __device__
     TensorBsplineBasisDeviceView basis(int patchIdx) const
     {
@@ -43,8 +65,12 @@ public:
 
         DeviceVectorView<double> patchKnotsPool(m_knotsPools.data() + knotsPoolOffsetStart,
                                                 knotsPoolOffsetEnd - knotsPoolOffsetStart);
+        
+        DeviceVectorView<int> patchMultSumsOffsets = m_multSumsOffsets[patchIdx];
+        DeviceVectorView<int> patchMultSums = m_multSums[patchIdx];
 
-        return TensorBsplineBasisDeviceView(m_domainDim, patchIntData, patchKnotsPool);
+        return TensorBsplineBasisDeviceView(m_domainDim, patchIntData, patchKnotsPool, 
+                                            patchMultSumsOffsets, patchMultSums);
     }
 
     __host__ __device__

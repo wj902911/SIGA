@@ -660,6 +660,20 @@ void printKernel(MultiPatchDeviceView multiPatch,
     multiGaussPoints.print();
 }
 
+__global__
+void printMultiPatchKernel(MultiPatchDeviceView multiPatch)
+{
+    printf("MultiPatch:\n");
+    multiPatch.print();
+}
+
+__global__
+void printMultiBasisKernel(MultiBasisDeviceView multiBasis)
+{
+    printf("MultiBasis:\n");
+    multiBasis.print();
+}
+
 GPUAssembler::GPUAssembler(const MultiPatch &multiPatch, 
                            const MultiBasis &multiBasis, 
                            const BoundaryConditions &bc, 
@@ -770,7 +784,6 @@ computeDirichletDofs(int unk_,
 {
     DofMapper dofMapper = mappers[unk_]; 
     ddof[unk_].resize(dofMapper.boundarySize());
-    const TensorBsplineBasis &basis = multiBasis.basis(unk_);
 
     for (std::deque<boundary_condition>::const_iterator 
          it = m_boundaryConditions.dirichletBegin();
@@ -779,7 +792,7 @@ computeDirichletDofs(int unk_,
         const int k = it->patchIndex();
         if (it -> unknown() != unk_)
             continue;
-        const Eigen::VectorXi boundary = basis.boundary(it -> side());
+        const Eigen::VectorXi boundary = multiBasis.basis(k).boundary(it -> side());
         //std::cout << boundary << std::endl;
         for (int i = 0; i != boundary.size(); ++i)
         {
@@ -795,7 +808,7 @@ computeDirichletDofs(int unk_,
         const int k = it->patchIndex();
         if (it -> unknown() != unk_)
             continue;
-        const int i = basis.corner(it -> corner());
+        const int i = multiBasis.basis(k).corner(it -> corner());
         const int ii = dofMapper.bindex(i, k);
         ddof[unk_][ii] = it->value(unk_);
     }
@@ -813,6 +826,20 @@ void GPUAssembler::print() const
                          m_multiGaussPoints.view());
     cudaError_t err = cudaDeviceSynchronize();
     assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler::print");
+}
+
+void GPUAssembler::printMultiPatch() const
+{
+    printMultiPatchKernel<<<1,1>>>(m_multiPatch.deviceView());
+    cudaError_t err = cudaDeviceSynchronize();
+    assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler::printMultiPatch");
+}
+
+void GPUAssembler::printMultiBasis() const
+{
+    printMultiBasisKernel<<<1,1>>>(m_multiBasis.deviceView());
+    cudaError_t err = cudaDeviceSynchronize();
+    assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler::printMultiBasis");
 }
 
 int GPUAssembler::numDofs() const

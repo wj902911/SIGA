@@ -7,6 +7,9 @@ class DeviceVectorView : public DeviceMatrixView<T>
 {
 public:
     __host__ __device__
+    DeviceVectorView() = default;
+
+    __host__ __device__
     DeviceVectorView(T* data, int size)
     : DeviceMatrixView<T>(data, size, 1) {}
 

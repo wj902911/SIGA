@@ -85,6 +85,12 @@ public:
                  std::vector<double> &knotsPool,
                  std::vector<double> &controlPointsPool) const;
 
+    void getData(std::vector<int>& intData,
+                 std::vector<double> &knotsPool,
+                 std::vector<int>& MultSumsOffsets,
+				 std::vector<int>& multSums,
+                 std::vector<double> &controlPointsPool) const;
+
 private:
     TensorBsplineBasis m_basis;
     Eigen::MatrixXd m_controlPoints;

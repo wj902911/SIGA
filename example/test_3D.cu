@@ -10,11 +10,11 @@
 
 int main()
 {
-	int numRefinements = 1;
+	int numRefinements =0;
 	int numDegElev = 1;
 	double deltaDisplacement = 0.1;
 	double maxDisplacement = 1.0;
-	std::vector<int> numPointsPerPatch{ 5, 5 };
+	std::vector<int> numPointsPerPatch{ 1000, 1000 };
 
 	if (!std::filesystem::exists("./TwoPatchesTest_3D"))
 		std::filesystem::create_directory("./TwoPatchesTest_3D");
@@ -29,32 +29,40 @@ int main()
 	int knot_u_order = 1;
 	int knot_v_order = 1;
 	int knot_w_order = 1;
-	std::vector<double> knot_u{ 0., 0., 1., 1. };
+	std::vector<double> knot_u{ 0., 0., 0.5, 1., 1. };
 	std::vector<double> knot_v{ 0., 0., 1., 1. };
 	std::vector<double> knot_w{ 0., 0., 1., 1. };
-	Eigen::MatrixXd control_points(8, 3);
+	Eigen::MatrixXd control_points(12, 3);
 	control_points <<
 		0.000, 0.000, 0.000,
+		1.000, 0.000, 0.000,
 		2.000, 0.000, 0.000,
 		0.000, 1.000, 0.000,
+		1.000, 1.000, 0.000,
 		2.000, 1.000, 0.000,
 		0.000, 0.000, 1.000,
+		1.000, 0.000, 1.000,
 		2.000, 0.000, 1.000,
 		0.000, 1.000, 1.000,
+		1.000, 1.000, 1.000,
 		2.000, 1.000, 1.000;
 	
-	std::vector<double> knot_u2{ 0., 0., 1., 1. };
+	std::vector<double> knot_u2{ 0., 0., 0.5, 1., 1. };
 	std::vector<double> knot_v2{ 0., 0., 1., 1. };
 	std::vector<double> knot_w2{ 0., 0., 1., 1. };
-	Eigen::MatrixXd control_points2(8, 3);
+	Eigen::MatrixXd control_points2(12, 3);
 	control_points2 <<
 		2.000, 0.000, 0.000,
+		3.000, 0.000, 0.000,
 		4.000, 0.000, 0.000,
 		2.000, 1.000, 0.000,
+		3.000, 1.000, 0.000,
 		4.000, 1.000, 0.000,
 		2.000, 0.000, 1.000,
+		3.000, 0.000, 1.000,
 		4.000, 0.000, 1.000,
 		2.000, 1.000, 1.000,
+		3.000, 1.000, 1.000,
 		4.000, 1.000, 1.000;
 #if 0
     std::vector<double> knot_u3{ 0., 0., 1., 1. };
@@ -93,20 +101,20 @@ int main()
 	MultiBasis bases(multiPatch);
 
 	for (int i = 0; i < numDegElev; ++i)
-		bases.degreeElevate();
+		bases.degreeElevate(false);
 
     for (int r = 0; r < numRefinements; ++r)
 		bases.uniformRefine();
 
     BoundaryConditions bcInfo;
-	for (int d = 0; d < 2; ++d)
+	for (int d = 0; d < 3; ++d)
 		bcInfo.addCondition(0, boundary::west, condition_type::dirichlet, 
-                            std::vector<double>{0.0, 0.0}, d);
-	std::vector<double> disp{ deltaDisplacement, 0.0 };
+                            std::vector<double>{0.0, 0.0, 0.0}, d);
+	std::vector<double> disp{ deltaDisplacement, 0.0, 0.0 };
     bcInfo.addCondition(1, boundary::east, condition_type::dirichlet, disp, 0);
 
-	Eigen::VectorXd bodyForce(2);
-	bodyForce << 0.0, 0.0;
+	Eigen::VectorXd bodyForce(3);
+	bodyForce << 0.0, 0.0, 0.0;
 
 	std::cout << "Initializing assembler..." << std::endl;
 	auto start = std::chrono::high_resolution_clock::now();
@@ -125,7 +133,7 @@ int main()
 	std::cout << "Initialized post-processor in " << elapsed.count() << " s." << std::endl;
 
 	MultiPatch displacementHost;
-	bases.giveBasis(displacementHost, 2);
+	bases.giveBasis(displacementHost, 3);
 	MultiPatchDeviceData displacementDeviceData(displacementHost);
 	//assembler.constructSolution(solver.solutionView(), 
 	//                            solver.allFixedDofsView(), 

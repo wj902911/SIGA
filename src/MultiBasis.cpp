@@ -53,8 +53,9 @@ void MultiBasis::getMapper(bool conforming, const BoundaryConditions &bc,
 void MultiBasis::getMappers(bool conforming, const BoundaryConditions &bc, 
                             std::vector<DofMapper> &dofMappers, bool finalize) const
 {
-    dofMappers = std::vector<DofMapper>(m_bases.size());
-    for (int d = 0; d < m_bases.size(); d++)
+    int dim = getDim();
+    dofMappers = std::vector<DofMapper>(dim);
+    for (int d = 0; d < dim; d++)
     {
         getMapper(conforming, bc, d, dofMappers[d], finalize);
     }
@@ -150,6 +151,53 @@ void MultiBasis::getData(std::vector<int> &intData,
         intData.reserve(intData.size() + patchIntData.size());
         intData.insert(intData.end(), patchIntData.begin(), patchIntData.end());
         knotsPools.insert(knotsPools.end(), patchKnotsPool.begin(), patchKnotsPool.end());
+    }
+}
+
+void MultiBasis::getData(std::vector<int> &intData, 
+                         std::vector<double> &knotsPools,
+                         std::vector<std::vector<int>> &multSumsOffsets,
+                         std::vector<std::vector<int>> &multSums) const
+{
+    intData.clear();
+    knotsPools.clear();
+    multSumsOffsets.clear();
+    multSums.clear();
+
+    int numPatches = static_cast<int>(m_bases.size());
+    intData.reserve(2 * numPatches + 2);
+    int patchIntDataOffsets = 0;
+    intData.push_back(patchIntDataOffsets);
+    for (int i = 0; i < numPatches; i++)
+    {
+        patchIntDataOffsets += m_bases[i].getIntDataSize();
+        intData.push_back(patchIntDataOffsets);
+    }
+    int patchKnotsPoolOffsets = 0;
+    intData.push_back(patchKnotsPoolOffsets);
+    for (int i = 0; i < numPatches; i++)
+    {
+        patchKnotsPoolOffsets += m_bases[i].getTotalNumKnots();
+        intData.push_back(patchKnotsPoolOffsets);
+    }
+    knotsPools.reserve(patchKnotsPoolOffsets);
+    multSumsOffsets.reserve(numPatches);
+    multSums.reserve(numPatches);
+    for (int i = 0; i < numPatches; i++)
+    {
+        std::vector<int> patchIntData;
+        std::vector<double> patchKnotsPool;
+        std::vector<int> singlePatchMultSumsOffsets;
+        std::vector<int> singlePatchMultSums;
+        m_bases[i].getData(patchIntData, patchKnotsPool, 
+                           singlePatchMultSumsOffsets, 
+                           singlePatchMultSums);
+        intData.reserve(intData.size() + patchIntData.size());
+        intData.insert(intData.end(), patchIntData.begin(), patchIntData.end());
+        knotsPools.insert(knotsPools.end(), patchKnotsPool.begin(), patchKnotsPool.end());
+
+        multSumsOffsets.push_back(singlePatchMultSumsOffsets);
+        multSums.push_back(singlePatchMultSums);
     }
 }
 

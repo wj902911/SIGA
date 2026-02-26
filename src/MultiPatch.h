@@ -125,6 +125,37 @@ public:
                  std::vector<double>& knotsPools,
                  std::vector<int>& patchControlPointsPoolOffsets,
                  std::vector<double>& controlPointsPools) const;
+
+    void getData(std::vector<int>& intData,
+                 std::vector<double>& knotsPools,
+                 std::vector<std::vector<int>>& multSumsOffsets,
+                 std::vector<std::vector<int>>& multSums,
+                 std::vector<int>& patchControlPointsPoolOffsets,
+                 std::vector<double>& controlPointsPools) const;
+
+    void getData(DeviceArray<int>& intData,
+                 DeviceArray<double>& knotsPools,
+                 DeviceNestedArray<int>& multSumsOffsets,
+                 DeviceNestedArray<int>& multSums,
+                 DeviceArray<int>& patchControlPointsPoolOffsets,
+                 DeviceArray<double>& controlPointsPools) const
+    {
+        std::vector<int> intData_vec;
+        std::vector<double> knotsPools_vec;
+        std::vector<std::vector<int>> multSumsOffsetsVec;
+        std::vector<std::vector<int>> multSumsVec;
+        std::vector<int> patchControlPointsPoolOffsets_vec;
+        std::vector<double> controlPointsPools_vec;
+        getData(intData_vec, knotsPools_vec, multSumsOffsetsVec, multSumsVec, 
+            patchControlPointsPoolOffsets_vec, controlPointsPools_vec);
+        intData = intData_vec;
+        knotsPools = knotsPools_vec;
+        multSumsOffsets = multSumsOffsetsVec;
+        multSums = multSumsVec;
+        patchControlPointsPoolOffsets = patchControlPointsPoolOffsets_vec;
+        controlPointsPools = controlPointsPools_vec;
+    }
+
     void getData(DeviceArray<int>& intData,
                  DeviceArray<double>& knotsPools,
                  DeviceArray<int>& patchControlPointsPoolOffsets,

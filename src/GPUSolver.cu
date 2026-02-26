@@ -360,7 +360,7 @@ void GPUSolver::solve()
     std::cout << std::scientific;
     while (m_status == working)
     {
-#if 1
+#if 0
         if(!solveSingleIteration())
 #else
         if(!solveSingleIteration_Eigen())

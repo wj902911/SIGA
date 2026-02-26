@@ -17,6 +17,9 @@ private:
 
 public:
     __host__ __device__
+    DeviceMatrixView() = default;
+
+    __host__ __device__
     DeviceMatrixView(T* data, int rows, int cols)
     : m_data(data), m_rows(rows), m_cols(cols) { }
 

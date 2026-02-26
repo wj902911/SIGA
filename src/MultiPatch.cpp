@@ -849,6 +849,70 @@ void MultiPatch::getData(std::vector<int>& intData,
     }
 }
 
+void MultiPatch::getData(std::vector<int> &intData, 
+                         std::vector<double> &knotsPools, 
+                         std::vector<std::vector<int>> &multSumsOffsets, 
+                         std::vector<std::vector<int>> &multSums, 
+                         std::vector<int> &patchControlPointsPoolOffsets, 
+                         std::vector<double> &controlPointsPools) const
+{
+    intData.clear();
+    knotsPools.clear();
+    multSumsOffsets.clear();
+    multSums.clear();
+    patchControlPointsPoolOffsets.clear();
+    controlPointsPools.clear();
+
+    int numPatches = m_patches.size();
+    intData.reserve(2 * numPatches + 2);
+    int patchIntDataOffsets = 0;
+    intData.push_back(patchIntDataOffsets);
+    for (int i = 0; i < numPatches; i++)
+    {
+        patchIntDataOffsets += patch(i).getIntDataSize();
+        intData.push_back(patchIntDataOffsets);
+    }
+    int patchKnotsPoolOffsets = 0;
+    intData.push_back(patchKnotsPoolOffsets);
+    for (int i = 0; i < numPatches; i++)
+    {
+        patchKnotsPoolOffsets += patch(i).getTotalNumKnots();
+        intData.push_back(patchKnotsPoolOffsets);
+    }
+    patchControlPointsPoolOffsets.reserve(numPatches + 1);
+    int CPOffset = 0;
+    patchControlPointsPoolOffsets.push_back(CPOffset);
+    for (int i = 0; i < numPatches; i++)
+    {
+        CPOffset += patch(i).getControlPoints().size();
+        patchControlPointsPoolOffsets.push_back(CPOffset);
+    }
+    knotsPools.reserve(patchKnotsPoolOffsets);
+    controlPointsPools.reserve(patchControlPointsPoolOffsets.back());
+    multSumsOffsets.reserve(numPatches);
+    multSums.reserve(numPatches);
+    for (int i = 0; i < numPatches; i++)
+    {
+        std::vector<int> patchIntData;
+        std::vector<double> patchKnotsPool;
+        std::vector<double> patchControlPointsPool;
+        std::vector<int> singlePatchMultSumsOffsets;
+        std::vector<int> singlePatchMultSums;
+        patch(i).getData(patchIntData, patchKnotsPool, 
+                         singlePatchMultSumsOffsets, 
+                         singlePatchMultSums, 
+                         patchControlPointsPool);
+        intData.reserve(intData.size() + patchIntData.size());
+        intData.insert(intData.end(), patchIntData.begin(), patchIntData.end());
+        knotsPools.insert(knotsPools.end(), patchKnotsPool.begin(), patchKnotsPool.end());
+        controlPointsPools.insert(controlPointsPools.end(), 
+                                  patchControlPointsPool.begin(), 
+                                  patchControlPointsPool.end());
+        multSumsOffsets.push_back(singlePatchMultSumsOffsets);
+        multSums.push_back(singlePatchMultSums);
+    }
+}
+
 #if 0
 // Data layout:
 // intData: [patchIntDataOffsets..., patchDoubleDataOffsets..., 

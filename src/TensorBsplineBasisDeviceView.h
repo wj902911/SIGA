@@ -15,6 +15,7 @@ private:
     DeviceVectorView<int> m_knotsOrders;
     //DeviceVectorView<int> m_intData; // combined storage for offsets and orders
     DeviceVectorView<double> m_knotsPool;
+    DeviceNestedArrayView<int> m_multSums;
 
 public:
     __device__
@@ -25,6 +26,20 @@ public:
                                  m_knotsOffset(intData.data() + dim, dim + 1),
                                  m_knotsOrders(intData.data(), dim),
                                  m_knotsPool(knotsPool)
+    {
+    }
+
+    __device__
+    TensorBsplineBasisDeviceView(int dim,
+                                 DeviceVectorView<int> intData,
+                                 DeviceVectorView<double> knotsPool,
+                                 DeviceVectorView<int> multSumsOffsets,
+                                 DeviceVectorView<int> multSums)
+                               : m_dim(dim),
+                                 m_knotsOffset(intData.data() + dim, dim + 1),
+                                 m_knotsOrders(intData.data(), dim),
+                                 m_knotsPool(knotsPool),
+                                 m_multSums(multSumsOffsets, multSums)
     {
     }
 
@@ -45,7 +60,8 @@ public:
     {
         return KnotVectorDeviceView(m_knotsOrders[dir],
                                     m_knotsOffset[dir + 1] - m_knotsOffset[dir],
-                                    m_knotsPool.data() + m_knotsOffset[dir] - m_knotsOffset[0]);
+                                    m_knotsPool.data() + m_knotsOffset[dir] - m_knotsOffset[0],
+                                    m_multSums[dir]);
     }
 
     __device__

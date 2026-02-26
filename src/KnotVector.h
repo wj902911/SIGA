@@ -41,6 +41,7 @@ public:
 	void increaseMultiplicity(const int i = 1, bool boundary = false);
 	void increaseEndMultiplicity(const int i = 1, bool boundary = false);
 	const int* multSumData() const { return m_multSum.data(); }
+	const std::vector<int>& multSum() const { return m_multSum; }
 	const double* data() const { return m_knots.data(); }
 
 	void degreeElevate(const int & i = 1, bool eleInternal = true);

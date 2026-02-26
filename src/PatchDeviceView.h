@@ -63,8 +63,8 @@ public:
             for (int d = 0; d < m_basis.dim(); d++)
             {
                 KnotVectorDeviceView kv = m_basis.knotVector(d);
-                printf("Direction %d:\nOrder %d\nKnots:\n", d, kv.order());
-                kv.knots().print();
+                printf("Direction %d:\n", d);
+                kv.print();
             }
             printf("Control points:\n");
             m_controlPoints.print();

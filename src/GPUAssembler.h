@@ -41,6 +41,12 @@ public:
     void print() const;
 
     __host__
+    void printMultiPatch() const;
+
+    __host__
+    void printMultiBasis() const;
+
+    __host__
     int numDofs() const;
 
     __host__

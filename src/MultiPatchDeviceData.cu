@@ -55,5 +55,7 @@ MultiPatchDeviceView MultiPatchDeviceData::deviceView() const
                                 patchControlPointsPoolOffsets,
                                 intData,
                                 knotsPools,
-                                controlPointsPools);                                
+                                controlPointsPools,
+                                m_multSumsOffsets.view(),
+                                m_multSums.view());                                
 }

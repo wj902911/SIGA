@@ -14,6 +14,8 @@ private:
     //std::vector<int> m_doubleDataOffsets;
     DeviceArray<int> m_intData;
     DeviceArray<double> m_knotsPools;
+    DeviceNestedArray<int> m_multSumsOffsets;
+    DeviceNestedArray<int> m_multSums;
     DeviceArray<int> m_patchControlPointsPoolOffsets;
     DeviceArray<double> m_controlPointsPools;
 
@@ -65,6 +67,8 @@ public:
     {
         multipatch.getData(m_intData,
                            m_knotsPools,
+                           m_multSumsOffsets,
+                           m_multSums,
                            m_patchControlPointsPoolOffsets,
                            m_controlPointsPools);
     }

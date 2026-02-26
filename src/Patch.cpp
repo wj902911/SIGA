@@ -215,3 +215,21 @@ void Patch::getData(std::vector<int> &intData,
                              m_controlPoints.data(), 
                              m_controlPoints.data() + m_controlPoints.size());
 }
+
+void Patch::getData(std::vector<int> &intData, 
+                    std::vector<double> &knotsPool, 
+                    std::vector<int> &MultSumsOffsets, 
+                    std::vector<int> &multSums, 
+                    std::vector<double> &controlPointsPool) const
+{
+    intData.clear();
+    knotsPool.clear();
+    controlPointsPool.clear();
+    MultSumsOffsets.clear();
+    multSums.clear();
+    m_basis.getData(intData, knotsPool, MultSumsOffsets, multSums);
+    controlPointsPool.reserve(m_controlPoints.size());
+    controlPointsPool.insert(controlPointsPool.end(), 
+                             m_controlPoints.data(), 
+                             m_controlPoints.data() + m_controlPoints.size());
+}

@@ -114,6 +114,11 @@ public:
 	void getData(std::vector<int>& intData,
 	             std::vector<double>& doubleData) const;
 
+	void getData(std::vector<int>& intData,
+	             std::vector<double>& doubleData,
+				 std::vector<int>& MultSumsOffsets,
+				 std::vector<int>& multSums) const;
+
 	void degreeElevate(int const & i = 1, int const dir = -1, bool eleInternal = true)
 	{
 		if (dir == -1)
