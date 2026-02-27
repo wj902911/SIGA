@@ -16,7 +16,7 @@ void printKernel(MultiPatchDeviceView displacement)
 
 int main()
 {
-	int numRefinements = 1;
+	int numRefinements = 0;
 	int numDegElev = 1;
 	double deltaDisplacement = 0.1;
 	double maxDisplacement = 1.0;
@@ -108,7 +108,7 @@ int main()
 	std::cout << "Initializing assembler..." << std::endl;
 	auto start = std::chrono::high_resolution_clock::now();
 	GPUAssembler assembler(multiPatch, bases, bcInfo, bodyForce);
-	//assembler.printMultiBasis();
+	//assembler.print();
 	auto end = std::chrono::high_resolution_clock::now();
 	std::chrono::duration<double> elapsed = end - start;
 	std::cout << "Initialized assembler in " << elapsed.count() << " s." << std::endl;

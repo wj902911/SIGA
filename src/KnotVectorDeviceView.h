@@ -2,6 +2,8 @@
 
 #include <cstdio>
 #include <DeviceVectorView.h>
+#include <KnotGPUIterator.h>
+#include <Utility_d.h>
 
 class KnotVectorDeviceView
 {
@@ -11,6 +13,10 @@ private:
     DeviceVectorView<int> m_multSum;
 
 public:
+	typedef UKnotGPUIterator uiterator;
+    typedef KnotGPUIterator  smart_iterator;
+
+
     __host__ __device__
     KnotVectorDeviceView(int order, int numKnots, double* knots)
     : m_order(order), m_knots(knots, numKnots) { }
@@ -76,6 +82,67 @@ public:
 
     __host__ __device__
     int numControlPoints() const { return m_knots.size() - m_order - 1; }
+
+    __device__
+    double* begin() const { return m_knots.data(); }
+
+    __device__
+    const int* multSumData() const { return m_multSum.data(); }
     
+    __device__
+    const double* data() const { return m_knots.data(); }
+
+    __device__
+    int uSize() const { return m_multSum.size(); }
+
+    __device__
+    int size() const { return m_knots.size(); }
+
+    __device__
+    int numLeftGhosts() const
+    {
+        smart_iterator it(*this,0,0);
+        it += dmin( (int)m_order, size() );
+        return it.uIterator() - uiterator(*this, 0, 0);
+    }
+
+    __device__
+    smart_iterator sbegin()  const
+    { return smart_iterator(*this,0,numLeftGhosts()); }
+
+    __device__
+    smart_iterator send() const
+    { return smart_iterator::End(*this); }
+
+    __device__
+    smart_iterator domainSBegin() const
+	{ return sbegin() + m_order; }  
+
+    __device__
+    smart_iterator domainSEnd() const
+	{ return send() - (m_order + 1); }
+
+    __device__
+    uiterator domainUBegin() const
+	{ return domainSBegin().uIterator(); }
+
+    __device__
+    uiterator domainUEnd() const
+	{ return domainSEnd().uIterator(); }
+
+    __device__
+    uiterator uFind( const double u ) const
+    {
+        uiterator dend = domainUEnd();
+	    if (u==*dend) // knot at domain end ?
+    	    return --dend;
+        else
+            return upper_bound_it(domainUBegin(), dend, u) - 1;
+    }
+
+    __device__
+    const double* iFind( const double u ) const
+    { return begin() + uFind(u).lastAppearance(); }
 };
 
+#include "UKnotGPUIterator_impl.h"

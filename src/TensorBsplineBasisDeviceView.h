@@ -458,17 +458,26 @@ public:
             return;
         }
 
+#if 0
         int span = 0;
         if (u == knotVector(dir).domainEnd())
             span = knotVector(dir).numKnots() - knotVector(dir).order() - 2;
         else
             span = upperBound(dir, u) - 1;
+#else
+        const double* span = knotVector(dir).iFind(u);
+#endif
 
         ndu[0] = 1.0;
         for (int j = 1; j <= p; ++j)
         {
+#if 0
             left[j] = u - knotVector(dir).knots()[span + 1 - j];
             right[j] = knotVector(dir).knots()[span + j] - u;
+#else
+            left[j] = u  - *(span+1-j);
+            right[j] = *(span+j) - u;
+#endif
             double saved = 0.0;
             for (int r = 0; r < j; ++r) {
                 ndu[j * p1 + r] = right[r + 1] + left[j - r];

@@ -382,3 +382,48 @@ inline void voigtStressView(DeviceVectorView<T> Svec, DeviceMatrixView<T> S)
     for (int i = 0; i < dimTensor; i++)
         Svec(i) = S(voigt(dim, i, 0), voigt(dim, i, 1));
 }
+
+template <typename T>
+__host__ __device__ __forceinline__
+constexpr T dmin(const T& a, const T& b) noexcept
+{
+    return (b < a) ? b : a;
+}
+
+template <class T, class U>
+__host__ __device__ __forceinline__
+const T* upper_bound_ptr(const T* first, const T* last, const U& value)
+{
+    // returns first element > value
+    auto count = last - first;
+    while (count > 0) {
+        auto step = count / 2;
+        const T* mid = first + step;
+        if (!(value < *mid)) {   // value >= *mid
+            first = mid + 1;
+            count -= step + 1;
+        } else {
+            count = step;
+        }
+    }
+    return first;
+}
+
+template <class It, class U>
+__host__ __device__ __forceinline__
+It upper_bound_it(It first, It last, const U& value)
+{
+    // returns first iterator it in [first,last) such that value < *it  (i.e., *it > value)
+    auto count = last - first;              // requires random-access iterator
+    while (count > 0) {
+        auto step = count / 2;
+        It mid = first + step;
+        if (!(value < *mid)) {             // value >= *mid
+            first = mid + 1;
+            count -= step + 1;
+        } else {
+            count = step;
+        }
+    }
+    return first;
+}
