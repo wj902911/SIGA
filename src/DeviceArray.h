@@ -347,6 +347,26 @@ public:
             assert(err == cudaSuccess && "cudaMemcpy failed in DeviceArray copyToHost");
         }
     }
+
+    __host__
+    void updateFromHost(const T* hostVec)
+    {
+        if (m_size > 0)
+        {
+            cudaError_t err = cudaMemcpy(m_data, hostVec, m_size * sizeof(T), cudaMemcpyHostToDevice);
+            assert(err == cudaSuccess && "cudaMemcpy failed in DeviceArray updateFromHost");
+        }
+    }
+
+    __host__
+    T operator[](int index) const
+    {
+        assert(index >= 0 && index < m_size && "Index out of bounds in DeviceArray operator[]");
+        T value;
+        cudaError_t err = cudaMemcpy(&value, m_data + index, sizeof(T), cudaMemcpyDeviceToHost);
+        assert(err == cudaSuccess && "cudaMemcpy failed in DeviceArray operator[]");
+        return value;
+    }
 };
 
 template <typename T>

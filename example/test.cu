@@ -16,8 +16,8 @@ void printKernel(MultiPatchDeviceView displacement)
 
 int main()
 {
-	int numRefinements = 0;
-	int numDegElev = 1;
+	int numRefinements = 6;
+	int numDegElev = 2;
 	double deltaDisplacement = 0.1;
 	double maxDisplacement = 1.0;
 	std::vector<int> numPointsPerPatch{ 1000, 1000 };
@@ -117,7 +117,7 @@ int main()
 
 	std::cout << "Initializing post-processor..." << std::endl;
 	start = std::chrono::high_resolution_clock::now();
-	GPUPostProcessor postProcessor(assembler, numPointsPerPatch, true, 2);
+	GPUPostProcessor postProcessor(assembler, numPointsPerPatch, false, 2);
 	end = std::chrono::high_resolution_clock::now();
 	elapsed = end - start;
 	std::cout << "Initialized post-processor in " << elapsed.count() << " s." << std::endl;

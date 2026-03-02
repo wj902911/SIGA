@@ -1,6 +1,8 @@
 #pragma once
 
 #include <GPUAssembler.h>
+#include <Eigen/Sparse>
+#include <amgx_c.h>
 
 enum solver_status { converged,      /// method successfully converged
                      interrupted,    /// solver was interrupted after exceeding the limit of iterations
@@ -21,9 +23,28 @@ private:
     int m_numIterations = 0;
     DeviceNestedArray<double> m_fixedDoFs;
 
+    bool m_amgx_initialized = false;
+
+    AMGX_Mode             m_amgx_mode = AMGX_mode_dDDI;   // device data, double, int
+    AMGX_config_handle    m_amgx_cfg   = nullptr;
+    AMGX_resources_handle m_amgx_rsrc  = nullptr;
+    AMGX_solver_handle    m_amgx_solver= nullptr;
+    AMGX_matrix_handle    m_amgx_A     = nullptr;
+    AMGX_vector_handle    m_amgx_b     = nullptr;
+    AMGX_vector_handle    m_amgx_x     = nullptr;
+
+    int m_amgx_n   = -1;
+    int m_amgx_nnz = -1;
+
+    void initAMGXOnce();
+    void finalizeAMGX();
+
 public:
     __host__
     GPUSolver(GPUAssembler &assembler);
+
+    __host__
+    ~GPUSolver() { finalizeAMGX(); }
 
     __host__
     void print() const;
@@ -38,6 +59,12 @@ public:
 
     bool solveSingleIteration();
     bool solveSingleIteration_Eigen();
+    bool solveSingleIteration_AMGX();
     void solve();
+    void eigenvalues_symm_dense(DeviceMatrixView<double> matrix, 
+                                DeviceVectorView<double> eigenvalues);
+
+    double smallestEigenvalue_symm_dense_Eigen(Eigen::MatrixXd mat);
+    //double smallestEigenvalue_SPD_Dense_Spectra(const Eigen::SparseMatrix<double>& K);
     std::string status();
 };

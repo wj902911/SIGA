@@ -132,7 +132,7 @@ bool nextLexicographic_d(Vec& cur, const Vec& start, const Vec& end)
 
 template <typename T>
 __host__ __device__ 
-inline T min(T a, T b) 
+inline T min_dev(T a, T b) 
 { return (a < b) ? a : b; }
 
 template <typename Z>
@@ -140,7 +140,7 @@ __device__
 inline Z binomial(const Z n, const Z r)
 {
     assert(r>=0);
-    const Z diff = min(n - r, r);
+    const Z diff = min_dev(n - r, r);
     int result = 1;
     for (Z i=0;i < diff;)
     {

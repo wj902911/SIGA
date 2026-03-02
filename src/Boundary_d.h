@@ -1,9 +1,9 @@
 #pragma once
 
 #include <cuda_runtime.h>
-#include <DeviceVector.h>
+//#include <DeviceVector.h>
 #include <Boundary.h>
-#include <DeviceObjectArray.h>
+//#include <DeviceObjectArray.h>
 
 class BoxSide_d
 {
@@ -71,7 +71,7 @@ inline int sideOrientation(int s)
 {
     return ( ( s + (s+1) / 2 ) % 2 ? 1 : -1 );
 }
-
+#if 0
 struct BoundaryInterface_d
 {
 private:
@@ -151,4 +151,5 @@ public:
     __host__ __device__
     const DeviceVector<bool> & dirOrientation()  const { return m_directionOrientation; }
 };
+#endif
 

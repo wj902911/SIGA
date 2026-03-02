@@ -23,9 +23,46 @@ find_package(CUDAToolkit REQUIRED)
 #endif()
 
 # Include directories
-include_directories("${PROJECT_SOURCE_DIR}/src")
-include_directories("${PROJECT_SOURCE_DIR}/external/eigen")
+#include_directories("${PROJECT_SOURCE_DIR}/src")
+#include_directories("${PROJECT_SOURCE_DIR}/external/eigen")
 #include_directories("${CUDSS_DIR}/include")
+
+add_library(Eigen3 INTERFACE)
+target_include_directories(Eigen3 INTERFACE ${PROJECT_SOURCE_DIR}/external/eigen)
+
+add_library(Spectra INTERFACE)
+target_include_directories(Spectra INTERFACE ${PROJECT_SOURCE_DIR}/external/spectra/include)
+
+include(ExternalProject)
+
+set(AMGX_SOURCE_DIR ${PROJECT_SOURCE_DIR}/external/amgx)
+set(AMGX_BINARY_DIR ${CMAKE_BINARY_DIR}/_deps/amgx-build)
+
+ExternalProject_Add(amgx_ep
+  SOURCE_DIR  ${AMGX_SOURCE_DIR}
+  BINARY_DIR  ${AMGX_BINARY_DIR}
+  CMAKE_ARGS
+    -DCMAKE_BUILD_TYPE=Release
+    -DCMAKE_NO_MPI=TRUE
+    -DCUDA_ARCH=86
+  INSTALL_COMMAND ""
+)
+
+add_library(AMGX::amgxsh SHARED IMPORTED GLOBAL)
+add_dependencies(AMGX::amgxsh amgx_ep)
+
+if(WIN32)
+  set_target_properties(AMGX::amgxsh PROPERTIES
+    IMPORTED_LOCATION "${AMGX_BINARY_DIR}/Release/amgxsh.dll"
+    IMPORTED_IMPLIB "${AMGX_BINARY_DIR}/Release/amgxsh.lib"
+    INTERFACE_INCLUDE_DIRECTORIES "${AMGX_SOURCE_DIR}/include"
+  )
+else()
+  set_target_properties(AMGX::amgxsh PROPERTIES
+    IMPORTED_LOCATION "${AMGX_BINARY_DIR}/libamgx.a"
+    INTERFACE_INCLUDE_DIRECTORIES "${AMGX_SOURCE_DIR}/include"
+  )
+endif()
 
 add_subdirectory(src)
 add_subdirectory(example)

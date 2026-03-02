@@ -79,7 +79,11 @@ public:
 
     __host__
     DeviceVectorView<double> values() const
-    { return m_sparseSystem.deviceView().values(); }    
+    { return m_sparseSystem.deviceView().values(); }  
+    
+    __host__
+    void denseMatrix(DeviceMatrixView<double> denseMat) const;
+
 #if 0
     __host__
     int numDofs() const
@@ -90,6 +94,7 @@ public:
         return sum;
     }
 #endif
+
     __host__
     const MultiPatchDeviceData& geometryData() const { return m_multiPatch; }
 

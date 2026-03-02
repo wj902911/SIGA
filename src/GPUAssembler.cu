@@ -623,7 +623,16 @@ void assembleDomainKernel(int totalGPs,
 }
 #endif
 
-
+__global__
+void cooToDenseKernel(DeviceVectorView<int> rows,
+                      DeviceVectorView<int> cols,
+                      DeviceVectorView<double> values,
+                      DeviceMatrixView<double> denseMatrix)
+{
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
+         idx < rows.size(); idx += blockDim.x * gridDim.x)
+        atomicAdd(&denseMatrix(rows[idx], cols[idx]), values[idx]);
+}
 
 __global__
 void printKernel(MultiPatchDeviceView multiPatch,
@@ -851,11 +860,17 @@ void GPUAssembler::constructSolution(const DeviceVectorView<double>& solVector,
                                      const DeviceNestedArrayView<double>& fixedDoFs, 
                                      MultiPatchDeviceView& displacementDeviceView) const
 {
-    constructSolutionKernel<<<1,1>>>(solVector, fixedDoFs,
-                                     m_multiBasis.deviceView(),
-                                     m_sparseSystem.deviceView(),
-                                     displacementDeviceView,
-                                     m_displacementHost.CPSize());
+    int minGrid, blockSize;
+    int CPSize = m_displacementHost.CPSize();
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, 
+        constructSolutionKernel, 0, CPSize);
+
+    int gridSize = (CPSize + blockSize - 1) / blockSize;
+    constructSolutionKernel<<<gridSize, blockSize>>>(solVector, fixedDoFs,
+                                                     m_multiBasis.deviceView(),
+                                                     m_sparseSystem.deviceView(),
+                                                     displacementDeviceView,
+                                                     CPSize);
     cudaError_t err = cudaDeviceSynchronize();
     assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler::constructSolution");
 }
@@ -988,4 +1003,18 @@ void GPUAssembler::assemble(const DeviceVectorView<double> &solVector,
     printf("COO RHS:\n");
     m_sparseSystem.deviceView().rhs().print();
 #endif
+}
+
+void GPUAssembler::denseMatrix(DeviceMatrixView<double> denseMat) const
+{
+    int nnz_coo = m_sparseSystem.numMatrixEntries();
+    int minGrid, blockSize;
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, 
+                         cooToDenseKernel, 0, nnz_coo);
+    int gridSize = (nnz_coo + blockSize - 1) / blockSize;
+    cooToDenseKernel<<<gridSize, blockSize>>>(
+        m_sparseSystem.deviceView().rows(),
+        m_sparseSystem.deviceView().cols(),
+        m_sparseSystem.deviceView().values(),
+        denseMat);
 }
