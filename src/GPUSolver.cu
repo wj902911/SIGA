@@ -15,7 +15,9 @@
 #include <Eigen/SparseCholesky>
 #include <Eigen/Eigenvalues>
 
+#if ENABLE_SPECTRA
 #include "SpectraEigenSolver.h"
+#endif
 
 #define CUSOLVER_CHECK(stat) do { \
     cusolverStatus_t _s = (stat); \
@@ -45,7 +47,39 @@
     }                                                                          \
 }
 
+#if ENABLE_AMGX
 #define AMGX_CHECK(call) AMGX_SAFE_CALL(call)
+#endif
+
+struct BlockedToInterleavedND
+{
+    int N; // n / d
+    int d; // dimension
+
+    __host__ __device__ int operator()(int i) const
+    {
+        // i = comp*N + node
+        int comp = i / N;
+        int node = i - comp * N; // i % N
+        // j = node*d + comp
+        return node * d + comp;
+    }
+};
+
+struct InterleavedToBlockedND
+{
+    int N; // n / d
+    int d;
+
+    __host__ __device__ int operator()(int j) const
+    {
+        // j = node*d + comp
+        int node = j / d;
+        int comp = j - node * d; // j % d
+        // i = comp*N + node
+        return comp * N + node;
+    }
+};
 
 __global__
 void printKernel(DeviceVectorView<double> solVector,
@@ -67,7 +101,9 @@ GPUSolver::GPUSolver(GPUAssembler &assembler): m_assembler(assembler)
     m_fixedDoFs = assembler.allFixedDofs();
     m_fixedDoFs.setZero();
 
+#if ENABLE_AMGX
     initAMGXOnce();
+#endif
 }
 
 __host__
@@ -80,6 +116,7 @@ void GPUSolver::print() const
     assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUSolver::print");
 }
 
+#if 0
 bool GPUSolver::solveSingleIteration()
 {
 	auto start = std::chrono::high_resolution_clock::now();
@@ -216,6 +253,7 @@ bool GPUSolver::solveSingleIteration()
 
     return true;    
 }
+#endif
 
 bool GPUSolver::solveSingleIteration_Eigen()
 {
@@ -247,10 +285,10 @@ bool GPUSolver::solveSingleIteration_Eigen()
     }
 #endif
 
+    start = std::chrono::high_resolution_clock::now();
     DeviceVectorView<double> bdev = m_assembler.rhs();
     const int n = static_cast<int>(bdev.size());
-
-    start = std::chrono::high_resolution_clock::now();
+#if 0
 
     // --- COO from assembler (device pointers) ---
     auto cooR = m_assembler.rows();
@@ -333,6 +371,12 @@ bool GPUSolver::solveSingleIteration_Eigen()
     A.setFromTriplets(triplets.begin(), triplets.end()); // duplicates already merged on GPU
     A.makeCompressed();
 
+    Eigen::Map<const Eigen::VectorXd> b(hb.data(), n);
+#endif
+    //std::cout << Eigen::MatrixXd(A) << std::endl;
+    //std::cout << std::endl;
+    //m_assembler.csrMatrix().print_host();
+
 #if 0
     if (m_numIterations == 0)
     {
@@ -344,8 +388,10 @@ bool GPUSolver::solveSingleIteration_Eigen()
         printf("Eigenvalue computation time: %f seconds\n", std::chrono::duration<double>(end - start).count());
     }
 #endif
-
-    Eigen::Map<const Eigen::VectorXd> b(hb.data(), n);
+    //auto t_cpu_start = std::chrono::high_resolution_clock::now();
+    using SpMat = Eigen::SparseMatrix<double, Eigen::RowMajor, int>;
+    SpMat A = m_assembler.csrMatrix().toEigenCSR();
+    Eigen::VectorXd b = m_assembler.hostRHS();
 
     Eigen::SimplicialLDLT<SpMat> solver;
     solver.compute(A);
@@ -364,9 +410,9 @@ bool GPUSolver::solveSingleIteration_Eigen()
         return false;
     }
 
-    auto t_cpu_end = std::chrono::high_resolution_clock::now();
-    printf("Eigen factor+solve time (CPU): %f seconds\n",
-           std::chrono::duration<double>(t_cpu_end - t_cpu_start).count());
+    //auto t_cpu_end = std::chrono::high_resolution_clock::now();
+    //printf("Eigen factor+solve time (CPU): %f seconds\n",
+    //       std::chrono::duration<double>(t_cpu_end - t_cpu_start).count());
 
     // ============================================================
     //  Copy x back to device (m_deltaSolVector)
@@ -374,8 +420,8 @@ bool GPUSolver::solveSingleIteration_Eigen()
     CHECK_CUDA(cudaMemcpy(m_deltaSolVector.data(), x.data(), n * sizeof(double), cudaMemcpyHostToDevice));
 
     end = std::chrono::high_resolution_clock::now();
-    printf("Total linear solve path (incl H<->D): %f seconds\n",
-           std::chrono::duration<double>(end - mid).count());
+    printf("Total linear solve time (incl H<->D): %f seconds\n",
+           std::chrono::duration<double>(end - start).count());
 
     // Update (same as your code)
     m_updateNorm   = m_deltaSolVector.vectorView().norm();
@@ -392,6 +438,7 @@ bool GPUSolver::solveSingleIteration_Eigen()
     return true;
 }
 
+#if ENABLE_AMGX
 bool GPUSolver::solveSingleIteration_AMGX()
 {
     auto start = std::chrono::high_resolution_clock::now();
@@ -402,6 +449,7 @@ bool GPUSolver::solveSingleIteration_AMGX()
     //DeviceMatrixView<double> Adev = m_assembler.matrix();
     DeviceVectorView<double> bdev = m_assembler.rhs();
     const int n = static_cast<int>(bdev.size());
+    std::cout << n << std::endl;
 
 	start = std::chrono::high_resolution_clock::now();
     // --- COO from assembler (device pointers) ---
@@ -414,6 +462,13 @@ bool GPUSolver::solveSingleIteration_AMGX()
     thrust::device_vector<int>    R(cooR.data(), cooR.data() + nnz_coo);
     thrust::device_vector<int>    C(cooC.data(), cooC.data() + nnz_coo);
     thrust::device_vector<double> V(cooV.data(), cooV.data() + nnz_coo);
+
+    const int d = m_assembler.dim();
+    if (n % d != 0) { printf("Permutation requires n divisible by d\n"); return false; }
+    const int N = n / d;
+    BlockedToInterleavedND P{N, d};
+    thrust::transform(R.begin(), R.end(), R.begin(), P);
+    thrust::transform(C.begin(), C.end(), C.begin(), P);
 
     // key = (row,col)
     auto keys_begin = thrust::make_zip_iterator(thrust::make_tuple(R.begin(), C.begin()));
@@ -499,9 +554,21 @@ bool GPUSolver::solveSingleIteration_AMGX()
         // In that case call AMGX_matrix_upload_all + AMGX_solver_setup every time.
     }
 
+    auto idx0   = thrust::make_counting_iterator<int>(0);
+    auto map_it = thrust::make_transform_iterator(idx0, P);
+
+    thrust::device_vector<double> b_perm(n);
+    thrust::device_vector<double> x0_perm(n);
+
+    thrust::device_ptr<const double> bptr(bdev.data());
+    thrust::device_ptr<const double> x0ptr(m_deltaSolVector.data());
+
+    thrust::scatter(bptr,  bptr  + n, map_it, b_perm.begin());
+    thrust::scatter(x0ptr, x0ptr + n, map_it, x0_perm.begin());
+
     // Upload RHS and initial guess (device pointers because mode = dDDI)
-    AMGX_CHECK(AMGX_vector_upload(m_amgx_b, n, 1, bdev.data()));
-    AMGX_CHECK(AMGX_vector_upload(m_amgx_x, n, 1, m_deltaSolVector.data())); // initial guess
+    AMGX_CHECK(AMGX_vector_upload(m_amgx_b, n, 1, thrust::raw_pointer_cast(b_perm.data())));
+    AMGX_CHECK(AMGX_vector_upload(m_amgx_x, n, 1, thrust::raw_pointer_cast(x0_perm.data()))); // initial guess
 
     // Solve
     AMGX_CHECK(AMGX_solver_solve(m_amgx_solver, m_amgx_b, m_amgx_x));
@@ -528,12 +595,24 @@ bool GPUSolver::solveSingleIteration_AMGX()
         printf("AMGX solve status=%d after %d iters\n", (int)st, iters);
         return false;
     }
+    Eigen::VectorXd xprime_host(n);
+    AMGX_CHECK(AMGX_vector_download(m_amgx_x, xprime_host.data()));
 
-    Eigen::VectorXd x_host(m_deltaSolVector.size());
+    Eigen::VectorXd x_old(n);
+    for (int i = 0; i < n; ++i)
+    {
+        int comp = i / N;
+        int node = i - comp * N;
+        int j = node * d + comp;   // P(i)
+        x_old[i] = xprime_host[j];
+    }
+    m_deltaSolVector.updateFromHost(x_old.data());
+
+    //Eigen::VectorXd x_host(m_deltaSolVector.size());
     //m_deltaSolVector.copyToHost(x_host.data());
     //std::cout << "Solution vector (host) before download: " << x_host.transpose() << std::endl;
-    AMGX_CHECK(AMGX_vector_download(m_amgx_x, x_host.data()));
-    m_deltaSolVector.updateFromHost(x_host.data());
+    //AMGX_CHECK(AMGX_vector_download(m_amgx_x, x_host.data()));
+    //m_deltaSolVector.updateFromHost(x_host.data());
     //std::cout << "Solution vector (host): " << x_host.transpose() << std::endl;
     end = std::chrono::high_resolution_clock::now();
     printf("Linear solve time: %f seconds\n", std::chrono::duration<double>(end - mid).count());
@@ -549,8 +628,14 @@ bool GPUSolver::solveSingleIteration_AMGX()
         m_initUpdateNorm   = m_updateNorm;
     }
 
+    CHECK_CUSPARSE(cusparseDestroy(cH));
+    CHECK_CUDA(cudaFree(d_csr_offsets));
+    CHECK_CUDA(cudaFree(d_csr_cols));
+    CHECK_CUDA(cudaFree(d_csr_vals));
+
     return true;
 }
+#endif
 
 void GPUSolver::solve()
 {
@@ -563,8 +648,11 @@ void GPUSolver::solve()
     while (m_status == working)
     {
         //if(!solveSingleIteration())
+#if ENABLE_AMGX
+        if(!solveSingleIteration_AMGX())
+#else
         if(!solveSingleIteration_Eigen())
-        //if(!solveSingleIteration_AMGX())
+#endif
         {
             m_status = bad_solution;
             break;
@@ -703,6 +791,7 @@ std::string GPUSolver::status()
     return statusString;
 }
 
+#if ENABLE_AMGX
 void GPUSolver::initAMGXOnce()
 {
     if (m_amgx_initialized) return;
@@ -716,14 +805,30 @@ void GPUSolver::initAMGXOnce()
     // You can tune later.
     const char* cfg_str =
         "config_version=2, "
-        "solver=CG, "
-        "preconditioner=AMG, "
-        "max_iters=2000, "
-        "tolerance=1e-8, "
-        "norm=L2, "
-        "monitor_residual=1, "
-        //"store_res_history=1, "
-        "print_solve_stats=0";
+        "solver(main)=FGMRES, "
+        "main:preconditioner(amg)=AMG, "
+        "main:max_iters=2000, "
+        "main:tolerance=1e-6, "
+        "main:norm=L2, "
+        "main:monitor_residual=1, "
+        "main:store_res_history=1, "
+        "main:print_solve_stats=1, "
+#if 1
+        // --- AMG scope ---
+        "amg:algorithm=AGGREGATION, "
+        "amg:selector=SIZE_2, "
+        "amg:interpolator=D2, "
+        "amg:strength_threshold=0.5, "
+        "amg:cycle=V, "
+        "amg:max_iters=2, "
+        "amg:max_levels=50, "
+        "amg:presweeps=2, "
+        "amg:postsweeps=2, "
+        "amg:coarsest_sweeps=2, "
+        "amg:smoother=JACOBI_L1, "
+        "amg:coarse_solver=DENSE_LU_SOLVER"
+#endif
+        ;
 
     AMGX_CHECK(AMGX_config_create(&m_amgx_cfg, cfg_str));
     AMGX_CHECK(AMGX_resources_create_simple(&m_amgx_rsrc, m_amgx_cfg));
@@ -757,3 +862,4 @@ void GPUSolver::finalizeAMGX()
     m_amgx_initialized = false;
     m_amgx_n = m_amgx_nnz = -1;
 }
+#endif

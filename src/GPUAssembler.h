@@ -9,6 +9,7 @@
 class GPUAssembler
 {
 private:
+    int m_problemDim = 2;
     MultiPatchDeviceData m_multiPatch;
     MultiPatchDeviceData m_displacement;
     MultiPatch m_displacementHost;
@@ -37,6 +38,9 @@ public:
                               std::vector<Eigen::VectorXd> &ddof,
                               const MultiBasis &multiBasis);
 
+    __host__
+    int dim() const { return m_problemDim; }
+    
     __host__
     void print() const;
 
@@ -69,6 +73,7 @@ public:
     DeviceVectorView<double> rhs() const
     { return m_sparseSystem.deviceView().rhs(); }
 
+#if 0
     __host__
     DeviceVectorView<int> rows() const
     { return m_sparseSystem.deviceView().rows(); }
@@ -80,9 +85,17 @@ public:
     __host__
     DeviceVectorView<double> values() const
     { return m_sparseSystem.deviceView().values(); }  
-    
+#endif
+
     __host__
     void denseMatrix(DeviceMatrixView<double> denseMat) const;
+
+    __host__
+    const DeviceCSRMatrix& csrMatrix() const 
+    { return m_sparseSystem.csrMatrix(); }
+
+    __host__
+    Eigen::VectorXd hostRHS() const { return m_sparseSystem.hostRHS(); }
 
 #if 0
     __host__

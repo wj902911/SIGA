@@ -14,12 +14,19 @@ foreach(EXAMPLE_FILE ${EXAMPLE_FILES})
     add_executable(${EXAMPLE_NAME} ${EXAMPLE_FILE})
     set_property(TARGET ${EXAMPLE_NAME} PROPERTY FOLDER "example")
 
-    target_link_libraries(${EXAMPLE_NAME} SIGA AMGX::amgxsh)
+    target_link_libraries(${EXAMPLE_NAME} PRIVATE SIGA)
 
-    add_custom_command(TARGET ${EXAMPLE_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "$<TARGET_FILE:AMGX::amgxsh>"
-        $<TARGET_FILE_DIR:${EXAMPLE_NAME}>
-    )
+    if (ENABLE_AMGX)
+      target_link_libraries(${EXAMPLE_NAME} PRIVATE AMGX::amgxsh)
+    
+      # Only needed on Windows for the runtime DLL
+      if (WIN32)
+        add_custom_command(TARGET ${EXAMPLE_NAME} POST_BUILD
+          COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:AMGX::amgxsh>"
+            "$<TARGET_FILE_DIR:${EXAMPLE_NAME}>"
+        )
+      endif()
+    endif()
 
 endforeach()

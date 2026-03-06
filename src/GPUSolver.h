@@ -2,7 +2,10 @@
 
 #include <GPUAssembler.h>
 #include <Eigen/Sparse>
+
+#if ENABLE_AMGX
 #include <amgx_c.h>
+#endif
 
 enum solver_status { converged,      /// method successfully converged
                      interrupted,    /// solver was interrupted after exceeding the limit of iterations
@@ -23,6 +26,7 @@ private:
     int m_numIterations = 0;
     DeviceNestedArray<double> m_fixedDoFs;
 
+#if ENABLE_AMGX
     bool m_amgx_initialized = false;
 
     AMGX_Mode             m_amgx_mode = AMGX_mode_dDDI;   // device data, double, int
@@ -38,13 +42,16 @@ private:
 
     void initAMGXOnce();
     void finalizeAMGX();
+#endif
 
 public:
     __host__
     GPUSolver(GPUAssembler &assembler);
 
+#if ENABLE_AMGX
     __host__
     ~GPUSolver() { finalizeAMGX(); }
+#endif
 
     __host__
     void print() const;
@@ -57,9 +64,11 @@ public:
     DeviceVectorView<double> solutionView() const
     { return DeviceVectorView<double>(m_solVector.data(), m_solVector.size()); }
 
-    bool solveSingleIteration();
+    //bool solveSingleIteration();
     bool solveSingleIteration_Eigen();
+#if ENABLE_AMGX
     bool solveSingleIteration_AMGX();
+#endif
     void solve();
     void eigenvalues_symm_dense(DeviceMatrixView<double> matrix, 
                                 DeviceVectorView<double> eigenvalues);

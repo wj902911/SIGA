@@ -11,7 +11,7 @@
 int main()
 {
 	int numRefinements =0;
-	int numDegElev = 1;
+	int numDegElev = 0;
 	double deltaDisplacement = 0.1;
 	double maxDisplacement = 1.0;
 	std::vector<int> numPointsPerPatch{ 1000, 1000 };

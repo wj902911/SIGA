@@ -1,10 +1,11 @@
 #include "SpectraEigenSolver.h"
 
 #include <Eigen/SparseCholesky>
-#include <Spectra/SymEigsShiftSolver.h>
-#include <Spectra/MatOp/SparseSymShiftSolve.h>
 #include <iostream>
 #include <limits>
+#if ENABLE_SPECTRA
+#include <Spectra/SymEigsShiftSolver.h>
+#include <Spectra/MatOp/SparseSymShiftSolve.h>
 
 double smallestEigenvalue_SPD_spectra(const Eigen::SparseMatrix<double> &K)
 {
@@ -32,3 +33,4 @@ double smallestEigenvalue_SPD_spectra(const Eigen::SparseMatrix<double> &K)
 
     return eigs.eigenvalues()(0);
 }
+#endif

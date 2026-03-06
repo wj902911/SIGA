@@ -34,6 +34,8 @@ SparseSystem::SparseSystem(std::vector<DofMapper> &mappers, const Eigen::VectorX
     for (int c = 1; c < d; ++c)
         m_cstr[c] = int(m_cstr[c-1]) + mappers[m_col[c-1]].freeSize(); // Use the original mappers to get freeSize
 
+    //std::cout << "Row strides: " << m_rstr.transpose() << std::endl;
+    //std::cout << "Column strides: " << m_cstr.transpose() << std::endl;
 #ifdef STORE_MATRIX
     m_matrix.setZero(int(m_rstr[d-1]) + mappers[m_row[d-1]].freeSize(),
                     int(m_cstr[d-1]) + mappers[m_col[d-1]].freeSize());
@@ -43,6 +45,8 @@ SparseSystem::SparseSystem(std::vector<DofMapper> &mappers, const Eigen::VectorX
     m_matrixRows = int(m_rstr[d-1]) + mappers[m_row[d-1]].freeSize();
     m_matrixCols = int(m_cstr[d-1]) + mappers[m_col[d-1]].freeSize();
 #endif
+
+    buildInterleavingPermutation();
 }
 
 #ifdef STORE_MATRIX
@@ -189,3 +193,30 @@ void SparseSystem::getDataVector(std::vector<int>& intDataOffsets,
     data_int.insert(data_int.end(), m_dims.data(), m_dims.data() + m_dims.size()); 
 }
 #endif
+
+void SparseSystem::buildInterleavingPermutation()
+{
+    const int d = m_dims.size();
+    const int totalFree = m_matrixRows;
+    m_perm_old2new.assign(totalFree, -1);
+    m_perm_new2old.assign(totalFree, -1);
+
+    int next = 0;
+    for (int k = 0; k < d; k++)
+        for (int a = 0; a < m_mappers[k].getDofs(0).size(); a++)
+            for(int r = 0; r < d; r++)
+            {
+                DofMapper mapper = m_mappers[r];
+                int idx = mapper.getDofs(0)[a];
+                if (idx >= 0 && idx < mapper.freeSize())
+                {
+                    const int oldGlobal = m_rstr[r] + idx;
+                    if (m_perm_old2new[oldGlobal] < 0)
+                    {
+                        m_perm_old2new[oldGlobal] = next;
+                        m_perm_new2old[next] = oldGlobal;
+                        next++;
+                    }
+                }
+            }
+}

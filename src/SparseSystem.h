@@ -26,6 +26,9 @@ private:
     int m_matrixCols = 0;
 #endif
 
+    std::vector<int> m_perm_old2new;
+    std::vector<int> m_perm_new2old;
+
 public:
     SparseSystem() = default;
     SparseSystem(std::vector<DofMapper>& mappers, 
@@ -71,8 +74,11 @@ public:
 
     int numColBlocks() const {return m_col.size();}
     int numRowBlocks() const {return m_row.size();}
-
     
-
     const DofMapper& colMapper(int c) const { return m_mappers[m_col[c]]; }
+
+    void buildInterleavingPermutation();
+
+    const std::vector<int>& permOld2New() const { return m_perm_old2new; }
+    const std::vector<int>& permNew2Old() const { return m_perm_new2old; }
 };

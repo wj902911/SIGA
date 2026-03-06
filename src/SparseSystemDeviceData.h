@@ -4,21 +4,27 @@
 #include <SparseSystemDeviceView.h>
 #include <SparseSystem.h>
 #include <vector>
+#include <DeviceCSRMatrix.h>
 
 class SparseSystemDeviceData
 {
 private:
     int m_matrixRows = 0;
     int m_matrixCols = 0;
-    int m_numMatrixEntries = 0;
+    //int m_numMatrixEntries = 0;
     std::vector<int> m_intDataOffsets;
     DeviceArray<int> m_intData;
     //DeviceArray<double> m_doubleData;
     
-    DeviceArray<int> m_rows;
-    DeviceArray<int> m_cols;
-    DeviceArray<double> m_values;
+    //DeviceArray<int> m_rows;
+    //DeviceArray<int> m_cols;
+    //DeviceArray<double> m_values;
     DeviceArray<double> m_RHS;
+
+    DeviceCSRMatrix m_csrMatrix;
+
+    DeviceArray<int> m_perm_old2new;
+    DeviceArray<int> m_perm_new2old;
 
 public:
 	__host__
@@ -28,11 +34,15 @@ public:
     SparseSystemDeviceData(int matrixRows, int matrixCols,
                            const std::vector<int>& intDataOffsets,
                            const std::vector<int>& intData,
-                           const std::vector<double>& doubleData)
+                           const std::vector<double>& doubleData,
+                           const std::vector<int>& permOld2New,
+                           const std::vector<int>& permNew2Old)
                          : m_matrixRows(matrixRows),
                            m_matrixCols(matrixCols),
                            m_intDataOffsets(intDataOffsets),
-                           m_intData(intData)
+                           m_intData(intData),
+                           m_perm_old2new(permOld2New),
+                           m_perm_new2old(permNew2Old)
                            //m_doubleData(doubleData)
     {
     }
@@ -139,10 +149,13 @@ public:
         
         return SparseSystemDeviceView(mappersData, row, col, rstr,
                                       cstr, cvar, dims, //matrix, rhs, 
-                                      m_rows.vectorView(), 
-                                      m_cols.vectorView(), 
-                                      m_values.vectorView(), 
-                                      m_RHS.vectorView());    
+                                      //m_rows.vectorView(), 
+                                      //m_cols.vectorView(), 
+                                      //m_values.vectorView(), 
+                                      m_RHS.vectorView(),
+                                      m_csrMatrix.view(),
+                                      m_perm_old2new.vectorView(),
+                                      m_perm_new2old.vectorView());    
     }
 
 	__host__
@@ -168,28 +181,55 @@ public:
 	//{ m_doubleData = doubleData; }
     //__host__
     //void resizeDoubleData(int size) { m_doubleData.resize(size); }
+    __host__
+    void setPermVectors(const std::vector<int>& permOld2New, 
+                        const std::vector<int>& permNew2Old)
+    {
+        m_perm_old2new = permOld2New;
+        m_perm_new2old = permNew2Old;
+    }
 
 	__host__
     int numDofs() const { return m_matrixRows; }
 
-    __host__
-    int* numMatrixEntriesPtr() { return &m_numMatrixEntries; }
+    //__host__
+    //int* numMatrixEntriesPtr() { return &m_numMatrixEntries; }
 
-    __host__
-    int setNumMatrixEntries(int numEntries) 
-    { return m_numMatrixEntries = numEntries; }
+    //__host__
+    //int setNumMatrixEntries(int numEntries) 
+    //{ return m_numMatrixEntries = numEntries; }
 
-    __host__
-    int numMatrixEntries() const { return m_numMatrixEntries; }
+    //__host__
+    //int numMatrixEntries() const { return m_numMatrixEntries; }
 
-    __host__
-    void resizeMatrixData(int numEntries)
-    {
-        m_rows.resize(numEntries);
-        m_cols.resize(numEntries);
-        m_values.resize(numEntries);
-    }
+    //__host__
+    //void resizeMatrixData(int numEntries)
+    //{
+    //    m_rows.resize(numEntries);
+    //    m_cols.resize(numEntries);
+    //    m_values.resize(numEntries);
+    //}
 
     __host__
     void resizeRHS(int size) { m_RHS.resize(size); }
+
+    __host__
+    void setCSRMatrixFromCOO(int numRows, int numCols,
+                             DeviceVectorView<int> cooR, 
+                             DeviceVectorView<int> cooC, 
+                             DeviceVectorView<double> cooV)
+    { m_csrMatrix.setFromCOO(numRows, numCols, cooR, cooC, cooV); }
+
+    __host__
+    const DeviceCSRMatrix& csrMatrix() const { return m_csrMatrix; }
+    __host__
+    DeviceCSRMatrix& csrMatrix() { return m_csrMatrix; }
+
+    __host__
+    Eigen::VectorXd hostRHS() const
+    {
+        std::vector<double> h_rhs(m_RHS.size());
+        m_RHS.copyToHost(h_rhs);
+        return Eigen::Map<Eigen::VectorXd>(h_rhs.data(), h_rhs.size());
+    }
 };

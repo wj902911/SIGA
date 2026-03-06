@@ -3,6 +3,7 @@
 //#include <cuda_runtime.h>
 #include <DeviceVectorView.h>
 #include <DofMapperDeviceView.h>
+#include <DeviceCSRMatrix.h>
 
 class SparseSystemDeviceView
 {
@@ -17,11 +18,17 @@ private:
 
     //DeviceMatrixView<double> m_matrix;
 
-    DeviceVectorView<int> m_rows;
-    DeviceVectorView<int> m_cols;
-    DeviceVectorView<double> m_values;
+    //DeviceVectorView<int> m_rows;
+    //DeviceVectorView<int> m_cols;
+    //DeviceVectorView<double> m_values;
     DeviceVectorView<double> m_RHS;
     //DeviceVectorView<double> m_RHS_coo;
+
+    DeviceCSRMatrixView m_csrMatrix;
+
+    DeviceVectorView<int> m_perm_old2new;
+    DeviceVectorView<int> m_perm_new2old;
+
 
 public:
     __host__ __device__
@@ -34,10 +41,13 @@ public:
                            DeviceVectorView<int> dims,
                            //DeviceMatrixView<double> matrix,
                            //DeviceVectorView<double> rhs,
-                           DeviceVectorView<int> rows,
-                           DeviceVectorView<int> cols,
-                           DeviceVectorView<double> values,
-                           DeviceVectorView<double> rhs)
+                           //DeviceVectorView<int> rows,
+                           //DeviceVectorView<int> cols,
+                           //DeviceVectorView<double> values,
+                           DeviceVectorView<double> rhs,
+                           DeviceCSRMatrixView csrMatrix,
+                           DeviceVectorView<int> permOld2New,
+                           DeviceVectorView<int> permNew2Old)
                          : m_mappersData(mappersData),
                            m_row(row),
                            m_col(col),
@@ -47,10 +57,13 @@ public:
                            m_dims(dims),
                            //m_matrix(matrix),
                            //m_RHS(rhs),
-                           m_rows(rows),
-                           m_cols(cols),
-                           m_values(values),
-                           m_RHS(rhs)
+                           //m_rows(rows),
+                           //m_cols(cols),
+                           //m_values(values),
+                           m_RHS(rhs),
+                           m_csrMatrix(csrMatrix),
+                           m_perm_old2new(permOld2New),
+                           m_perm_new2old(permNew2Old)
     {
     }
 
@@ -121,19 +134,27 @@ public:
         m_dims.print();
         //printf("Matrix (%d x %d):\n", m_matrix.rows(), m_matrix.cols());
         //m_matrix.print();
-        printf("cols:\n");
-        m_cols.print();
-        printf("rows:\n");
-        m_rows.print();
-        printf("values:\n");
-        m_values.print();
+        //printf("cols:\n");
+        //m_cols.print();
+        //printf("rows:\n");
+        //m_rows.print();
+        //printf("values:\n");
+        //m_values.print();
         printf("RHS (%d):\n", m_RHS.size());
         m_RHS.print();
+        printf("Permutation old2new:\n");
+        m_perm_old2new.print();
+        printf("Permutation new2old:\n");
+        m_perm_new2old.print();
     }
 
     __device__
     int mapToGlobalColIndex(int active, int patchIndex, int c = 0) const
-    { return mapper(m_col(c)).index(active, patchIndex) + m_cstr(c); }
+    {
+        int index = mapper(m_col(c)).index(active, patchIndex) + m_cstr(c);
+        index = m_perm_old2new(index);
+        return index;
+    }
 
     __device__
     int mapColIndex(int active, int patchIndex, int c = 0) const
@@ -173,7 +194,47 @@ public:
     __device__
     void pushToMatrix(double value, int activeRow, int activeCol,
                           DeviceNestedArrayView<double> eliminatedDofs,
-                          int r, int c, int* counter)
+                          int r, int c)
+    {
+        int rstrLocal = 0;
+        int cstrLocal = 0;
+
+        DofMapperDeviceView rowMap = mapper(m_row(r));
+        DofMapperDeviceView colMap = mapper(m_col(c));
+        int ii = m_rstr(r) + activeRow;
+        //const int iiLocal = rstrLocal + activeRow;
+        //printf("activeRow=%d, activeCol=%d\n", activeRow, activeCol);
+        if (rowMap.is_free_index(activeRow))
+        {
+            ii = m_perm_old2new(ii);
+            int jj = m_cstr(c) + activeCol;
+            //const int jjLocal = cstrLocal + activeCol;
+            if (colMap.is_free_index(activeCol))
+            {
+                //int out = atomicAdd(counter, 1);
+                //m_rows[out] = ii;
+                //m_cols[out] = jj;
+                //m_values[out] = value;
+                //printf("counter=%d, ii=%d, jj=%d, value=%f\n", out, ii, jj, value);
+                jj = m_perm_old2new(jj);
+                //printf("after permutation: ii=%d, jj=%d\n", ii, jj);
+                atomicAdd(&m_csrMatrix(ii, jj), value);
+            }
+            else
+            {
+                DeviceVectorView<double> eliminatedDofs_j = eliminatedDofs[c];
+                atomicAdd(&m_RHS(ii), -value * eliminatedDofs_j
+                    (colMap.global_to_bindex(activeCol)));
+                //printf("ii=%d, jj=%d\n", ii, jj);
+            }
+        }
+    }
+
+    __device__
+    void pushToEntryIndex(int activeRow, int activeCol,
+                          int r, int c, int* counter,
+                          DeviceVectorView<int> rows,
+                          DeviceVectorView<int> cols) const
     {
         int rstrLocal = 0;
         int cstrLocal = 0;
@@ -190,24 +251,16 @@ public:
             if (colMap.is_free_index(activeCol))
             {
                 int out = atomicAdd(counter, 1);
-                m_rows[out] = ii;
-                m_cols[out] = jj;
-                m_values[out] = value;
+                rows[out] = ii;
+                cols[out] = jj;
                 //printf("counter=%d, ii=%d, jj=%d, value=%f\n", out, ii, jj, value);
-            }
-            else
-            {
-                DeviceVectorView<double> eliminatedDofs_j = eliminatedDofs[c];
-                atomicAdd(&m_RHS(ii), -value * eliminatedDofs_j
-                    (colMap.global_to_bindex(activeCol)));
-                //printf("ii=%d, jj=%d\n", ii, jj);
             }
         }
     }
 
 
     __device__
-    bool isEntry(int activeRow, int activeCol, int r, int c)
+    bool isEntry(int activeRow, int activeCol, int r, int c) const
     {
         DofMapperDeviceView rowMap = mapper(m_row(r));
         DofMapperDeviceView colMap = mapper(m_col(c));
@@ -220,10 +273,13 @@ public:
     {
         int rstrLocal = 0;
         DofMapperDeviceView rowMap = mapper(m_row(r));
-        const int ii = m_rstr(r) + activeRow;
+        int ii = m_rstr(r) + activeRow;
         const int iiLocal = rstrLocal + activeRow;
         if (rowMap.is_free_index(activeRow))
+        {
+            ii = m_perm_old2new(ii);
             atomicAdd(&m_RHS(ii), value);
+        }
     }
 
 #if 0
@@ -248,12 +304,12 @@ public:
     //__host__ __device__
     //DeviceVectorView<double> rhs_coo() const { return m_RHS_coo; }
 
-    __host__ __device__
-    DeviceVectorView<int> cols() const { return m_cols; }
+    //__host__ __device__
+    //DeviceVectorView<int> cols() const { return m_cols; }
 
-    __host__ __device__
-    DeviceVectorView<int> rows() const { return m_rows; }
+    //__host__ __device__
+    //DeviceVectorView<int> rows() const { return m_rows; }
 
-    __host__ __device__
-    DeviceVectorView<double> values() const { return m_values; }
+    //__host__ __device__
+    //DeviceVectorView<double> values() const { return m_values; }
 };

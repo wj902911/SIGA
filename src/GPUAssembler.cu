@@ -175,9 +175,55 @@ void countEntrysKernel(int totalNumElements,
 #endif
 
 __global__
+void computeCOOKernel(int totalNumElements, int* counter,
+                      MultiPatchDeviceView displacement,
+                      MultiPatchDeviceView multiPatch,
+                      MultiGaussPointsDeviceView multiGaussPoints,
+                      SparseSystemDeviceView system,
+                      DeviceNestedArrayView<double> eliminatedDofs,
+                      DeviceVectorView<int> rows,
+                      DeviceVectorView<int> cols)
+{
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
+         idx < totalNumElements; idx += blockDim.x * gridDim.x)
+    {
+        int patch_idx(0);
+        int element_idx = displacement.threadPatch_element(idx, patch_idx);
+        int numGPsInElement = displacement.basis(patch_idx).numGPsInElement();
+        int point_idx = element_idx * numGPsInElement;
+        double ptData[3]; //max 3D
+        DeviceVectorView<double> pt(ptData, multiGaussPoints.dim());
+        double wt = displacement.gsPoint(point_idx, patch_idx, 
+                                         multiGaussPoints[patch_idx], pt);
+        TensorBsplineBasisDeviceView dispBasis = displacement.basis(patch_idx);
+        int N_D = dispBasis.numActiveControlPoints();
+        int dim = multiPatch.targetDim();
+        for (int i = 0; i < N_D; i++)
+        {
+            for (int di = 0; di < dim; di++)
+            {
+                int globalIndex_i = system.mapColIndex(displacement.basis(patch_idx)
+                    .activeIndex(pt, i), patch_idx, di);
+                for (int j = 0; j < N_D; j++)
+                {
+                    for (int dj = 0; dj < dim; dj++)
+                    {
+                        int globalIndex_j = system.mapColIndex(displacement.basis(patch_idx)
+                            .activeIndex(pt, j), patch_idx, dj);
+                        if (system.isEntry(globalIndex_i, globalIndex_j, di, dj))
+                            system.pushToEntryIndex(globalIndex_i, globalIndex_j, di, dj, 
+                                                    counter, rows, cols);
+                    }
+                }
+            }
+        }
+    }
+}
+
+__global__
 void assembleDomainKernel(
     int totalGPs,
-    int* counter,
+    //int* counter,
     MultiPatchDeviceView displacement,
     MultiPatchDeviceView multiPatch,
     MultiGaussPointsDeviceView multiGaussPoints,
@@ -357,7 +403,7 @@ void assembleDomainKernel(
                                         .activeIndex(pt, j), patch_idx, dj);
                     //int out = atomicAdd(counter, 1);
                     system.pushToMatrix(localEntries(local_i, local_j), globalIndex_i, globalIndex_j,
-                                            eliminatedDofs, di, dj, counter);
+                                            eliminatedDofs, di, dj/*, counter*/);
                     //system.pushToMatrix(localEntries(local_i, local_j), globalIndex_i, globalIndex_j,
                     //                    eliminatedDofs, di, dj);
                     //printf("idx=%d, tid=%d, ti=%d, tj=%d, local_i=%d, local_j=%d, i=%d, di=%d, j=%d, dj=%d, globalIndex_i=%d, globalIndex_j=%d\n",
@@ -693,6 +739,7 @@ GPUAssembler::GPUAssembler(const MultiPatch &multiPatch,
     m_multiPatchHost(multiPatch), m_multiBasisHost(multiBasis)
 {
     int targetDim = multiPatch.getCPDim();
+    m_problemDim = targetDim;
     std::vector<DofMapper> dofMappers_stdVec(targetDim);
     multiBasis.getMappers(true, m_boundaryConditions, 
                           dofMappers_stdVec, true);
@@ -728,6 +775,8 @@ GPUAssembler::GPUAssembler(const MultiPatch &multiPatch,
     //                                sparseSystem.matrixRows());
     m_sparseSystem.resizeRHS(sparseSystem.matrixRows());
 #endif
+    m_sparseSystem.setPermVectors(sparseSystem.permOld2New(), 
+                                  sparseSystem.permNew2Old());
 
     std::vector<Eigen::VectorXd> ddof(targetDim);
     std::vector<Eigen::VectorXd> ddof_zero(targetDim);
@@ -779,10 +828,40 @@ GPUAssembler::GPUAssembler(const MultiPatch &multiPatch,
     int entryCountHost;
     err = cudaMemcpy(&entryCountHost, entryCountDevicePtr, sizeof(int), cudaMemcpyDeviceToHost);
     assert(err == cudaSuccess && "cudaMemcpy failed in GPUAssembler constructor during counting matrix entries");
+    
+    //m_sparseSystem.setNumMatrixEntries(entryCountHost);
+    //m_sparseSystem.resizeMatrixData(entryCountHost);
+
+    DeviceArray<int> cooRows(entryCountHost);
+    DeviceArray<int> cooCols(entryCountHost);
+    DeviceArray<double> cooValues(entryCountHost);
+
+    err = cudaMemset(entryCountDevicePtr, 0, sizeof(int));
+    assert(err == cudaSuccess && "cudaMemset failed in GPUAssembler constructor during counting matrix entries");
+    computeCOOKernel<<<gridSize, blockSize>>>(numElements, entryCountDevicePtr,
+                                m_displacement.deviceView(),
+                                m_multiPatch.deviceView(),
+                                m_multiGaussPoints.view(),
+                                m_sparseSystem.deviceView(),
+                                m_ddof.view(),
+                                cooRows.vectorView(),
+                                cooCols.vectorView());
+
+    err = cudaDeviceSynchronize();
+    assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler constructor during COO construction");
+
+    m_sparseSystem.setCSRMatrixFromCOO(sparseSystem.matrixRows(), 
+                                       sparseSystem.matrixCols(),
+                                       cooRows.vectorView(), 
+                                       cooCols.vectorView(), 
+                                       cooValues.vectorView());
+    err = cudaDeviceSynchronize();
+    assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler constructor during COO to CSR conversion");
+
+    //m_sparseSystem.csrMatrix().sparsePrint_host();
+
     err = cudaFree(entryCountDevicePtr);
     assert(err == cudaSuccess && "cudaFree failed in GPUAssembler constructor during counting matrix entries");
-    m_sparseSystem.setNumMatrixEntries(entryCountHost);
-    m_sparseSystem.resizeMatrixData(entryCountHost);
 }
 
 void GPUAssembler::
@@ -879,6 +958,7 @@ void GPUAssembler::assemble(const DeviceVectorView<double> &solVector,
                             int numIter, 
                             const DeviceNestedArrayView<double> &fixedDoFs)
 {
+    m_sparseSystem.csrMatrix().setZero();
     //cudaError_t err = cudaMemset(m_sparseSystem.deviceView().matrix().data(), 0, 
     //                             m_sparseSystem.deviceView().matrix().size() * sizeof(double));
     //if (err != cudaSuccess)
@@ -971,7 +1051,7 @@ void GPUAssembler::assemble(const DeviceVectorView<double> &solVector,
     gridSize = (totalGPs + blockSize - 1) / blockSize;
     assembleDomainKernel<<<gridSize, blockSize>>>(
                     totalGPs,
-                    entryCountDevicePtr,
+                    //entryCountDevicePtr,
                     m_displacement.deviceView(),
                     m_multiPatch.deviceView(),
                     m_multiGaussPoints.view(),
@@ -1007,14 +1087,5 @@ void GPUAssembler::assemble(const DeviceVectorView<double> &solVector,
 
 void GPUAssembler::denseMatrix(DeviceMatrixView<double> denseMat) const
 {
-    int nnz_coo = m_sparseSystem.numMatrixEntries();
-    int minGrid, blockSize;
-    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, 
-                         cooToDenseKernel, 0, nnz_coo);
-    int gridSize = (nnz_coo + blockSize - 1) / blockSize;
-    cooToDenseKernel<<<gridSize, blockSize>>>(
-        m_sparseSystem.deviceView().rows(),
-        m_sparseSystem.deviceView().cols(),
-        m_sparseSystem.deviceView().values(),
-        denseMat);
+    m_sparseSystem.csrMatrix().toDense(denseMat);
 }
