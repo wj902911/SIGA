@@ -853,8 +853,7 @@ GPUAssembler::GPUAssembler(const MultiPatch &multiPatch,
     m_sparseSystem.setCSRMatrixFromCOO(sparseSystem.matrixRows(), 
                                        sparseSystem.matrixCols(),
                                        cooRows.vectorView(), 
-                                       cooCols.vectorView(), 
-                                       cooValues.vectorView());
+                                       cooCols.vectorView());
     err = cudaDeviceSynchronize();
     assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler constructor during COO to CSR conversion");
 

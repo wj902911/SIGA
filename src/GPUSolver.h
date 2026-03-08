@@ -74,6 +74,7 @@ public:
                                 DeviceVectorView<double> eigenvalues);
 
     double smallestEigenvalue_symm_dense_Eigen(Eigen::MatrixXd mat);
+    double smallestEigenvalue_symm_sparse_Eigen(Eigen::SparseMatrix<double> mat);
     //double smallestEigenvalue_SPD_Dense_Spectra(const Eigen::SparseMatrix<double>& K);
     std::string status();
 };

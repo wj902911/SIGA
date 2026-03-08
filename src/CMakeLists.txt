@@ -19,6 +19,10 @@ target_compile_definitions(SIGA PUBLIC
   ENABLE_SPECTRA=$<BOOL:${ENABLE_SPECTRA}>
 )
 
+if(EIGEN_USE_MKL_ALL)
+  target_compile_definitions(SIGA PUBLIC EIGEN_USE_MKL_ALL)
+endif()
+
 #target_link_directories(SIGA PRIVATE "${CUDSS_DIR}/lib")
 
 target_link_libraries(SIGA
@@ -33,6 +37,10 @@ target_link_libraries(SIGA
     #cublas
     #CUDA::cudadevrt
 )
+
+if (EIGEN_USE_MKL_ALL)
+  target_link_libraries(SIGA PUBLIC MKL::MKL)
+endif()
 
 if (ENABLE_SPECTRA)
   target_link_libraries(SIGA PUBLIC Spectra)

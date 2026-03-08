@@ -5,6 +5,8 @@
 #include <DofMapperDeviceView.h>
 #include <DeviceCSRMatrix.h>
 
+#define USE_PERMUTATION
+
 class SparseSystemDeviceView
 {
 private:
@@ -152,7 +154,9 @@ public:
     int mapToGlobalColIndex(int active, int patchIndex, int c = 0) const
     {
         int index = mapper(m_col(c)).index(active, patchIndex) + m_cstr(c);
+#if defined(USE_PERMUTATION)
         index = m_perm_old2new(index);
+#endif
         return index;
     }
 
@@ -206,7 +210,9 @@ public:
         //printf("activeRow=%d, activeCol=%d\n", activeRow, activeCol);
         if (rowMap.is_free_index(activeRow))
         {
+#if defined(USE_PERMUTATION)
             ii = m_perm_old2new(ii);
+#endif
             int jj = m_cstr(c) + activeCol;
             //const int jjLocal = cstrLocal + activeCol;
             if (colMap.is_free_index(activeCol))
@@ -216,8 +222,10 @@ public:
                 //m_cols[out] = jj;
                 //m_values[out] = value;
                 //printf("counter=%d, ii=%d, jj=%d, value=%f\n", out, ii, jj, value);
+#if defined(USE_PERMUTATION)
                 jj = m_perm_old2new(jj);
-                //printf("after permutation: ii=%d, jj=%d\n", ii, jj);
+#endif
+                //printf("after permutation: ii=%d, jj=%d, value=%f\n", ii, jj, value);
                 atomicAdd(&m_csrMatrix(ii, jj), value);
             }
             else
@@ -241,15 +249,19 @@ public:
 
         DofMapperDeviceView rowMap = mapper(m_row(r));
         DofMapperDeviceView colMap = mapper(m_col(c));
-        const int ii = m_rstr(r) + activeRow;
+        int ii = m_rstr(r) + activeRow;
         const int iiLocal = rstrLocal + activeRow;
         //printf("activeRow=%d, activeCol=%d\n", activeRow, activeCol);
         if (rowMap.is_free_index(activeRow))
         {
-            const int jj = m_cstr(c) + activeCol;
+            int jj = m_cstr(c) + activeCol;
             const int jjLocal = cstrLocal + activeCol;
             if (colMap.is_free_index(activeCol))
             {
+#if defined(USE_PERMUTATION)
+                ii = m_perm_old2new(ii);
+                jj = m_perm_old2new(jj);
+#endif
                 int out = atomicAdd(counter, 1);
                 rows[out] = ii;
                 cols[out] = jj;
@@ -277,7 +289,9 @@ public:
         const int iiLocal = rstrLocal + activeRow;
         if (rowMap.is_free_index(activeRow))
         {
+#if defined(USE_PERMUTATION)
             ii = m_perm_old2new(ii);
+#endif
             atomicAdd(&m_RHS(ii), value);
         }
     }

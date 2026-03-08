@@ -16,8 +16,11 @@ void printKernel(MultiPatchDeviceView displacement)
 
 int main()
 {
-	int numRefinements = 0;
-	int numDegElev = 0;
+	//const char* path = std::getenv("PATH");
+    //std::cout << "PATH = " << (path ? path : "(null)") << std::endl;
+
+	int numRefinements = 8;
+	int numDegElev = 2;
 	double deltaDisplacement = 0.1;
 	double maxDisplacement = 1.0;
 	std::vector<int> numPointsPerPatch{ 1000, 1000 };

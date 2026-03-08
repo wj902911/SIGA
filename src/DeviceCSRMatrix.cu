@@ -4,6 +4,7 @@
 #include <cusparse.h>
 #include <thrust/sort.h>
 #include <thrust/reduce.h>
+#include <thrust/unique.h>
 #include <thrust/iterator/zip_iterator.h>
 #include <stdexcept>
 
@@ -118,6 +119,51 @@ void DeviceCSRMatrix::setFromCOO(int numRows, int numCols,
     CHECK_CUSPARSE(cusparseXcoo2csr(
         cH,
         thrust::raw_pointer_cast(R2.data()),
+        nnz,
+        numRows,
+        m_rowPtr.data(),
+        CUSPARSE_INDEX_BASE_ZERO));
+
+    CHECK_CUSPARSE(cusparseDestroy(cH));
+}
+
+void DeviceCSRMatrix::setFromCOO(int numRows, int numCols, 
+                                 DeviceVectorView<int> cooR, 
+                                 DeviceVectorView<int> cooC)
+{
+    m_numCols = numCols;
+    const int nnz_coo = static_cast<int>(cooR.size());
+
+    thrust::device_vector<int> R(cooR.data(), cooR.data() + nnz_coo);
+    thrust::device_vector<int> C(cooC.data(), cooC.data() + nnz_coo);
+
+    auto keys_begin = thrust::make_zip_iterator(thrust::make_tuple(R.begin(), C.begin()));
+    auto keys_end   = thrust::make_zip_iterator(thrust::make_tuple(R.end(),   C.end()));
+
+    // 1. Sort by (row, col)
+    thrust::sort(keys_begin, keys_end);
+
+    // 2. Remove duplicate (row, col) pairs
+    auto new_end = thrust::unique(keys_begin, keys_end);
+    const int nnz = static_cast<int>(new_end - keys_begin);
+
+    m_rowPtr.resize(numRows + 1);
+    m_colInd.resize(nnz);
+    m_values.resize(nnz);
+    
+    // copy unique column indices
+    CHECK_CUDA(cudaMemcpy(m_colInd.data(),
+                          thrust::raw_pointer_cast(C.data()),
+                          nnz * sizeof(int),
+                          cudaMemcpyDeviceToDevice));
+
+    cusparseHandle_t cH = nullptr;
+    CHECK_CUSPARSE(cusparseCreate(&cH));
+
+    // build rowPtr from unique row array
+    CHECK_CUSPARSE(cusparseXcoo2csr(
+        cH,
+        thrust::raw_pointer_cast(R.data()),
         nnz,
         numRows,
         m_rowPtr.data(),

@@ -221,6 +221,12 @@ public:
     { m_csrMatrix.setFromCOO(numRows, numCols, cooR, cooC, cooV); }
 
     __host__
+    void setCSRMatrixFromCOO(int numRows, int numCols,
+                             DeviceVectorView<int> cooR, 
+                             DeviceVectorView<int> cooC)
+    { m_csrMatrix.setFromCOO(numRows, numCols, cooR, cooC); }
+
+    __host__
     const DeviceCSRMatrix& csrMatrix() const { return m_csrMatrix; }
     __host__
     DeviceCSRMatrix& csrMatrix() { return m_csrMatrix; }

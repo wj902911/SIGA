@@ -94,6 +94,11 @@ public:
                     DeviceVectorView<double> cooV);
 
     __host__
+    void setFromCOO(int numRows, int numCols,
+                    DeviceVectorView<int> cooR, 
+                    DeviceVectorView<int> cooC);
+
+    __host__
     DeviceCSRMatrixView view() const
     {
         return DeviceCSRMatrixView(m_numCols, 

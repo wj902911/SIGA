@@ -206,7 +206,7 @@ void SparseSystem::buildInterleavingPermutation()
         for (int a = 0; a < m_mappers[k].getDofs(0).size(); a++)
             for(int r = 0; r < d; r++)
             {
-                DofMapper mapper = m_mappers[r];
+                const DofMapper& mapper = m_mappers[r];
                 int idx = mapper.getDofs(0)[a];
                 if (idx >= 0 && idx < mapper.freeSize())
                 {

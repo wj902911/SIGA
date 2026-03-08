@@ -74,5 +74,11 @@ if (ENABLE_AMGX)
   endif()
 endif()
 
+option(EIGEN_USE_MKL_ALL "Use MKL for all Eigen operations" OFF)
+if (EIGEN_USE_MKL_ALL)
+  find_package(MKL CONFIG REQUIRED PATHS $ENV{MKLROOT})
+#  target_link_libraries(Eigen3 INTERFACE MKL::MKL)
+endif()
+
 add_subdirectory(src)
 add_subdirectory(example)

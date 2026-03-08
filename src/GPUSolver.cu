@@ -377,21 +377,26 @@ bool GPUSolver::solveSingleIteration_Eigen()
     //std::cout << std::endl;
     //m_assembler.csrMatrix().print_host();
 
+
+    //auto t_cpu_start = std::chrono::high_resolution_clock::now();
+    using SpMat = Eigen::SparseMatrix<double, Eigen::RowMajor, int>;
+    SpMat A = m_assembler.csrMatrix().toEigenCSR();
+    Eigen::VectorXd b = m_assembler.hostRHS();
+
 #if 0
     if (m_numIterations == 0)
     {
         // Compute the smallest eigenvalue of the system matrix
         start = std::chrono::high_resolution_clock::now();
-        double lambda_min = smallestEigenvalue_SPD_spectra(A);
+        double lambda_min = smallestEigenvalue_symm_sparse_Eigen(A);
         end = std::chrono::high_resolution_clock::now();
         std::cout << "Smallest eigenvalue: " << lambda_min << std::endl;
         printf("Eigenvalue computation time: %f seconds\n", std::chrono::duration<double>(end - start).count());
     }
 #endif
-    //auto t_cpu_start = std::chrono::high_resolution_clock::now();
-    using SpMat = Eigen::SparseMatrix<double, Eigen::RowMajor, int>;
-    SpMat A = m_assembler.csrMatrix().toEigenCSR();
-    Eigen::VectorXd b = m_assembler.hostRHS();
+
+    //std::cout << Eigen::MatrixXd(A) << std::endl;
+    //std::cout << b << std::endl;
 
     Eigen::SimplicialLDLT<SpMat> solver;
     solver.compute(A);
@@ -409,7 +414,8 @@ bool GPUSolver::solveSingleIteration_Eigen()
         printf("Eigen SimplicialLDLT solve failed\n");
         return false;
     }
-
+    //std::cout << std::endl;
+    //std::cout << x << std::endl;
     //auto t_cpu_end = std::chrono::high_resolution_clock::now();
     //printf("Eigen factor+solve time (CPU): %f seconds\n",
     //       std::chrono::duration<double>(t_cpu_end - t_cpu_start).count());
@@ -449,9 +455,9 @@ bool GPUSolver::solveSingleIteration_AMGX()
     //DeviceMatrixView<double> Adev = m_assembler.matrix();
     DeviceVectorView<double> bdev = m_assembler.rhs();
     const int n = static_cast<int>(bdev.size());
-    std::cout << n << std::endl;
 
 	start = std::chrono::high_resolution_clock::now();
+#if 0
     // --- COO from assembler (device pointers) ---
     auto cooR = m_assembler.rows();    // int, length nnz_coo
     auto cooC = m_assembler.cols();    // int, length nnz_coo
@@ -524,7 +530,8 @@ bool GPUSolver::solveSingleIteration_AMGX()
         CUSPARSE_INDEX_BASE_ZERO));
     auto mid = std::chrono::high_resolution_clock::now();
     printf("COO->CSR conversion time: %f seconds\n", std::chrono::duration<double>(mid - start).count());
-
+#endif
+    const int nnz = m_assembler.csrMatrix().numNonZeros();
     if (m_amgx_n != n || m_amgx_nnz != nnz)
     {
         // New pattern/size: upload full matrix & setup
@@ -532,9 +539,9 @@ bool GPUSolver::solveSingleIteration_AMGX()
             m_amgx_A,
             n, nnz,
             1, 1,
-            d_csr_offsets,
-            d_csr_cols,
-            d_csr_vals,
+            m_assembler.csrMatrix().rowPtr().data(),
+            m_assembler.csrMatrix().colInd().data(),
+            m_assembler.csrMatrix().values().data(),
             nullptr)); // diag_data = nullptr
 
         AMGX_CHECK(AMGX_solver_setup(m_amgx_solver, m_amgx_A));
@@ -548,27 +555,27 @@ bool GPUSolver::solveSingleIteration_AMGX()
         AMGX_CHECK(AMGX_matrix_replace_coefficients(
             m_amgx_A,
             n, nnz,
-            d_csr_vals,
+            m_assembler.csrMatrix().values().data(),
             nullptr));
         // If your sparsity pattern changes even when nnz is same, DON'T use replace_coefficients.
         // In that case call AMGX_matrix_upload_all + AMGX_solver_setup every time.
     }
 
-    auto idx0   = thrust::make_counting_iterator<int>(0);
-    auto map_it = thrust::make_transform_iterator(idx0, P);
+    //auto idx0   = thrust::make_counting_iterator<int>(0);
+    //auto map_it = thrust::make_transform_iterator(idx0, P);
 
-    thrust::device_vector<double> b_perm(n);
-    thrust::device_vector<double> x0_perm(n);
+    //thrust::device_vector<double> b_perm(n);
+    //thrust::device_vector<double> x0_perm(n);
 
-    thrust::device_ptr<const double> bptr(bdev.data());
-    thrust::device_ptr<const double> x0ptr(m_deltaSolVector.data());
+    //thrust::device_ptr<const double> bptr(bdev.data());
+    //thrust::device_ptr<const double> x0ptr(m_deltaSolVector.data());
 
-    thrust::scatter(bptr,  bptr  + n, map_it, b_perm.begin());
-    thrust::scatter(x0ptr, x0ptr + n, map_it, x0_perm.begin());
+    //thrust::scatter(bptr,  bptr  + n, map_it, b_perm.begin());
+    //thrust::scatter(x0ptr, x0ptr + n, map_it, x0_perm.begin());
 
     // Upload RHS and initial guess (device pointers because mode = dDDI)
-    AMGX_CHECK(AMGX_vector_upload(m_amgx_b, n, 1, thrust::raw_pointer_cast(b_perm.data())));
-    AMGX_CHECK(AMGX_vector_upload(m_amgx_x, n, 1, thrust::raw_pointer_cast(x0_perm.data()))); // initial guess
+    AMGX_CHECK(AMGX_vector_upload(m_amgx_b, n, 1, bdev.data()));
+    AMGX_CHECK(AMGX_vector_upload(m_amgx_x, n, 1, m_deltaSolVector.data())); // initial guess
 
     // Solve
     AMGX_CHECK(AMGX_solver_solve(m_amgx_solver, m_amgx_b, m_amgx_x));
@@ -597,7 +604,7 @@ bool GPUSolver::solveSingleIteration_AMGX()
     }
     Eigen::VectorXd xprime_host(n);
     AMGX_CHECK(AMGX_vector_download(m_amgx_x, xprime_host.data()));
-
+#if 0
     Eigen::VectorXd x_old(n);
     for (int i = 0; i < n; ++i)
     {
@@ -606,7 +613,8 @@ bool GPUSolver::solveSingleIteration_AMGX()
         int j = node * d + comp;   // P(i)
         x_old[i] = xprime_host[j];
     }
-    m_deltaSolVector.updateFromHost(x_old.data());
+#endif
+    m_deltaSolVector.updateFromHost(xprime_host.data());
 
     //Eigen::VectorXd x_host(m_deltaSolVector.size());
     //m_deltaSolVector.copyToHost(x_host.data());
@@ -615,7 +623,7 @@ bool GPUSolver::solveSingleIteration_AMGX()
     //m_deltaSolVector.updateFromHost(x_host.data());
     //std::cout << "Solution vector (host): " << x_host.transpose() << std::endl;
     end = std::chrono::high_resolution_clock::now();
-    printf("Linear solve time: %f seconds\n", std::chrono::duration<double>(end - mid).count());
+    printf("Linear solve time: %f seconds\n", std::chrono::duration<double>(end - start).count());
 
     m_updateNorm   = m_deltaSolVector.vectorView().norm();
     m_residualNorm = bdev.norm();
@@ -628,10 +636,10 @@ bool GPUSolver::solveSingleIteration_AMGX()
         m_initUpdateNorm   = m_updateNorm;
     }
 
-    CHECK_CUSPARSE(cusparseDestroy(cH));
-    CHECK_CUDA(cudaFree(d_csr_offsets));
-    CHECK_CUDA(cudaFree(d_csr_cols));
-    CHECK_CUDA(cudaFree(d_csr_vals));
+    //CHECK_CUSPARSE(cusparseDestroy(cH));
+    //CHECK_CUDA(cudaFree(d_csr_offsets));
+    //CHECK_CUDA(cudaFree(d_csr_cols));
+    //CHECK_CUDA(cudaFree(d_csr_vals));
 
     return true;
 }
@@ -650,6 +658,7 @@ void GPUSolver::solve()
         //if(!solveSingleIteration())
 #if ENABLE_AMGX
         if(!solveSingleIteration_AMGX())
+        //if(!solveSingleIteration_Eigen())
 #else
         if(!solveSingleIteration_Eigen())
 #endif
@@ -770,6 +779,16 @@ double GPUSolver::smallestEigenvalue_symm_dense_Eigen(Eigen::MatrixXd mat)
     return eigensolver.eigenvalues()(0);
 }
 
+double GPUSolver::smallestEigenvalue_symm_sparse_Eigen(Eigen::SparseMatrix<double> mat)
+{
+    Eigen::SelfAdjointEigenSolver<Eigen::SparseMatrix<double>> eigensolver(mat);
+    if (eigensolver.info() != Eigen::Success) 
+    {
+        throw std::runtime_error("Eigen decomposition failed");
+    }
+    return eigensolver.eigenvalues()(0);
+}
+
 std::string GPUSolver::status()
 {
     std::string statusString;
@@ -805,22 +824,22 @@ void GPUSolver::initAMGXOnce()
     // You can tune later.
     const char* cfg_str =
         "config_version=2, "
-        "solver(main)=FGMRES, "
+        "solver(main)=CG, "
         "main:preconditioner(amg)=AMG, "
         "main:max_iters=2000, "
         "main:tolerance=1e-6, "
         "main:norm=L2, "
         "main:monitor_residual=1, "
-        "main:store_res_history=1, "
-        "main:print_solve_stats=1, "
-#if 1
+        "main:store_res_history=0, "
+        "main:print_solve_stats=0, "
+#if 0
         // --- AMG scope ---
         "amg:algorithm=AGGREGATION, "
         "amg:selector=SIZE_2, "
         "amg:interpolator=D2, "
         "amg:strength_threshold=0.5, "
         "amg:cycle=V, "
-        "amg:max_iters=2, "
+        "amg:max_iters=1, "
         "amg:max_levels=50, "
         "amg:presweeps=2, "
         "amg:postsweeps=2, "
@@ -829,9 +848,11 @@ void GPUSolver::initAMGXOnce()
         "amg:coarse_solver=DENSE_LU_SOLVER"
 #endif
         ;
+    //AMGX_config_handle config;
+    AMGX_CHECK(AMGX_config_create_from_file(&m_amgx_cfg, "../../../external/amgx/src/configs/SOLVER_CONFIG_INUSE.json"));
 
-    AMGX_CHECK(AMGX_config_create(&m_amgx_cfg, cfg_str));
-    AMGX_CHECK(AMGX_resources_create_simple(&m_amgx_rsrc, m_amgx_cfg));
+    //AMGX_CHECK(AMGX_config_create(&m_amgx_cfg, cfg_str));
+    AMGX_CHECK(AMGX_resources_create_simple(&m_amgx_rsrc, m_amgx_cfg))
 
     AMGX_CHECK(AMGX_matrix_create(&m_amgx_A, m_amgx_rsrc, m_amgx_mode));
     AMGX_CHECK(AMGX_vector_create(&m_amgx_b, m_amgx_rsrc, m_amgx_mode));
