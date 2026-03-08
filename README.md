@@ -225,3 +225,34 @@ When running an executable that uses the **AMGX** solver, the following files mu
 - **`SOLVER_CONFIG_INUSE.json`**
 
 Without these files, the executable will not run correctly with AMGX enabled.
+
+---
+
+## Performance
+
+Representative performance measurements on an **NVIDIA RTX 3080 Ti** are shown below for a **2D cubic B-spline** discretization.
+
+### 2D Cubic B-spline Benchmark
+
+| DOFs | Assembly Time | Linear Solve Time |
+|------|---------------|-------------------|
+| 50k  | ~0.5 s        | ~1 s              |
+| 500k | ~2 s          | ~4–6 s            |
+
+### Benchmark Notes
+
+- The reported timings correspond to a typical nonlinear analysis workflow and should be interpreted as representative rather than absolute performance figures.
+- Assembly time denotes the cost of residual evaluation and tangent stiffness matrix construction for one Newton iteration.
+- Linear solve time denotes the cost of solving the corresponding linearized system within one Newton step.
+- Actual performance depends on several factors, including spline order, quadrature cost, constitutive model complexity, sparsity pattern, solver settings, and GPU hardware.
+- For large-scale problems, solver performance is often the dominant cost, while for smaller problems the assembly and data movement overhead may be comparatively more visible.
+
+---
+
+## Future Work
+
+Planned directions for future development include:
+
+- **Multiphysics coupling**, including extensions to coupled field problems arising in advanced computational mechanics
+- **AMGX-based eigenvalue solvers**, with an emphasis on large-scale instability and modal analysis
+- **Multi-GPU support**, aimed at improving scalability for very large simulations
