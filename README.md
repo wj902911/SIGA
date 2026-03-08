@@ -205,6 +205,18 @@ Each example outputs:
 - deformed configurations for each load step
 - a ParaView collection file for time-series visualization
 
+### Post-processing Note
+
+`GPUPostProcessor` provides an option to export the computational mesh during output generation.
+
+For models with a large number of elements, disabling mesh output is often recommended because it can:
+
+- reduce memory usage
+- lower post-processing cost
+- improve visualization clarity by preventing the mesh lines from obscuring the solid body
+
+In particular, for very fine discretizations, mesh rendering may visually cover the entire model.
+
 ### AMGX Runtime Requirement
 
 When running an executable that uses the **AMGX** solver, the following files must be placed in the **same directory as the executable**:
