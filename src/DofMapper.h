@@ -101,8 +101,8 @@ public:
     //get m_dofs
     const std::vector<int>& getDofs(int comp) const
     {
-        if (comp < 0 || comp >= static_cast<int>(m_dofs.size()))
-            return std::vector<int>();
+        //if (comp < 0 || comp >= static_cast<int>(m_dofs.size()))
+        //    return std::vector<int>();
         return m_dofs[comp];
     }
 #endif

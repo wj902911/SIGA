@@ -849,7 +849,7 @@ void GPUSolver::initAMGXOnce()
 #endif
         ;
     //AMGX_config_handle config;
-    AMGX_CHECK(AMGX_config_create_from_file(&m_amgx_cfg, "../../../external/amgx/src/configs/SOLVER_CONFIG_INUSE.json"));
+    AMGX_CHECK(AMGX_config_create_from_file(&m_amgx_cfg, "./SOLVER_CONFIG_INUSE.json"));
 
     //AMGX_CHECK(AMGX_config_create(&m_amgx_cfg, cfg_str));
     AMGX_CHECK(AMGX_resources_create_simple(&m_amgx_rsrc, m_amgx_cfg))
