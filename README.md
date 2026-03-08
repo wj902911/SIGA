@@ -157,8 +157,6 @@ For a Debug build:
 cmake --build . --config Debug
 ```
 
----
-
 ### Remarks
 
 - The exact availability of optional components depends on whether the corresponding third-party libraries are installed and discoverable by CMake.
