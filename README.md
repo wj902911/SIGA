@@ -237,7 +237,7 @@ Without these files, the executable will not run correctly with AMGX enabled.
 
 ## Performance
 
-Representative performance measurements on an **NVIDIA RTX 3080 Ti** are shown below for a **2D cubic B-spline** discretization.
+Representative performance measurements on an **NVIDIA RTX 3080 Ti** are shown below.
 
 ### 2D Cubic B-spline Benchmark
 
