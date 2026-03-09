@@ -5,6 +5,7 @@
 #include <SparseSystemDeviceData.h>
 #include <BoundaryCondition.h>
 #include <MultiGaussPointsDeviceData.h>
+#include <OptionList.h>
 
 class GPUAssembler
 {
@@ -24,6 +25,7 @@ private:
     DeviceArray<double> m_bodyForce;
     MultiGaussPointsDeviceData m_multiGaussPoints;
     bool m_initialAssemble = true;
+    OptionList m_options;
 public:
     __host__
     GPUAssembler(const MultiPatch& multiPatch,
@@ -31,6 +33,7 @@ public:
                   const BoundaryConditions& bc,
                   const Eigen::VectorXd& bodyForce);
         
+    OptionList defaultOptions(); 
 
     __host__
     void computeDirichletDofs(int unk_, 
@@ -133,4 +136,7 @@ public:
 
     __host__
     int targetDim() const { return m_multiPatch.targetDim(); }
+
+    __host__
+    OptionList& options() { return m_options; }
 };

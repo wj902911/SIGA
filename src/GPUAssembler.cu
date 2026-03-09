@@ -224,6 +224,7 @@ __global__
 void assembleDomainKernel(
     int totalGPs,
     //int* counter,
+    DeviceVectorView<double> parameters,
     MultiPatchDeviceView displacement,
     MultiPatchDeviceView multiPatch,
     MultiGaussPointsDeviceView multiGaussPoints,
@@ -235,8 +236,8 @@ void assembleDomainKernel(
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < totalGPs)
     {
-        double YM = 1.0;
-        double PR = 0.3;
+        double YM = parameters[1];
+        double PR = parameters[0];
         double lambda = YM * PR / ( ( 1. + PR ) * ( 1. - 2. * PR ) );
         double mu = YM / ( 2. * ( 1. + PR ) );
         
@@ -861,6 +862,16 @@ GPUAssembler::GPUAssembler(const MultiPatch &multiPatch,
 
     err = cudaFree(entryCountDevicePtr);
     assert(err == cudaSuccess && "cudaFree failed in GPUAssembler constructor during counting matrix entries");
+
+    m_options = defaultOptions();
+}
+
+OptionList GPUAssembler::defaultOptions()
+{
+    OptionList opt;
+    opt.addReal("youngs_modulus", "Young's modulus", 1.0);
+    opt.addReal("poissons_ratio", "Poisson's ratio", 0.3);
+    return opt;
 }
 
 void GPUAssembler::
@@ -1040,7 +1051,7 @@ void GPUAssembler::assemble(const DeviceVectorView<double> &solVector,
     printf("RHS Vector:\n");
     m_sparseSystem.deviceView().rhs().print();
 #endif
-
+    DeviceArray<double> parameterValues(m_options.realValues());
     int* entryCountDevicePtr;
     err = cudaMalloc((void**)&entryCountDevicePtr, sizeof(int));
     assert(err == cudaSuccess && "cudaMalloc failed in GPUAssembler constructor during counting matrix entries");
@@ -1051,6 +1062,7 @@ void GPUAssembler::assemble(const DeviceVectorView<double> &solVector,
     assembleDomainKernel<<<gridSize, blockSize>>>(
                     totalGPs,
                     //entryCountDevicePtr,
+                    parameterValues.vectorView(),
                     m_displacement.deviceView(),
                     m_multiPatch.deviceView(),
                     m_multiGaussPoints.view(),

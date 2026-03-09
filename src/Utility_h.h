@@ -58,3 +58,11 @@ inline std::string to_string_sientific(double value, int precision=3)
     return out.str();
 }
 
+template<typename C>
+inline std::string to_string(const C & value)
+{
+    std::ostringstream convert;
+    convert << value;
+    return convert.str();
+}
+

@@ -10,11 +10,14 @@
 
 int main()
 {
-	int numRefinements =0;
-	int numDegElev = 0;
+	double YM = 1.0;
+	double PR = 0.3;
+
+	int numRefinements = 3;
+	int numDegElev = 1;
 	double deltaDisplacement = 0.1;
 	double maxDisplacement = 1.0;
-	std::vector<int> numPointsPerPatch{ 1000, 1000 };
+	std::vector<int> numPointsPerPatch{ 10000, 10000 };
 
 	if (!std::filesystem::exists("./TwoPatchesTest_3D"))
 		std::filesystem::create_directory("./TwoPatchesTest_3D");
@@ -119,6 +122,8 @@ int main()
 	std::cout << "Initializing assembler..." << std::endl;
 	auto start = std::chrono::high_resolution_clock::now();
 	GPUAssembler assembler(multiPatch, bases, bcInfo, bodyForce);
+	assembler.options().setReal("youngs_modulus", YM);
+	assembler.options().setReal("poissons_ratio", PR);
 	auto end = std::chrono::high_resolution_clock::now();
 	std::chrono::duration<double> elapsed = end - start;
 	std::cout << "Initialized assembler in " << elapsed.count() << " s." << std::endl;

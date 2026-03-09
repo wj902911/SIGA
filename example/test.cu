@@ -18,9 +18,11 @@ int main()
 {
 	//const char* path = std::getenv("PATH");
     //std::cout << "PATH = " << (path ? path : "(null)") << std::endl;
+	double YM = 1.0;
+	double PR = 0.3;
 
-	int numRefinements = 8;
-	int numDegElev = 2;
+	int numRefinements = 3;
+	int numDegElev = 1;
 	double deltaDisplacement = 0.1;
 	double maxDisplacement = 1.0;
 	std::vector<int> numPointsPerPatch{ 1000, 1000 };
@@ -111,7 +113,8 @@ int main()
 	std::cout << "Initializing assembler..." << std::endl;
 	auto start = std::chrono::high_resolution_clock::now();
 	GPUAssembler assembler(multiPatch, bases, bcInfo, bodyForce);
-	//assembler.print();
+	assembler.options().setReal("youngs_modulus", YM);
+	assembler.options().setReal("poissons_ratio", PR);
 	auto end = std::chrono::high_resolution_clock::now();
 	std::chrono::duration<double> elapsed = end - start;
 	std::cout << "Initialized assembler in " << elapsed.count() << " s." << std::endl;
@@ -120,7 +123,7 @@ int main()
 
 	std::cout << "Initializing post-processor..." << std::endl;
 	start = std::chrono::high_resolution_clock::now();
-	GPUPostProcessor postProcessor(assembler, numPointsPerPatch, false, 2);
+	GPUPostProcessor postProcessor(assembler, numPointsPerPatch, true, 2);
 	end = std::chrono::high_resolution_clock::now();
 	elapsed = end - start;
 	std::cout << "Initialized post-processor in " << elapsed.count() << " s." << std::endl;
