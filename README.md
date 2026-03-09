@@ -105,11 +105,20 @@ The core requirements are listed below, followed by optional components that can
 
 SIGA uses an out-of-source CMake build.
 
-### 1. Clone the repository
+### 1. Clone the Repository
+
+SIGA includes several external libraries as Git submodules.  
+To clone the repository together with all required submodules, run:
 
 ```bash
-git clone https://github.com/wj902911/SIGA.git
+git clone --recurse-submodules https://github.com/yourusername/SIGA.git
 cd SIGA
+```
+
+If you already cloned the repository without submodules, run:
+
+```bash
+git submodule update --init --recursive
 ```
 
 ### 2. Create a build directory
