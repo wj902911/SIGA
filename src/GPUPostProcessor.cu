@@ -424,8 +424,8 @@ GPUPostProcessor::GPUPostProcessor(const GPUAssembler &assembler,
 
     m_numPointsPerDirHost.resize(domainDim, numPatches);
     m_numPointsPerDir.copyToHost(m_numPointsPerDirHost.data());
-    //std::cout << "Distributed points per direction per patch:\n" 
-    //          << m_numPointsPerDirHost << std::endl;
+    std::cout << "Distributed points per direction per patch:\n" 
+              << m_numPointsPerDirHost << std::endl;
     int numPoints = 0;
     for (int p = 0; p < numPatches; p++)
         numPoints += m_numPointsPerDirHost.col(p).prod();
@@ -458,8 +458,8 @@ GPUPostProcessor::GPUPostProcessor(const GPUAssembler &assembler,
     //std::cout << "Distributed parameter points:\n" 
     //          << pointsHost << std::endl;
     m_geoPointsDeviceArray.copyToHost(m_geoPointsHost.data());
-    //std::cout << "Evaluated points at distributed locations:\n" 
-    //          << m_geoPointsHost << std::endl;
+    std::cout << "Evaluated points at distributed locations:\n" 
+              << m_geoPointsHost << std::endl;
 
     if (outputMesh)
     {
@@ -646,18 +646,19 @@ void GPUPostProcessor::writeParaview(const std::string &fn,
     ParaviewCollection &collection) const
 {
     std::string fileName = fn.substr(fn.find_last_of("/\\")+1);
+    int dataStart = 0;
     for (int p = 0; p < m_assembler.numPatches(); p++)
     {
         int d = m_assembler.geometryHost().patch(p).getBasisDim();
         int n = m_assembler.geometryHost().patch(p).getCPDim();
         Eigen::VectorXi np = m_numPointsPerDirHost.col(p);
         int totalNumPointsPatch = np.prod();
-        Eigen::MatrixXd pointsPatch = m_geoPointsHost.middleCols(p * totalNumPointsPatch, totalNumPointsPatch);
+        Eigen::MatrixXd pointsPatch = m_geoPointsHost.middleCols(dataStart, totalNumPointsPatch);
         std::map<std::string, Eigen::MatrixXd> dataPatch;
         for (const auto& item : data)
         {
             dataPatch[item.first] = 
-                item.second.middleCols(p * totalNumPointsPatch, totalNumPointsPatch);
+                item.second.middleCols(dataStart, totalNumPointsPatch);
         }
         if (3 -d > 0)
         {
@@ -681,6 +682,7 @@ void GPUPostProcessor::writeParaview(const std::string &fn,
         }
         writeParaviewSinglePatch(fn + std::to_string(step) + "_" + std::to_string(p), np, pointsPatch, dataPatch);
         collection.addTimestep(fileName + std::to_string(step), p, step, ".vts");
+        dataStart += totalNumPointsPatch;
     }
 }
 

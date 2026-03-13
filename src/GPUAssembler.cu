@@ -221,6 +221,40 @@ void computeCOOKernel(int totalNumElements, int* counter,
 }
 
 __global__
+void assembleDomainKernel_perTileBlock(
+    int numThreads, int tileSize,
+    DeviceVectorView<double> parameters,
+    MultiPatchDeviceView displacement,
+    MultiPatchDeviceView multiPatch,
+    MultiGaussPointsDeviceView multiGaussPoints,
+    DeviceVectorView<double> bodyForce,
+    SparseSystemDeviceView system,
+    DeviceNestedArrayView<double> eliminatedDofs)
+{
+    int tid = threadIdx.x;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < numThreads)
+    {
+        extern __shared__ double sharedData[];
+        double YM = parameters[1];
+        double PR = parameters[0];
+        double lambda = YM * PR / ( ( 1. + PR ) * ( 1. - 2. * PR ) );
+        double mu = YM / ( 2. * ( 1. + PR ) );
+        int numDerivatives = 1;
+        int CPdim = multiPatch.targetDim();
+        int dim = multiPatch.domainDim();
+        int patch_idx(0);
+        int entry_idx = displacement.threadPatch_entries(idx, patch_idx);
+
+        PatchDeviceView geoPatch = multiPatch.patch(patch_idx);
+        PatchDeviceView dispPatch = displacement.patch(patch_idx);
+        TensorBsplineBasisDeviceView dispBasis = displacement.basis(patch_idx);
+        //DeviceVectorView<double> pt(sharedData)
+    }
+
+}
+
+__global__
 void assembleDomainKernel(
     int totalGPs,
     //int* counter,

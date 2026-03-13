@@ -21,11 +21,11 @@ int main()
 	double YM = 1.0;
 	double PR = 0.3;
 
-	int numRefinements = 3;
-	int numDegElev = 1;
+	int numRefinements = 0;
+	int numDegElev = 0;
 	double deltaDisplacement = 0.1;
 	double maxDisplacement = 1.0;
-	std::vector<int> numPointsPerPatch{ 1000, 1000 };
+	std::vector<int> numPointsPerPatch{ 5, 5 };
 
 	if (!std::filesystem::exists("./TwoPatchesTest"))
 		std::filesystem::create_directory("./TwoPatchesTest");
@@ -50,16 +50,14 @@ int main()
 		1.000, 1.000,
 		2.000, 1.000;
 	
-	std::vector<double> knot_u2{ 0., 0., 0.5, 1., 1. };
+	std::vector<double> knot_u2{ 0., 0., 1., 1. };
 	std::vector<double> knot_v2{ 0., 0., 1., 1. };
-	Eigen::MatrixXd control_points2(6, 2);
+	Eigen::MatrixXd control_points2(4, 2);
 	control_points2 <<
 		2.000, 0.000, 
 		3.000, 0.000, 
-		4.000, 0.000,
 		2.000, 1.000,
-		3.000, 1.000,
-		4.000, 1.000;
+		3.000, 1.000;
 #if 0
     std::vector<double> knot_u3{ 0., 0., 1., 1. };
 	std::vector<double> knot_v3{ 0., 0., 1., 1. };

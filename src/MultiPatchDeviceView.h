@@ -250,6 +250,26 @@ public:
     { patch(patchIndex).setCoefficients(row, col, value); }
 
     __device__
+    int threadPatch_entries(int idx, int& patch_idx) const
+    {
+        int point_idx = idx;
+        for (int i = 0; i < m_numPatches; i++)
+        {
+            int patch_points = patch(i).basis().totalNumGPs();
+            patch_points *= basis(i).numActiveControlPoints() * 
+                            basis(i).numActiveControlPoints();
+            patch_points *= targetDim() * targetDim();
+            if (point_idx < patch_points) 
+            {
+                patch_idx = i;
+                break;
+            }
+            point_idx -= patch_points;
+        }
+        return point_idx;
+    }
+
+    __device__
     int threadPatch(int idx, int& patch_idx) const
     {
         int point_idx = idx;
