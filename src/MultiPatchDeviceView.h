@@ -381,4 +381,8 @@ public:
         }
         return point_idx;
     }
+
+    __device__
+    int numActiveControlPoints() const
+    { return basis(0).numActiveControlPoints(); }
 };

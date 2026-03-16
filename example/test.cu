@@ -25,7 +25,7 @@ int main()
 	int numDegElev = 0;
 	double deltaDisplacement = 0.1;
 	double maxDisplacement = 1.0;
-	std::vector<int> numPointsPerPatch{ 5, 5 };
+	std::vector<int> numPointsPerPatch{ 1000, 500 };
 
 	if (!std::filesystem::exists("./TwoPatchesTest"))
 		std::filesystem::create_directory("./TwoPatchesTest");

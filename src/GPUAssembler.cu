@@ -222,7 +222,7 @@ void computeCOOKernel(int totalNumElements, int* counter,
 
 __global__
 void assembleDomainKernel_perTileBlock(
-    int numThreads, int tileSize,
+    int tileSize, int numInt, int numDouble,
     DeviceVectorView<double> parameters,
     MultiPatchDeviceView displacement,
     MultiPatchDeviceView multiPatch,
@@ -231,25 +231,141 @@ void assembleDomainKernel_perTileBlock(
     SparseSystemDeviceView system,
     DeviceNestedArrayView<double> eliminatedDofs)
 {
-    int tid = threadIdx.x;
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < numThreads)
-    {
-        extern __shared__ double sharedData[];
-        double YM = parameters[1];
-        double PR = parameters[0];
-        double lambda = YM * PR / ( ( 1. + PR ) * ( 1. - 2. * PR ) );
-        double mu = YM / ( 2. * ( 1. + PR ) );
-        int numDerivatives = 1;
-        int CPdim = multiPatch.targetDim();
-        int dim = multiPatch.domainDim();
-        int patch_idx(0);
-        int entry_idx = displacement.threadPatch_entries(idx, patch_idx);
+    extern __shared__ unsigned char shmem[];
 
-        PatchDeviceView geoPatch = multiPatch.patch(patch_idx);
-        PatchDeviceView dispPatch = displacement.patch(patch_idx);
+    unsigned char* ptr = shmem;
+
+    // align to double
+    ptr = reinterpret_cast<unsigned char*>(
+        (reinterpret_cast<std::uintptr_t>(ptr) + alignof(double) - 1) & ~(alignof(double) - 1)
+    );
+    double* shmem_double = reinterpret_cast<double*>(ptr);
+    ptr += numDouble * sizeof(double);
+
+    // align to int
+    ptr = reinterpret_cast<unsigned char*>(
+        (reinterpret_cast<std::uintptr_t>(ptr) + alignof(int) - 1) & ~(alignof(int) - 1)
+    );
+    int* shmem_int = reinterpret_cast<int*>(ptr);
+    ptr += numInt * sizeof(int);
+
+    int numDerivatives = 1;
+    int CPdim = multiPatch.targetDim();
+    int dim = multiPatch.domainDim();
+
+    int intDataStart = 0;
+    int& patch_idx = shmem_int[intDataStart];
+    intDataStart += 1;
+    DeviceVectorView<int> blockCoord(shmem_int + intDataStart, dim);
+    intDataStart += dim;
+
+    int doubleDataStart = 0;
+    double& wt = shmem_double[doubleDataStart];
+    doubleDataStart += 1;
+    DeviceVectorView<double> pt(shmem_double + doubleDataStart, dim);
+    doubleDataStart += dim;
+
+    int blockId = blockIdx.x;
+    if (threadIdx.x == 0)
+    {
+        patch_idx = 0;
+        for (int i = 0; i < displacement.numPatches(); i++)
+        {
+            TensorBsplineBasisDeviceView basis = displacement.basis(i);
+            int N_D = basis.numActiveControlPoints();
+            int numBlocksPerEle = (N_D + tileSize - 1) / tileSize;
+            numBlocksPerEle *= numBlocksPerEle;
+            numBlocksPerEle *= basis.numGPsInElement();
+            int numElements = basis.totalNumElements();
+            int totalBlocksForPatch = numElements * numBlocksPerEle;
+            if (blockId < totalBlocksForPatch)
+            {
+                patch_idx = i;
+                break;
+            }
+            blockId -= totalBlocksForPatch;
+        }
+        //PatchDeviceView geoPatch = multiPatch.patch(patch_idx);
+        //PatchDeviceView dispPatch = displacement.patch(patch_idx);
         TensorBsplineBasisDeviceView dispBasis = displacement.basis(patch_idx);
         //DeviceVectorView<double> pt(sharedData)
+        int N_D = dispBasis.numActiveControlPoints();
+        int numBlocksPerGP = (N_D + tileSize - 1) / tileSize;
+        for (int d = 0; d < dim; d++)
+        {
+            blockCoord[d] = blockId % numBlocksPerGP;
+            blockId /= numBlocksPerGP;
+        }
+        int gpCoordData[3] = {0, 0, 0}; //max 3D
+        DeviceVectorView<int> gpCoord(gpCoordData, dim);
+        for (int d = 0; d < dim; d++)
+        {
+            int numGPs = dispBasis.knotVector(d).numGaussPoints();
+            gpCoord[d] = blockId % numGPs;
+            blockId /= numGPs;
+        }
+        int elementCoordData[3] = {0, 0, 0}; //max 3D
+        DeviceVectorView<int> elementCoord(elementCoordData, dim);
+        for (int d = 0; d < dim; d++)
+        {
+            int numElements = dispBasis.knotVector(d).numElements();
+            elementCoord[d] = blockId % numElements;
+            blockId /= numElements;
+        }
+        double lowerData[3] = {0.0, 0.0, 0.0}; //max 3D
+        DeviceVectorView<double> lower(lowerData, dim);
+        double upperData[3] = {0.0, 0.0, 0.0}; //max 3D
+        DeviceVectorView<double> upper(upperData, dim);
+        for (int d = 0; d < dim; d++)
+        {
+            lower[d] = *(dispBasis.knotVector(d).domainUBegin() + elementCoord[d]);
+            upper[d] = *(dispBasis.knotVector(d).domainUBegin() + elementCoord[d] + 1);
+        }
+        wt = multiGaussPoints[patch_idx].threadGaussPoint(lower, upper, gpCoord, pt);
+        printf("blockIdx.x=%d, patch_idx=%d, N_D=%d, numBlocksPerGP=%d, blockCoord=(%d, %d), gpCoord=(%d, %d), elementCoord=(%d, %d), lower=(%f, %f), upper=(%f, %f), wt=%f, pt=(%f, %f)\n", 
+               blockIdx.x, patch_idx, N_D, numBlocksPerGP, blockCoord[0], blockCoord[1], 
+               gpCoord[0], gpCoord[1], elementCoord[0], elementCoord[1], lower[0], 
+               lower[1], upper[0], upper[1], wt, pt[0], pt[1]);
+    }
+
+    __syncthreads();
+    
+    TensorBsplineBasisDeviceView dispBasis = displacement.basis(patch_idx);
+    int P1 = dispBasis.knotsOrder(0) + 1;
+    DeviceMatrixView<double> dispValuesAndDers(shmem_double + doubleDataStart, 
+                                                   P1, (numDerivatives + 1) * dim);
+    doubleDataStart += P1 * (numDerivatives + 1) * dim;
+
+    if (threadIdx.x == 0)
+        dispBasis.evalAllDers_into(pt, numDerivatives, dispValuesAndDers);
+
+    DeviceMatrixView<double> geoJacobianInv(shmem_double + doubleDataStart, dim, dim);
+    doubleDataStart += dim * dim;
+    double& measure = shmem_double[doubleDataStart];
+    double& weightForce = shmem_double[doubleDataStart + 1];
+    double& weightBody = shmem_double[doubleDataStart + 2];
+    doubleDataStart += 3;
+
+    if (threadIdx.x == 1)
+    {
+        double geoJacobianData[3*3] = {0.0}; //max 3D
+        DeviceMatrixView<double> geoJacobian(geoJacobianData, dim, dim);
+        PatchDeviceView geoPatch = multiPatch.patch(patch_idx);
+        geoPatch.jacobian(pt, numDerivatives, geoJacobian);
+        double measure = geoJacobian.determinant();
+        double weightForce = wt * measure;
+        double weightBody = wt * measure;
+        geoJacobian.inverse(geoJacobianInv);
+    }
+
+    __syncthreads();
+
+    DeviceMatrixView<double> RCGinv(shmem_double + doubleDataStart, dim, dim);
+    doubleDataStart += dim * dim;
+
+    if (threadIdx.x == 0)
+    {
+        
     }
 
 }
@@ -296,7 +412,7 @@ void assembleDomainKernel(
         TensorBsplineBasisDeviceView dispBasis = displacement.basis(patch_idx);
         PatchDeviceView dispPatch = displacement.patch(patch_idx);
         int P1 = dispBasis.knotsOrder(0) + 1;
-        double dispValuesAndDersData[5*2*3]; //max 4th order basis, max 2 derivatives, max 3D
+        double dispValuesAndDersData[5*3*3]; //max 4th order basis, max 2 derivatives, max 3D
         DeviceMatrixView<double> dispValuesAndDers(dispValuesAndDersData, P1, 
                                                    (numDerivatives+1)*dim);
         dispBasis.evalAllDers_into(pt, numDerivatives, dispValuesAndDers);
@@ -349,7 +465,8 @@ void assembleDomainKernel(
         for (int ti = 0; ti < N_D; ti += 3)
         {
             for (int tj = 0; tj < N_D; tj += 3)
-            {   __shared__ double localEntryValues[81]; //max 3x3 tile, max 3D
+            {   
+                __shared__ double localEntryValues[81]; //max 3x3 tile, max 3D
                 DeviceMatrixView<double> localEntries(localEntryValues, 3*dim, 3*dim);
                 for (int t = tid; t < 3*dim*3*dim; t += blockDim.x)
                     localEntryValues[t] = 0.0;
@@ -1086,11 +1203,47 @@ void GPUAssembler::assemble(const DeviceVectorView<double> &solVector,
     m_sparseSystem.deviceView().rhs().print();
 #endif
     DeviceArray<double> parameterValues(m_options.realValues());
-    int* entryCountDevicePtr;
-    err = cudaMalloc((void**)&entryCountDevicePtr, sizeof(int));
-    assert(err == cudaSuccess && "cudaMalloc failed in GPUAssembler constructor during counting matrix entries");
-    err = cudaMemset(entryCountDevicePtr, 0, sizeof(int));
-    assert(err == cudaSuccess && "cudaMemset failed in GPUAssembler constructor during counting matrix entries");
+    //int* entryCountDevicePtr;
+    //err = cudaMalloc((void**)&entryCountDevicePtr, sizeof(int));
+    //assert(err == cudaSuccess && "cudaMalloc failed in GPUAssembler constructor during counting matrix entries");
+    //err = cudaMemset(entryCountDevicePtr, 0, sizeof(int));
+    //assert(err == cudaSuccess && "cudaMemset failed in GPUAssembler constructor during counting matrix entries");
+
+    
+    int numGPsPerELe = m_multiBasisHost.numGPs();
+    int N_D = m_multiBasisHost.numActive();
+    int tileSize = std::min(16, N_D);
+    blockSize = tileSize * tileSize;
+    int numBlocksPerGP = (N_D + tileSize - 1) / tileSize;
+    gridSize = numBlocksPerGP * totalGPs;
+    int numDerivatives = 1;
+    int numInt = (1 + domainDim); //patch_idx and blockCords
+    int numDouble = domainDim * domainDim * tileSize * tileSize + //localEntries
+                    tileSize * domainDim + //localRHS
+                    (1 + domainDim) + // Gauss point coordinates and weight
+                    (domainDim * domainDim) * 2 + //geoJacobianInv, RCGInv
+                    3 + // measure, weightForce, weightBody
+                    (m_multiBasisHost.knotOrder() + 1) * (numDerivatives + 1) * domainDim; //dispValuesAndDers
+    size_t shmemBytes = numInt * sizeof(int) + (numDouble + 1) * sizeof(double); // +1 for alignment padding
+    assembleDomainKernel_perTileBlock<<<gridSize, blockSize, shmemBytes>>>(
+                    tileSize, numInt, numDouble,
+                    parameterValues.vectorView(),
+                    m_displacement.deviceView(),
+                    m_multiPatch.deviceView(),
+                    m_multiGaussPoints.view(),
+                    m_bodyForce.vectorView(),
+                    m_sparseSystem.deviceView(),
+                    fixedDofs_assemble);
+
+    err = cudaGetLastError();
+    if (err != cudaSuccess)
+        std::cerr << "Error after kernel assembleDomain_perTileBlock launch: " 
+                  << cudaGetErrorString(err) << std::endl;
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)        
+        std::cerr << "CUDA error during device synchronization (assembleDomain_perTileBlock): " 
+                  << cudaGetErrorString(err) << std::endl;
+
     blockSize = m_multiBasisHost.numGPs();
     gridSize = (totalGPs + blockSize - 1) / blockSize;
     assembleDomainKernel<<<gridSize, blockSize>>>(
@@ -1113,9 +1266,9 @@ void GPUAssembler::assemble(const DeviceVectorView<double> &solVector,
         std::cerr << "CUDA error during device synchronization (assembleDomain): " 
                   << cudaGetErrorString(err) << std::endl;
 
-    int entryCountHost;
-    err = cudaMemcpy(&entryCountHost, entryCountDevicePtr, sizeof(int), cudaMemcpyDeviceToHost);
-    assert(err == cudaSuccess && "cudaMemcpy failed in GPUAssembler constructor during counting matrix entries");
+    //int entryCountHost;
+    //err = cudaMemcpy(&entryCountHost, entryCountDevicePtr, sizeof(int), cudaMemcpyDeviceToHost);
+    //assert(err == cudaSuccess && "cudaMemcpy failed in GPUAssembler constructor during counting matrix entries");
 #if 0
     printf("COO Matrix:\n");
     printf("rows:");

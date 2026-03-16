@@ -85,4 +85,16 @@ public:
         for (int k = 0; k < m_bases.size(); k++)
             m_bases[k].degreeElevate(i, dir, eleInternal);
     }
+
+    int numActive(int patchIndex, int direction) const
+    { return m_bases[patchIndex].numActive(direction); }
+
+    int numActive(int patchIndex) const
+    { return m_bases[patchIndex].numActive(); }
+
+    int numActive() const
+    { return m_bases[0].numActive(); }
+
+    int knotOrder() const { return m_bases[0].getOrder(0); }
+
 };

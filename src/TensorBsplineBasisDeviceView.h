@@ -209,8 +209,10 @@ public:
         for (int d = 0; d < m_dim; d++)
         {
             int order = knotVector(d).order();
-            lower[d] = knotVector(d).knots()[coords[m_dim + d] + order];
-            upper[d] = knotVector(d).knots()[coords[m_dim + d] + order + 1];
+            //lower[d] = knotVector(d).knots()[coords[m_dim + d] + order];
+            //upper[d] = knotVector(d).knots()[coords[m_dim + d] + order + 1];
+            lower[d] = *(knotVector(d).domainUBegin() + coords[m_dim + d]);
+            upper[d] = *(knotVector(d).domainUBegin() + coords[m_dim + d] + 1);
         }
     }
 
@@ -227,9 +229,11 @@ public:
         //printf("knotVector:\n");
         //knotVector(d).print();
         //printf("ElementSupport dim %d, elem %d, order %d\n", d, coords[1], order);
-        lower = knotVector(d).knots()[coords[1] + order];
+        //lower = knotVector(d).knots()[coords[1] + order];
+        lower = *(knotVector(d).domainUBegin() + coords[1]);
         //printf("Lower knot: %f\n", lower);
-        upper = knotVector(d).knots()[coords[1] + order + 1];
+        //upper = knotVector(d).knots()[coords[1] + order + 1];
+        upper = *(knotVector(d).domainUBegin() + coords[1] + 1);
         //printf("Upper knot: %f\n", upper);
     }
 

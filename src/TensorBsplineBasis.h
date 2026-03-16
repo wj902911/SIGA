@@ -96,6 +96,17 @@ public:
 		               const Eigen::MatrixXd& coefs, 
 					   Eigen::MatrixXd& result) const;
 
+	int numActive(int dir) const
+	{ return m_knotVectors[dir].numActive(); }
+
+	int numActive() const
+	{
+		int total = 1;
+		for (const auto& kv : m_knotVectors)
+			total *= kv.numActive();
+		return total;
+	}
+
 	void active_into(const Eigen::MatrixXd& u, 
 		             Eigen::MatrixXi& result) const;
 

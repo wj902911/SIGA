@@ -42,13 +42,16 @@ public:
         m_multSum.print();
     }
 
-    __host__ __device__
-    int numElements() const { return m_knots.size() - m_order * 2 - 1; }
+    //__host__ __device__
+    //int numElements() const { return m_knots.size() - m_order * 2 - 1; }
+    __device__
+    int numElements() const { return (domainUEnd() - domainUBegin()); }
 
     __host__ __device__
     int numGaussPoints() const { return m_order + 1; }
 
-    __host__ __device__
+    //__host__ __device__
+    __device__
     int totalNumGaussPoints() const { return numElements() * numGaussPoints(); }
 
     __device__

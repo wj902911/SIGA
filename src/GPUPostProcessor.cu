@@ -424,8 +424,8 @@ GPUPostProcessor::GPUPostProcessor(const GPUAssembler &assembler,
 
     m_numPointsPerDirHost.resize(domainDim, numPatches);
     m_numPointsPerDir.copyToHost(m_numPointsPerDirHost.data());
-    std::cout << "Distributed points per direction per patch:\n" 
-              << m_numPointsPerDirHost << std::endl;
+    //std::cout << "Distributed points per direction per patch:\n" 
+    //          << m_numPointsPerDirHost << std::endl;
     int numPoints = 0;
     for (int p = 0; p < numPatches; p++)
         numPoints += m_numPointsPerDirHost.col(p).prod();
@@ -458,8 +458,8 @@ GPUPostProcessor::GPUPostProcessor(const GPUAssembler &assembler,
     //std::cout << "Distributed parameter points:\n" 
     //          << pointsHost << std::endl;
     m_geoPointsDeviceArray.copyToHost(m_geoPointsHost.data());
-    std::cout << "Evaluated points at distributed locations:\n" 
-              << m_geoPointsHost << std::endl;
+    //std::cout << "Evaluated points at distributed locations:\n" 
+    //          << m_geoPointsHost << std::endl;
 
     if (outputMesh)
     {
