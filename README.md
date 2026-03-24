@@ -111,7 +111,7 @@ SIGA includes several external libraries as Git submodules.
 To clone the repository together with all required submodules, run:
 
 ```bash
-git clone --recurse-submodules https://github.com/yourusername/SIGA.git
+git clone --recurse-submodules https://github.com/wj902911/SIGA.git
 cd SIGA
 ```
 
