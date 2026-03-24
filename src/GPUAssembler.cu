@@ -70,9 +70,9 @@ double tensorBasisValue(int r, int P1, int dim, int numDerivatives,
     return N_r;
 }
 
-#if 0
+#if 1
 __global__
-void countEntrysKernel_GP(int totalGPs,
+void countEntrysKernel(int numElements, int numBlocksPerElement, int numActivePerBlock,
                        MultiPatchDeviceView displacement,
                        MultiPatchDeviceView multiPatch,
                        MultiGaussPointsDeviceView multiGaussPoints,
@@ -80,25 +80,41 @@ void countEntrysKernel_GP(int totalGPs,
                        DeviceNestedArrayView<double> eliminatedDofs,
                        int* entryCount)
 {
-    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; 
-         idx < totalGPs; idx += blockDim.x * gridDim.x)
+    __shared__ int sharedEntryCount;
+    int totalNumBlocks = numElements * numBlocksPerElement * numBlocksPerElement;
+    for (int idx = blockIdx.x; idx < totalNumBlocks; idx += gridDim.x)
     {
-        int patch_idx(0);
-        int point_idx = displacement.threadPatch(idx, patch_idx);
-        double ptData[3]; //max 3D
+        __shared__ int patch_idx, N_D, dim, blockCoord[2];
+        __shared__ double ptData[3]; //max 3D
         DeviceVectorView<double> pt(ptData, multiGaussPoints.dim());
-        double wt = displacement.gsPoint(point_idx, patch_idx, 
-                                         multiGaussPoints[patch_idx], pt);
-        TensorBsplineBasisDeviceView dispBasis = displacement.basis(patch_idx);
-        int N_D = dispBasis.numActiveControlPoints();
-        int dim = multiPatch.targetDim();
-        for (int i = 0; i < N_D; i++)
+        if (threadIdx.x == 0 && threadIdx.y == 0)
+        {
+            for (int d = 0; d < 2; d++)
+            {
+                blockCoord[d] = idx % numBlocksPerElement;
+                idx /= numBlocksPerElement;
+            }
+            sharedEntryCount = 0;
+            int element_idx = displacement.threadPatch_element(idx, patch_idx);
+            int numGPsInElement = displacement.basis(patch_idx).numGPsInElement();
+            int point_idx = element_idx * numGPsInElement;
+            displacement.gsPoint(point_idx, patch_idx, 
+                                 multiGaussPoints[patch_idx], pt);
+            TensorBsplineBasisDeviceView dispBasis = displacement.basis(patch_idx);
+            N_D = dispBasis.numActiveControlPoints();
+            dim = multiPatch.targetDim();
+        }
+        __syncthreads();
+        
+        for (int i = threadIdx.x + blockCoord[0] * numActivePerBlock, ii = threadIdx.x; 
+             ii < numActivePerBlock && i < N_D; i += blockDim.x, ii += blockDim.x)
         {
             for (int di = 0; di < dim; di++)
             {
                 int globalIndex_i = system.mapColIndex(displacement.basis(patch_idx)
                     .activeIndex(pt, i), patch_idx, di);
-                for (int j = 0; j < N_D; j++)
+                for (int j = threadIdx.y + blockCoord[1] * numActivePerBlock, jj = threadIdx.y; 
+                     jj < numActivePerBlock && j < N_D; j += blockDim.y, jj += blockDim.y)
                 {
                     for (int dj = 0; dj < dim; dj++)
                     {
@@ -106,15 +122,26 @@ void countEntrysKernel_GP(int totalGPs,
                             .activeIndex(pt, j), patch_idx, dj);
                         if (system.isEntry(globalIndex_i, globalIndex_j, di, dj))
                         {
-                            //printf("Counting entry for i=%d, di=%d, j=%d, dj=%d\n", 
-                            //       globalIndex_i, di, globalIndex_j, dj);
-                            atomicAdd(entryCount, 1);
+                            //printf("Counting entry for i=%d, di=%d, j=%d, dj=%d, globalIndex_i=%d, globalIndex_j=%d\n", 
+                            //       i, di, j, dj, globalIndex_i, globalIndex_j);
+                            atomicAdd(&sharedEntryCount, 1);
                         }
+                        else
+                        {
+                            //printf("No entry for i=%d, di=%d, j=%d, dj=%d, globalIndex_i=%d, globalIndex_j=%d\n", 
+                            //       i, di, j, dj, globalIndex_i, globalIndex_j);
+                        }
+                        //atomicAdd(entryCount, 1);
+                        //printf("idx=%d, i=%d, di=%d, j=%d, dj=%d, globalIndex_i=%d, globalIndex_j=%d, count=%d\n", 
+                               //idx, i, di, j, dj, globalIndex_i, globalIndex_j, *entryCount);
                     }
                 }
             }
-        }    
+        }
+        __syncthreads();
     }
+    if (threadIdx.x == 0 && threadIdx.y == 0)
+        atomicAdd(entryCount, sharedEntryCount);
 }
 #else
 __global__
@@ -174,6 +201,65 @@ void countEntrysKernel(int totalNumElements,
 }
 #endif
 
+#if 1
+__global__
+void computeCOOKernel(int totalNumElements, int* counter,
+                      int numBlocksPerElement, int numActivePerBlock,
+                      MultiPatchDeviceView displacement,
+                      MultiPatchDeviceView multiPatch,
+                      MultiGaussPointsDeviceView multiGaussPoints,
+                      SparseSystemDeviceView system,
+                      DeviceNestedArrayView<double> eliminatedDofs,
+                      DeviceVectorView<int> rows,
+                      DeviceVectorView<int> cols)
+{
+    int totalNumBlocks = totalNumElements * numBlocksPerElement * numBlocksPerElement;
+    for (int idx = blockIdx.x; idx < totalNumBlocks; idx += gridDim.x)
+    {
+        __shared__ int patch_idx, N_D, dim, blockCoord[2];
+        __shared__ double ptData[3]; //max 3D
+        DeviceVectorView<double> pt(ptData, multiGaussPoints.dim());
+        if (threadIdx.x == 0 && threadIdx.y == 0)
+        {
+            for (int d = 0; d < 2; d++)
+            {
+                blockCoord[d] = idx % numBlocksPerElement;
+                idx /= numBlocksPerElement;
+            }
+            int element_idx = displacement.threadPatch_element(idx, patch_idx);
+            int numGPsInElement = displacement.basis(patch_idx).numGPsInElement();
+            int point_idx = element_idx * numGPsInElement;
+            displacement.gsPoint(point_idx, patch_idx, 
+                                         multiGaussPoints[patch_idx], pt);
+            TensorBsplineBasisDeviceView dispBasis = displacement.basis(patch_idx);
+            N_D = dispBasis.numActiveControlPoints();
+            dim = multiPatch.targetDim();
+        }
+        __syncthreads();
+        for (int i = threadIdx.x + blockCoord[0] * numActivePerBlock, ii = threadIdx.x; 
+             ii < numActivePerBlock && i < N_D; i += blockDim.x, ii += blockDim.x)
+        {
+            for (int di = 0; di < dim; di++)
+            {
+                int globalIndex_i = system.mapColIndex(displacement.basis(patch_idx)
+                    .activeIndex(pt, i), patch_idx, di);
+                for (int j = threadIdx.y + blockCoord[1] * numActivePerBlock, jj = threadIdx.y; 
+                     jj < numActivePerBlock && j < N_D; j += blockDim.y, jj += blockDim.y)
+                {
+                    for (int dj = 0; dj < dim; dj++)
+                    {
+                        int globalIndex_j = system.mapColIndex(displacement.basis(patch_idx)
+                            .activeIndex(pt, j), patch_idx, dj);
+                        if (system.isEntry(globalIndex_i, globalIndex_j, di, dj))
+                            system.pushToEntryIndex(globalIndex_i, globalIndex_j, di, dj, 
+                                                    counter, rows, cols);
+                    }
+                }
+            }
+        }
+    }
+}
+#else
 __global__
 void computeCOOKernel(int totalNumElements, int* counter,
                       MultiPatchDeviceView displacement,
@@ -219,10 +305,11 @@ void computeCOOKernel(int totalNumElements, int* counter,
         }
     }
 }
+#endif
 
 __global__
-void assembleDomainKernel_perTileBlock(
-    int tileSize, int numInt, int numDouble,
+void assembleDomainKernel_perTileBlock_loopOverGps(int numDerivatives,
+    int totalEles, int numBlocksPerEle, int numActivePerBlock,
     DeviceVectorView<double> parameters,
     MultiPatchDeviceView displacement,
     MultiPatchDeviceView multiPatch,
@@ -231,143 +318,581 @@ void assembleDomainKernel_perTileBlock(
     SparseSystemDeviceView system,
     DeviceNestedArrayView<double> eliminatedDofs)
 {
-    extern __shared__ unsigned char shmem[];
-
-    unsigned char* ptr = shmem;
-
-    // align to double
-    ptr = reinterpret_cast<unsigned char*>(
-        (reinterpret_cast<std::uintptr_t>(ptr) + alignof(double) - 1) & ~(alignof(double) - 1)
-    );
-    double* shmem_double = reinterpret_cast<double*>(ptr);
-    ptr += numDouble * sizeof(double);
-
-    // align to int
-    ptr = reinterpret_cast<unsigned char*>(
-        (reinterpret_cast<std::uintptr_t>(ptr) + alignof(int) - 1) & ~(alignof(int) - 1)
-    );
-    int* shmem_int = reinterpret_cast<int*>(ptr);
-    ptr += numInt * sizeof(int);
-
-    int numDerivatives = 1;
-    int CPdim = multiPatch.targetDim();
-    int dim = multiPatch.domainDim();
-
-    int intDataStart = 0;
-    int& patch_idx = shmem_int[intDataStart];
-    intDataStart += 1;
-    DeviceVectorView<int> blockCoord(shmem_int + intDataStart, dim);
-    intDataStart += dim;
-
-    int doubleDataStart = 0;
-    double& wt = shmem_double[doubleDataStart];
-    doubleDataStart += 1;
-    DeviceVectorView<double> pt(shmem_double + doubleDataStart, dim);
-    doubleDataStart += dim;
-
-    int blockId = blockIdx.x;
-    if (threadIdx.x == 0)
+    extern __shared__ double shmem[];
+    int totalNumBlocks = totalEles * numBlocksPerEle * numBlocksPerEle;
+    for (int bidx = blockIdx.x; bidx < totalNumBlocks; bidx += gridDim.x)
     {
-        patch_idx = 0;
-        for (int i = 0; i < displacement.numPatches(); i++)
+        __shared__ int patch_idx, CPdim, dim, blockCoord[2], numThreadsPerBlock;
+        __shared__ int N_D_geo, N_D, dimTensor, ele_idx;
+        __shared__ double wt, ptData[3], measure, weightForce, weightBody;
+        __shared__ double lambda, mu, J;
+        __shared__ TensorBsplineBasisDeviceView dispBasis;
+        __shared__ PatchDeviceView geoPatch, dispPatch;
+
+        DeviceVectorView<double> pt(ptData, multiGaussPoints.dim());
+        int threadId = threadIdx.y * blockDim.x + threadIdx.x;
+        if (threadId == 0)
         {
-            TensorBsplineBasisDeviceView basis = displacement.basis(i);
-            int N_D = basis.numActiveControlPoints();
-            int numBlocksPerEle = (N_D + tileSize - 1) / tileSize;
-            numBlocksPerEle *= numBlocksPerEle;
-            numBlocksPerEle *= basis.numGPsInElement();
-            int numElements = basis.totalNumElements();
-            int totalBlocksForPatch = numElements * numBlocksPerEle;
-            if (blockId < totalBlocksForPatch)
+            numThreadsPerBlock = blockDim.x * blockDim.y;
+            int idx = bidx;
+            for (int d = 0; d < 2; d++)
             {
-                patch_idx = i;
-                break;
+                blockCoord[d] = idx % numBlocksPerEle;
+                idx /= numBlocksPerEle;
             }
-            blockId -= totalBlocksForPatch;
+            CPdim = multiPatch.targetDim();
+            dim = multiPatch.domainDim();
+            dimTensor = (dim * (dim + 1)) / 2;
+            ele_idx = displacement.threadPatch_element(idx, patch_idx);
+            
+            dispBasis = displacement.basis(patch_idx);
+            geoPatch = multiPatch.patch(patch_idx);
+            dispPatch = displacement.patch(patch_idx);
+            N_D = dispBasis.numActiveControlPoints();
+            N_D_geo = geoPatch.basis().numActiveControlPoints();
+            double YM = parameters[1];
+            double PR = parameters[0];
+            lambda = YM * PR / ( ( 1. + PR ) * ( 1. - 2. * PR ) );
+            mu = YM / ( 2. * ( 1. + PR ) );
+            //printf("blockIdx.x=%d, patch_idx=%d, blockCoord=(%d, %d), wt=%f, pt=(%f, %f)\n", 
+            //       blockIdx.x, patch_idx, blockCoord[0], blockCoord[1], wt, pt[0], pt[1]);
         }
-        //PatchDeviceView geoPatch = multiPatch.patch(patch_idx);
-        //PatchDeviceView dispPatch = displacement.patch(patch_idx);
-        TensorBsplineBasisDeviceView dispBasis = displacement.basis(patch_idx);
-        //DeviceVectorView<double> pt(sharedData)
-        int N_D = dispBasis.numActiveControlPoints();
-        int numBlocksPerGP = (N_D + tileSize - 1) / tileSize;
-        for (int d = 0; d < dim; d++)
-        {
-            blockCoord[d] = blockId % numBlocksPerGP;
-            blockId /= numBlocksPerGP;
-        }
-        int gpCoordData[3] = {0, 0, 0}; //max 3D
-        DeviceVectorView<int> gpCoord(gpCoordData, dim);
-        for (int d = 0; d < dim; d++)
-        {
-            int numGPs = dispBasis.knotVector(d).numGaussPoints();
-            gpCoord[d] = blockId % numGPs;
-            blockId /= numGPs;
-        }
-        int elementCoordData[3] = {0, 0, 0}; //max 3D
-        DeviceVectorView<int> elementCoord(elementCoordData, dim);
-        for (int d = 0; d < dim; d++)
-        {
-            int numElements = dispBasis.knotVector(d).numElements();
-            elementCoord[d] = blockId % numElements;
-            blockId /= numElements;
-        }
-        double lowerData[3] = {0.0, 0.0, 0.0}; //max 3D
-        DeviceVectorView<double> lower(lowerData, dim);
-        double upperData[3] = {0.0, 0.0, 0.0}; //max 3D
-        DeviceVectorView<double> upper(upperData, dim);
-        for (int d = 0; d < dim; d++)
-        {
-            lower[d] = *(dispBasis.knotVector(d).domainUBegin() + elementCoord[d]);
-            upper[d] = *(dispBasis.knotVector(d).domainUBegin() + elementCoord[d] + 1);
-        }
-        wt = multiGaussPoints[patch_idx].threadGaussPoint(lower, upper, gpCoord, pt);
-        printf("blockIdx.x=%d, patch_idx=%d, N_D=%d, numBlocksPerGP=%d, blockCoord=(%d, %d), gpCoord=(%d, %d), elementCoord=(%d, %d), lower=(%f, %f), upper=(%f, %f), wt=%f, pt=(%f, %f)\n", 
-               blockIdx.x, patch_idx, N_D, numBlocksPerGP, blockCoord[0], blockCoord[1], 
-               gpCoord[0], gpCoord[1], elementCoord[0], elementCoord[1], lower[0], 
-               lower[1], upper[0], upper[1], wt, pt[0], pt[1]);
-    }
+        __syncthreads();
 
-    __syncthreads();
-    
-    TensorBsplineBasisDeviceView dispBasis = displacement.basis(patch_idx);
-    int P1 = dispBasis.knotsOrder(0) + 1;
-    DeviceMatrixView<double> dispValuesAndDers(shmem_double + doubleDataStart, 
-                                                   P1, (numDerivatives + 1) * dim);
-    doubleDataStart += P1 * (numDerivatives + 1) * dim;
-
-    if (threadIdx.x == 0)
-        dispBasis.evalAllDers_into(pt, numDerivatives, dispValuesAndDers);
-
-    DeviceMatrixView<double> geoJacobianInv(shmem_double + doubleDataStart, dim, dim);
-    doubleDataStart += dim * dim;
-    double& measure = shmem_double[doubleDataStart];
-    double& weightForce = shmem_double[doubleDataStart + 1];
-    double& weightBody = shmem_double[doubleDataStart + 2];
-    doubleDataStart += 3;
-
-    if (threadIdx.x == 1)
-    {
-        double geoJacobianData[3*3] = {0.0}; //max 3D
+        __shared__ double geoJacobianData[3*3], dispJacobianData[3*3], geoJacobianInvData[3*3]; //max 3D
+        __shared__ double FData[3*3], SData[3*3], CData[6*6], RCGinvData[3*3], CtempData[6*6];
+        //__shared__ double localMatData[3*3], localRHSData[3];
         DeviceMatrixView<double> geoJacobian(geoJacobianData, dim, dim);
-        PatchDeviceView geoPatch = multiPatch.patch(patch_idx);
-        geoPatch.jacobian(pt, numDerivatives, geoJacobian);
-        double measure = geoJacobian.determinant();
-        double weightForce = wt * measure;
-        double weightBody = wt * measure;
-        geoJacobian.inverse(geoJacobianInv);
-    }
-
-    __syncthreads();
-
-    DeviceMatrixView<double> RCGinv(shmem_double + doubleDataStart, dim, dim);
-    doubleDataStart += dim * dim;
-
-    if (threadIdx.x == 0)
-    {
+        DeviceMatrixView<double> dispJacobian(dispJacobianData, dim, dim);    
+        DeviceMatrixView<double> geoJacobianInv(geoJacobianInvData, dim, dim);
+        DeviceMatrixView<double> F(FData, dim, dim);
+        DeviceMatrixView<double> S(SData, dim, dim);
+        DeviceMatrixView<double> C(CData, dimTensor, dimTensor);
+        DeviceMatrixView<double> RCGinv(RCGinvData, dim, dim);
+        DeviceMatrixView<double> Ctemp(CtempData, dimTensor, dimTensor);
         
-    }
 
+        int geoP1 = geoPatch.basis().knotsOrder(0) + 1;
+        int dataStart = 0;
+        DeviceMatrixView<double> geoValuesAndDers(shmem + dataStart, geoP1, (numDerivatives + 1) * dim);
+        dataStart += geoP1 * (numDerivatives + 1) * dim;
+        int P1 = dispBasis.knotsOrder(0) + 1;
+        DeviceMatrixView<double> dispValuesAndDers(shmem + dataStart, 
+                                                   P1, (numDerivatives + 1) * dim);
+        dataStart += P1 * (numDerivatives + 1) * dim;
+        DeviceMatrixView<double> localMat(shmem + dataStart, numActivePerBlock * dim, numActivePerBlock * dim);
+        dataStart += numActivePerBlock * dim * numActivePerBlock * dim;
+        DeviceVectorView<double> localRHS(shmem + dataStart, numActivePerBlock * dim);
+        dataStart += numActivePerBlock * dim;
+
+        for (int i = threadIdx.x; i < numActivePerBlock; i += blockDim.x)
+            for (int di = 0; di < dim; di++)
+            {
+                for (int j = threadIdx.y; j < numActivePerBlock; j += blockDim.y)
+                    for (int dj = 0; dj < dim; dj++)
+                        localMat(i * dim + di, j * dim + dj) = 0.0;
+                if (threadIdx.y == 0 && blockCoord[1] == 0)
+                    localRHS[i * dim + di] = 0.0;
+            }
+
+        for (int gpid = 0; gpid < N_D; gpid++)
+        {
+            if (threadId == 0)
+                wt = displacement.gsPoint(gpid, ele_idx, patch_idx, 
+                    multiGaussPoints[patch_idx], pt);
+            __syncthreads();
+#if 1
+            if (numThreadsPerBlock == 1) {
+                geoPatch.basis().evalAllDers_into(pt, numDerivatives, shmem + dataStart, geoValuesAndDers);
+                dispBasis.evalAllDers_into(pt, numDerivatives, shmem + dataStart, dispValuesAndDers);
+            }
+            else {
+                int workingSpaceStart = dataStart;
+                if(threadId < dim)
+                    geoPatch.basis().evalAllDers_into(threadId, min(dim, numThreadsPerBlock), pt, numDerivatives, shmem + workingSpaceStart, geoValuesAndDers);
+                workingSpaceStart += (geoP1 * geoP1 + 4 * geoP1) * dim;
+                if(threadId >= dim && threadId < 2 * dim)
+                    dispBasis.evalAllDers_into(threadId - dim, min(dim, numThreadsPerBlock), pt, numDerivatives, shmem + workingSpaceStart, dispValuesAndDers);
+                workingSpaceStart += (P1 * P1 + 4 * P1) * dim;
+                //if (threadId == 0)
+                //    printf("dataStart=%d\n", workingSpaceStart);
+                __syncthreads();
+            }
+#else
+            if(threadId < dim)
+            {
+                geoPatch.basis().evalAllDers_into(threadId, min(dim, numThreadsPerBlock), pt, numDerivatives, shmem + dataStart, geoValuesAndDers);
+                dispBasis.evalAllDers_into(threadId, min(dim, numThreadsPerBlock), pt, numDerivatives, shmem + dataStart, dispValuesAndDers);
+            }
+            __syncthreads();
+#endif
+            for (int i = threadIdx.x; i < dim; i += blockDim.x)
+                for (int j = threadIdx.y; j < dim; j += blockDim.y) {
+                    geoJacobian(i, j) = 0.0;
+                    dispJacobian(i, j) = 0.0;
+                    geoJacobianInv(i, j) = 0.0;
+                    F(i, j) = 0.0;
+                    S(i, j) = 0.0;
+                    RCGinv(i, j) = 0.0;
+                }
+            for (int i = threadIdx.x; i < dimTensor; i += blockDim.x)
+                for (int j = threadIdx.y; j < dimTensor; j += blockDim.y) {
+                    C(i, j) = 0.0;
+                    Ctemp(i, j) = 0.0;
+                }
+            __syncthreads();
+
+            if(threadId < N_D_geo)
+                geoPatch.jacobian(threadId, min(N_D_geo, numThreadsPerBlock), 
+                    pt, geoValuesAndDers, numDerivatives, geoJacobian);
+            if(threadId < N_D)
+                dispPatch.jacobian(threadId, min(N_D, numThreadsPerBlock), 
+                    pt, dispValuesAndDers, numDerivatives, dispJacobian);
+            __syncthreads();
+
+            if(threadId == 0)
+            {
+                geoJacobian.inverse(geoJacobianInv);
+                double physDispJacData[3*3] = {0.0};
+                DeviceMatrixView<double> physDispJac(physDispJacData, dim, dim);
+                dispJacobian.times(geoJacobianInv, physDispJac);
+                physDispJac.plusIdentity(F);
+#if 0   
+                printf("bidx=%d\n", bidx);
+                printf("dispJacobian = \n");
+                dispJacobian.print();
+                printf("F = \n");
+                F.print();
+#endif  
+                J = F.determinant();
+                double RCGData[3*3] = {0.0}; //max 3D
+                DeviceMatrixView<double> RCG(RCGData, dim, dim);
+                double F_transposeData[3*3] = {0.0}; //max 3D
+                DeviceMatrixView<double> F_transpose(F_transposeData, dim, dim);
+                F.transpose(F_transpose);
+                F_transpose.times(F, RCG);
+                RCG.inverse(RCGinv);
+                RCGinv.times((lambda*(J*J-1)/2-mu), S);
+                S.tracePlus(mu);
+            }
+            if(threadId == (numThreadsPerBlock - 1))
+            {
+                measure = geoJacobian.determinant();
+                weightForce = wt * measure;
+                weightBody = wt * measure;
+            }
+            __syncthreads();
+
+            if (threadIdx.x < dimTensor && threadIdx.y < dimTensor)
+                matrixViewTraceTensor_parallel(threadIdx.x, blockDim.x, threadIdx.y, blockDim.y, C, RCGinv, RCGinv);
+            __syncthreads();
+        
+            if(threadId == 0)
+                C.times(lambda*J*J);
+            __syncthreads();
+
+            if(threadIdx.x < dimTensor && threadIdx.y < dimTensor)
+                symmetricIdentityViewTensor_parallel(threadIdx.x, blockDim.x, threadIdx.y, blockDim.y, Ctemp, RCGinv);
+            __syncthreads();
+
+            if(threadId == 0) {
+                Ctemp.times(mu-lambda*(J*J-1)/2);
+                C.plus(Ctemp);
+            }
+            __syncthreads();
+
+            for (int i = blockCoord[0] * numActivePerBlock + threadIdx.x; 
+                 i < (blockCoord[0] + 1) * numActivePerBlock && i < N_D; 
+                 i += blockDim.x)
+            {
+                double dN_iData[3] = {0.0}; //max 3D
+                DeviceVectorView<double> dN_i(dN_iData, dim);
+                tensorBasisDerivative(i, P1, dim, numDerivatives, dispValuesAndDers, dN_i);
+                double physGrad_iData[3] = {0.0}; //max 3D
+                DeviceVectorView<double> physGrad_i(physGrad_iData, dim);
+                geoJacobianInv.transposeTime(dN_i, physGrad_i);
+                double geometricTangentTempData[3] = {0.0}; //max 3D
+                DeviceVectorView<double> geometricTangentTemp(geometricTangentTempData, dim);
+                S.times(physGrad_i, geometricTangentTemp);
+                for (int di = 0; di < dim; di++)
+                {
+                    int localRow = (i - blockCoord[0] * numActivePerBlock) * dim + di;
+                    double B_i_diTransData[6] = {0.0}; //max 3D
+                    DeviceMatrixView<double> B_i_diTrans(B_i_diTransData, 1, dimTensor);
+                    {
+                        double B_i_diData[6] = {0.0}; //max 3D
+                        DeviceVectorView<double> B_i_di(B_i_diData, dimTensor);
+                        setBSingleDim<double>(di, B_i_di, F, physGrad_i);
+                        B_i_di.transpose(B_i_diTrans);
+                    }
+                    double materialTangentTempData[6] = {0.0}; //max 3D
+                    DeviceMatrixView<double> materialTangentTemp
+                        (materialTangentTempData, 1,dimTensor);
+                    B_i_diTrans.times(C, materialTangentTemp);
+                    //int globalIndex_i = system.mapColIndex(displacement.basis(patch_idx)
+                    //    .activeIndex(pt, i), patch_idx, di);
+                    for (int j = blockCoord[1] * numActivePerBlock + threadIdx.y; 
+                         j < (blockCoord[1] + 1) * numActivePerBlock && j < N_D; 
+                         j += blockDim.y)
+                    {
+                        double dN_jData[3] = {0.0}; //max 3D
+                        DeviceVectorView<double> dN_j(dN_jData, dim);
+                        tensorBasisDerivative(j, P1, dim, numDerivatives, dispValuesAndDers, dN_j);
+                        double physGrad_jData[3] = {0.0}; //max 3D
+                        DeviceVectorView<double> physGrad_j(physGrad_jData, dim);
+                        geoJacobianInv.transposeTime(dN_j, physGrad_j);
+                        double geometricTangent = geometricTangentTemp.dot(physGrad_j);
+                        for (int dj = 0; dj < dim; dj++)
+                        {
+                            int localCol = (j - blockCoord[1] * numActivePerBlock) * dim + dj;
+                            double B_j_djData[6] = {0.0}; //max 3D
+                            DeviceVectorView<double> B_j_dj(B_j_djData, dimTensor);
+                            setBSingleDim<double>(dj, B_j_dj, F, physGrad_j);
+                            double materialTangent = 0;
+                            DeviceMatrixView<double> materialTangentMat(&materialTangent, 1, 1);
+                            materialTangentTemp.times(B_j_dj, materialTangentMat);
+                            if (di == dj)
+                                materialTangent += geometricTangent;
+                            double stiffnessEntry = weightForce * materialTangent;
+                            //int globalIndex_j = system.mapColIndex(displacement.basis(patch_idx)
+                            //    .activeIndex(pt, j), patch_idx, dj);
+                            //printf("i: %d, di: %d, j: %d, dj: %d, globalIndex_i: %d, globalIndex_j: %d, stiffnessEntry: %f\n", i, di, j, dj, globalIndex_i, globalIndex_j, stiffnessEntry);
+                            //system.pushToMatrix(stiffnessEntry, globalIndex_i, globalIndex_j,
+                            //                    eliminatedDofs, di, dj);
+                            localMat(localRow, localCol) += stiffnessEntry;
+                        }
+                    }
+                    if (threadIdx.y == 0 && blockCoord[1] == 0)
+                    {
+                        double SvecData[6] = {0.0}; //max 3D
+                        DeviceVectorView<double> Svec(SvecData, dimTensor);
+                        voigtStressView(Svec, S);
+                        double residualEntry = 0.0;
+                        DeviceMatrixView<double> residualEntryMat(&residualEntry, 1, 1);
+                        B_i_diTrans.times(Svec, residualEntryMat);
+                        residualEntry = -residualEntry * weightBody + weightForce * bodyForce[di] * 
+                            tensorBasisValue(i, P1, dim, numDerivatives, dispValuesAndDers);
+                        //printf("i: %d, di: %d, globalIndex_i: %d, residualEntry: %f\n", i, di, globalIndex_i, residualEntry);
+                        //system.pushToRhs(residualEntry, globalIndex_i, di);
+                        localRHS[localRow] += residualEntry;
+                    }
+                }
+            }
+        }
+        __syncthreads();
+#if 0
+        if(threadId == 0)
+        {
+            printf("Local matrix:\n");
+            localMat.print();
+            printf("Local RHS:\n");
+            localRHS.print();
+        }
+#endif
+
+        for (int i = blockCoord[0] * numActivePerBlock + threadIdx.x; 
+             i < (blockCoord[0] + 1) * numActivePerBlock && i < N_D; 
+             i += blockDim.x)
+        {
+            for (int di = 0; di < dim; di++)
+            {
+                int localRow = (i - blockCoord[0] * numActivePerBlock) * dim + di;
+                int globalIndex_i = system.mapColIndex(displacement.basis(patch_idx)
+                    .activeIndex(pt, i), patch_idx, di);
+                for (int j = blockCoord[1] * numActivePerBlock + threadIdx.y; 
+                     j < (blockCoord[1] + 1) * numActivePerBlock && j < N_D; 
+                     j += blockDim.y)
+                {
+                    for (int dj = 0; dj < dim; dj++)
+                    {
+                        int localCol = (j - blockCoord[1] * numActivePerBlock) * dim + dj;
+                        int globalIndex_j = system.mapColIndex(displacement.basis(patch_idx)
+                            .activeIndex(pt, j), patch_idx, dj);
+                        //printf("patch_idx: %d, i: %d, di: %d, j: %d, dj: %d, globalIndex_i: %d, globalIndex_j: %d, stiffnessEntry: %f\n", patch_idx, i, di, j, dj, globalIndex_i, globalIndex_j, localMat(localRow, localCol));
+                        system.pushToMatrix(localMat(localRow, localCol), globalIndex_i, globalIndex_j,
+                                            eliminatedDofs, di, dj);
+
+                    }
+                }
+                if (threadIdx.y == 0 && blockCoord[1] == 0)
+                    system.pushToRhs(localRHS(localRow), globalIndex_i, di);
+            }
+        }
+    }
+}
+
+__global__
+void assembleDomainKernel_perTileBlock(int numDerivatives,
+    int totalGPs, int numBlocksPerGP, int numActivePerBlock,
+    DeviceVectorView<double> parameters,
+    MultiPatchDeviceView displacement,
+    MultiPatchDeviceView multiPatch,
+    MultiGaussPointsDeviceView multiGaussPoints,
+    DeviceVectorView<double> bodyForce,
+    SparseSystemDeviceView system,
+    DeviceNestedArrayView<double> eliminatedDofs)
+{
+    extern __shared__ double shmem[];
+    int totalNumBlocks = totalGPs * numBlocksPerGP * numBlocksPerGP;
+    for (int bidx = blockIdx.x; bidx < totalNumBlocks; bidx += gridDim.x)
+    {
+        __shared__ int patch_idx, CPdim, dim, blockCoord[2], numThreadsPerBlock;
+        __shared__ int N_D_geo, N_D, dimTensor;
+        __shared__ double wt, ptData[3], measure, weightForce, weightBody;
+        __shared__ double lambda, mu, J;
+        __shared__ TensorBsplineBasisDeviceView dispBasis;
+        __shared__ PatchDeviceView geoPatch, dispPatch;
+        DeviceVectorView<double> pt(ptData, multiGaussPoints.dim());
+        int threadId = threadIdx.y * blockDim.x + threadIdx.x;
+        if (threadId == 0)
+        {
+            numThreadsPerBlock = blockDim.x * blockDim.y;
+            int idx = bidx;
+            for (int d = 0; d < 2; d++)
+            {
+                blockCoord[d] = idx % numBlocksPerGP;
+                idx /= numBlocksPerGP;
+            }
+            CPdim = multiPatch.targetDim();
+            dim = multiPatch.domainDim();
+            dimTensor = (dim * (dim + 1)) / 2;
+            int point_idx = displacement.threadPatch(idx, patch_idx);
+            wt = displacement.gsPoint(point_idx, patch_idx, 
+                                         multiGaussPoints[patch_idx], pt);
+            dispBasis = displacement.basis(patch_idx);
+            geoPatch = multiPatch.patch(patch_idx);
+            dispPatch = displacement.patch(patch_idx);
+            N_D = dispBasis.numActiveControlPoints();
+            N_D_geo = geoPatch.basis().numActiveControlPoints();
+            double YM = parameters[1];
+            double PR = parameters[0];
+            lambda = YM * PR / ( ( 1. + PR ) * ( 1. - 2. * PR ) );
+            mu = YM / ( 2. * ( 1. + PR ) );
+            //printf("blockIdx.x=%d, patch_idx=%d, blockCoord=(%d, %d), wt=%f, pt=(%f, %f)\n", 
+            //       blockIdx.x, patch_idx, blockCoord[0], blockCoord[1], wt, pt[0], pt[1]);
+        }
+        __syncthreads();
+        int geoP1 = geoPatch.basis().knotsOrder(0) + 1;
+        int dataStart = 0;
+        DeviceMatrixView<double> geoValuesAndDers(shmem + dataStart, geoP1, (numDerivatives + 1) * dim);
+        dataStart += geoP1 * (numDerivatives + 1) * dim;
+        int P1 = dispBasis.knotsOrder(0) + 1;
+        DeviceMatrixView<double> dispValuesAndDers(shmem + dataStart, 
+                                                   P1, (numDerivatives + 1) * dim);
+        dataStart += P1 * (numDerivatives + 1) * dim;
+#if 1
+        if (numThreadsPerBlock == 1) {
+            geoPatch.basis().evalAllDers_into(pt, numDerivatives, shmem + dataStart, geoValuesAndDers);
+            dispBasis.evalAllDers_into(pt, numDerivatives, shmem + dataStart, dispValuesAndDers);
+#if 0
+            printf("blockId = %d\n", bidx);
+            geoValuesAndDers.print();
+            printf("\n");
+            dispValuesAndDers.print();
+            printf("\n");
+#endif
+        }
+        else {
+            if(threadId < dim)
+                geoPatch.basis().evalAllDers_into(threadId, min(dim, numThreadsPerBlock), pt, numDerivatives, shmem + dataStart, geoValuesAndDers);
+            dataStart += (geoP1 * geoP1 + 4 * geoP1) * dim;
+            if(threadId >= dim && threadId < 2 * dim)
+                dispBasis.evalAllDers_into(threadId - dim, min(dim, numThreadsPerBlock), pt, numDerivatives, shmem + dataStart, dispValuesAndDers);
+            __syncthreads();
+#if 0
+            if (blockIdx.x == 8 && threadIdx.x == 0 && threadIdx.y == 0)
+            {
+                geoValuesAndDers.print();
+                printf("\n");
+                dispValuesAndDers.print();
+                printf("\n");
+            }
+#endif
+        }
+#else
+        if(threadId < dim)
+        {
+            geoPatch.basis().evalAllDers_into(threadId, min(dim, numThreadsPerBlock), pt, numDerivatives, shmem + dataStart, geoValuesAndDers);
+            dispBasis.evalAllDers_into(threadId, min(dim, numThreadsPerBlock), pt, numDerivatives, shmem + dataStart, dispValuesAndDers);
+        }
+#endif
+
+        __shared__ double geoJacobianData[3*3], dispJacobianData[3*3], geoJacobianInvData[3*3]; //max 3D
+        __shared__ double FData[3*3], SData[3*3], CData[6*6], RCGinvData[3*3], CtempData[6*6];
+        DeviceMatrixView<double> geoJacobian(geoJacobianData, dim, dim);
+        DeviceMatrixView<double> dispJacobian(dispJacobianData, dim, dim);    
+        DeviceMatrixView<double> geoJacobianInv(geoJacobianInvData, dim, dim);
+        DeviceMatrixView<double> F(FData, dim, dim);
+        DeviceMatrixView<double> S(SData, dim, dim);
+        DeviceMatrixView<double> C(CData, dimTensor, dimTensor);
+        DeviceMatrixView<double> RCGinv(RCGinvData, dim, dim);
+        DeviceMatrixView<double> Ctemp(CtempData, dimTensor, dimTensor);
+
+        for (int i = threadIdx.x; i < dim; i += blockDim.x)
+            for (int j = threadIdx.y; j < dim; j += blockDim.y) {
+                geoJacobian(i, j) = 0.0;
+                dispJacobian(i, j) = 0.0;
+                geoJacobianInv(i, j) = 0.0;
+                F(i, j) = 0.0;
+                S(i, j) = 0.0;
+                RCGinv(i, j) = 0.0;
+            }
+        for (int i = threadIdx.x; i < dimTensor; i += blockDim.x)
+            for (int j = threadIdx.y; j < dimTensor; j += blockDim.y) {
+                C(i, j) = 0.0;
+                Ctemp(i, j) = 0.0;
+            }
+        __syncthreads();
+        
+        if(threadId < N_D_geo)
+            geoPatch.jacobian(threadId, min(N_D_geo, numThreadsPerBlock), 
+                pt, geoValuesAndDers, numDerivatives, geoJacobian);
+        if(threadId < N_D)
+            dispPatch.jacobian(threadId, min(N_D, numThreadsPerBlock), 
+                pt, dispValuesAndDers, numDerivatives, dispJacobian);
+        __syncthreads();
+#if 0
+        if (numThreadsPerBlock == 1) {
+            printf("blockId = %d\n", bidx);
+            printf("geoJacobian = \n");
+            geoJacobian.print();
+            printf("dispJacobian = \n");
+            dispJacobian.print();
+        }
+        else 
+            if(threadId == 0 && blockIdx.x == 0) {
+                printf("blockId = %d\n", blockIdx.x);
+                printf("geoJacobian = \n");
+                geoJacobian.print();
+                printf("dispJacobian = \n");
+                dispJacobian.print();
+            }
+#endif
+        if(threadId == 0)
+        {
+            geoJacobian.inverse(geoJacobianInv);
+            double physDispJacData[3*3] = {0.0};
+            DeviceMatrixView<double> physDispJac(physDispJacData, dim, dim);
+            dispJacobian.times(geoJacobianInv, physDispJac);
+            physDispJac.plusIdentity(F);
+#if 0
+            printf("bidx=%d\n", bidx);
+            printf("dispJacobian = \n");
+            dispJacobian.print();
+            printf("F = \n");
+            F.print();
+#endif
+            J = F.determinant();
+            double RCGData[3*3] = {0.0}; //max 3D
+            DeviceMatrixView<double> RCG(RCGData, dim, dim);
+            double F_transposeData[3*3] = {0.0}; //max 3D
+            DeviceMatrixView<double> F_transpose(F_transposeData, dim, dim);
+            F.transpose(F_transpose);
+            F_transpose.times(F, RCG);
+            RCG.inverse(RCGinv);
+            RCGinv.times((lambda*(J*J-1)/2-mu), S);
+            S.tracePlus(mu);
+        }
+        if(threadId == (numThreadsPerBlock - 1))
+        {
+            measure = geoJacobian.determinant();
+            weightForce = wt * measure;
+            weightBody = wt * measure;
+        }
+        __syncthreads();
+
+        if (threadIdx.x < dimTensor && threadIdx.y < dimTensor)
+            matrixViewTraceTensor_parallel(threadIdx.x, blockDim.x, threadIdx.y, blockDim.y, C, RCGinv, RCGinv);
+        __syncthreads();
+       
+        if(threadId == 0)
+            C.times(lambda*J*J);
+        __syncthreads();
+
+        if(threadIdx.x < dimTensor && threadIdx.y < dimTensor)
+            symmetricIdentityViewTensor_parallel(threadIdx.x, blockDim.x, threadIdx.y, blockDim.y, Ctemp, RCGinv);
+        __syncthreads();
+
+        if(threadId == 0) {
+            Ctemp.times(mu-lambda*(J*J-1)/2);
+            C.plus(Ctemp);
+        }
+        __syncthreads();
+
+        for (int i = blockCoord[0] * numActivePerBlock + threadIdx.x; 
+             i < (blockCoord[0] + 1) * numActivePerBlock && i < N_D; 
+             i += blockDim.x)
+        {
+            double dN_iData[3] = {0.0}; //max 3D
+            DeviceVectorView<double> dN_i(dN_iData, dim);
+            tensorBasisDerivative(i, P1, dim, numDerivatives, dispValuesAndDers, dN_i);
+            double physGrad_iData[3] = {0.0}; //max 3D
+            DeviceVectorView<double> physGrad_i(physGrad_iData, dim);
+            geoJacobianInv.transposeTime(dN_i, physGrad_i);
+            double geometricTangentTempData[3] = {0.0}; //max 3D
+            DeviceVectorView<double> geometricTangentTemp(geometricTangentTempData, dim);
+            S.times(physGrad_i, geometricTangentTemp);
+            for (int di = 0; di < dim; di++)
+            {
+                double B_i_diTransData[6] = {0.0}; //max 3D
+                DeviceMatrixView<double> B_i_diTrans(B_i_diTransData, 1, dimTensor);
+                {
+                    double B_i_diData[6] = {0.0}; //max 3D
+                    DeviceVectorView<double> B_i_di(B_i_diData, dimTensor);
+                    setBSingleDim<double>(di, B_i_di, F, physGrad_i);
+                    B_i_di.transpose(B_i_diTrans);
+                }
+                double materialTangentTempData[6] = {0.0}; //max 3D
+                DeviceMatrixView<double> materialTangentTemp
+                    (materialTangentTempData, 1,dimTensor);
+                B_i_diTrans.times(C, materialTangentTemp);
+                int globalIndex_i = system.mapColIndex(displacement.basis(patch_idx)
+                    .activeIndex(pt, i), patch_idx, di);
+                for (int j = blockCoord[1] * numActivePerBlock + threadIdx.y; 
+                     j < (blockCoord[1] + 1) * numActivePerBlock && j < N_D; 
+                     j += blockDim.y)
+                {
+                    double dN_jData[3] = {0.0}; //max 3D
+                    DeviceVectorView<double> dN_j(dN_jData, dim);
+                    tensorBasisDerivative(j, P1, dim, numDerivatives, dispValuesAndDers, dN_j);
+                    double physGrad_jData[3] = {0.0}; //max 3D
+                    DeviceVectorView<double> physGrad_j(physGrad_jData, dim);
+                    geoJacobianInv.transposeTime(dN_j, physGrad_j);
+                    double geometricTangent = geometricTangentTemp.dot(physGrad_j);
+                    for (int dj = 0; dj < dim; dj++)
+                    {
+                        double B_j_djData[6] = {0.0}; //max 3D
+                        DeviceVectorView<double> B_j_dj(B_j_djData, dimTensor);
+                        setBSingleDim<double>(dj, B_j_dj, F, physGrad_j);
+                        double materialTangent = 0;
+                        DeviceMatrixView<double> materialTangentMat(&materialTangent, 1, 1);
+                        materialTangentTemp.times(B_j_dj, materialTangentMat);
+                        if (di == dj)
+                            materialTangent += geometricTangent;
+                        double stiffnessEntry = weightForce * materialTangent;
+                        int globalIndex_j = system.mapColIndex(displacement.basis(patch_idx)
+                            .activeIndex(pt, j), patch_idx, dj);
+                        //printf("patch_idx: %d, i: %d, di: %d, j: %d, dj: %d, globalIndex_i: %d, globalIndex_j: %d, stiffnessEntry: %f\n", patch_idx, i, di, j, dj, globalIndex_i, globalIndex_j, stiffnessEntry);
+                        system.pushToMatrix(stiffnessEntry, globalIndex_i, globalIndex_j,
+                                            eliminatedDofs, di, dj);
+                    }
+                }
+                if (threadIdx.y == 0 && blockCoord[1] == 0)
+                {
+                    double SvecData[6] = {0.0}; //max 3D
+                    DeviceVectorView<double> Svec(SvecData, dimTensor);
+                    voigtStressView(Svec, S);
+                    double residualEntry = 0.0;
+                    DeviceMatrixView<double> residualEntryMat(&residualEntry, 1, 1);
+                    B_i_diTrans.times(Svec, residualEntryMat);
+                    residualEntry = -residualEntry * weightBody + weightForce * bodyForce[di] * 
+                        tensorBasisValue(i, P1, dim, numDerivatives, dispValuesAndDers);
+                    //printf("i: %d, di: %d, globalIndex_i: %d, residualEntry: %f\n", i, di, globalIndex_i, residualEntry);
+                    system.pushToRhs(residualEntry, globalIndex_i, di);
+                }
+            }
+        }
+    }
 }
 
 __global__
@@ -386,6 +911,8 @@ void assembleDomainKernel(
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < totalGPs)
     {
+        //extern __shared__ double shmem[];
+        
         double YM = parameters[1];
         double PR = parameters[0];
         double lambda = YM * PR / ( ( 1. + PR ) * ( 1. - 2. * PR ) );
@@ -963,17 +1490,26 @@ GPUAssembler::GPUAssembler(const MultiPatch &multiPatch,
                                                entryCountDevicePtr);
 #else
     int numElements = m_multiBasisHost.totalNumElements();
+#if 1
+    int N_D = m_multiBasisHost.numActive();
+    int numActivePerBlock = std::min(16, N_D);
+    int numBlocksPerElement = (N_D + numActivePerBlock - 1) / numActivePerBlock;
+    dim3 blockSize(numActivePerBlock, numActivePerBlock);
+    int gridSize = numElements * numBlocksPerElement * numBlocksPerElement;
+#else
     int minGrid, blockSize;
     cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, 
                          countEntrysKernel, 0, numElements);
     int gridSize = (numElements + blockSize - 1) / blockSize;
-    countEntrysKernel<<<gridSize, blockSize>>>(numElements,
-                                            m_displacement.deviceView(),
-                                            m_multiPatch.deviceView(),
-                                            m_multiGaussPoints.view(),
-                                            m_sparseSystem.deviceView(),
-                                            m_ddof.view(),
-                                            entryCountDevicePtr);
+#endif
+    countEntrysKernel<<<gridSize, blockSize>>>(numElements, numBlocksPerElement, 
+                                               numActivePerBlock,
+                                               m_displacement.deviceView(),
+                                               m_multiPatch.deviceView(),
+                                               m_multiGaussPoints.view(),
+                                               m_sparseSystem.deviceView(),
+                                               m_ddof.view(),
+                                               entryCountDevicePtr);
 #endif
     err = cudaDeviceSynchronize();
     assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler constructor during counting matrix entries");
@@ -991,6 +1527,7 @@ GPUAssembler::GPUAssembler(const MultiPatch &multiPatch,
     err = cudaMemset(entryCountDevicePtr, 0, sizeof(int));
     assert(err == cudaSuccess && "cudaMemset failed in GPUAssembler constructor during counting matrix entries");
     computeCOOKernel<<<gridSize, blockSize>>>(numElements, entryCountDevicePtr,
+                                numBlocksPerElement, numActivePerBlock,
                                 m_displacement.deviceView(),
                                 m_multiPatch.deviceView(),
                                 m_multiGaussPoints.view(),
@@ -1119,17 +1656,18 @@ void GPUAssembler::assemble(const DeviceVectorView<double> &solVector,
                             int numIter, 
                             const DeviceNestedArrayView<double> &fixedDoFs)
 {
-    m_sparseSystem.csrMatrix().setZero();
+    m_sparseSystem.matrixSetZero();
+    m_sparseSystem.RHSSetZero();
     //cudaError_t err = cudaMemset(m_sparseSystem.deviceView().matrix().data(), 0, 
     //                             m_sparseSystem.deviceView().matrix().size() * sizeof(double));
     //if (err != cudaSuccess)
     //    std::cerr << "CUDA error during memset of matrix in GPUAssembler::assemble: "
     //              << cudaGetErrorString(err) << std::endl;
-    cudaError_t err = cudaMemset(m_sparseSystem.deviceView().rhs().data(), 0, 
-                     m_sparseSystem.deviceView().rhs().size() * sizeof(double));
-    if (err != cudaSuccess)
-        std::cerr << "CUDA error during memset of rhs in GPUAssembler::assemble: "
-                  << cudaGetErrorString(err) << std::endl;
+    //cudaError_t err = cudaMemset(m_sparseSystem.deviceView().rhs().data(), 0, 
+    //                 m_sparseSystem.deviceView().rhs().size() * sizeof(double));
+    //if (err != cudaSuccess)
+    //    std::cerr << "CUDA error during memset of rhs in GPUAssembler::assemble: "
+    //              << cudaGetErrorString(err) << std::endl;
     int minGrid, blockSize;
     int CPSize = m_displacementHost.CPSize();
 
@@ -1150,7 +1688,7 @@ void GPUAssembler::assemble(const DeviceVectorView<double> &solVector,
                                       m_displacement.deviceView(),
                                       CPSize);
 #endif
-    err = cudaDeviceSynchronize();
+    cudaError_t err = cudaDeviceSynchronize();
     if (err != cudaSuccess)
         std::cerr << "CUDA error after constructSolutionKernel in GPUAssembler::assemble: "
                   << cudaGetErrorString(err) << std::endl;
@@ -1161,13 +1699,10 @@ void GPUAssembler::assemble(const DeviceVectorView<double> &solVector,
     else
         fixedDofs_assemble = m_ddof.view();
 
-    int totalGPs = m_multiBasisHost.totalNumGPs();
     int domainDim = m_multiPatchHost.getBasisDim();
-    int basisOrder = m_multiBasisHost.basis(0).getOrder(0); //assume same order in all directions
+    //int basisOrder = m_multiBasisHost.basis(0).getOrder(0); //assume same order in all directions
 
-    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, 
-                         assembleDomainKernel, 0, totalGPs);
-    gridSize = (totalGPs + blockSize - 1) / blockSize;
+    
 #if 0
 #if 1
     assembleDomainKernel<<<gridSize, blockSize>>>(
@@ -1209,24 +1744,68 @@ void GPUAssembler::assemble(const DeviceVectorView<double> &solVector,
     //err = cudaMemset(entryCountDevicePtr, 0, sizeof(int));
     //assert(err == cudaSuccess && "cudaMemset failed in GPUAssembler constructor during counting matrix entries");
 
-    
-    int numGPsPerELe = m_multiBasisHost.numGPs();
+#if 1
+    int numElements = m_multiBasisHost.totalNumElements();
     int N_D = m_multiBasisHost.numActive();
-    int tileSize = std::min(16, N_D);
-    blockSize = tileSize * tileSize;
-    int numBlocksPerGP = (N_D + tileSize - 1) / tileSize;
-    gridSize = numBlocksPerGP * totalGPs;
+    int numActivePerBlock = std::min(16, N_D);
+    dim3 blockSize2D(numActivePerBlock, numActivePerBlock);
+    int numBlocksPerEle = (N_D + numActivePerBlock - 1) / numActivePerBlock;
+    gridSize = numBlocksPerEle * numBlocksPerEle * numElements;
     int numDerivatives = 1;
-    int numInt = (1 + domainDim); //patch_idx and blockCords
-    int numDouble = domainDim * domainDim * tileSize * tileSize + //localEntries
-                    tileSize * domainDim + //localRHS
-                    (1 + domainDim) + // Gauss point coordinates and weight
-                    (domainDim * domainDim) * 2 + //geoJacobianInv, RCGInv
-                    3 + // measure, weightForce, weightBody
-                    (m_multiBasisHost.knotOrder() + 1) * (numDerivatives + 1) * domainDim; //dispValuesAndDers
-    size_t shmemBytes = numInt * sizeof(int) + (numDouble + 1) * sizeof(double); // +1 for alignment padding
-    assembleDomainKernel_perTileBlock<<<gridSize, blockSize, shmemBytes>>>(
-                    tileSize, numInt, numDouble,
+    int geoP1 = m_multiPatchHost.knotOrder() + 1;
+    int dispP1 = m_multiBasisHost.knotOrder() + 1;
+    int numDouble = geoP1 * (numDerivatives + 1) * domainDim + (geoP1 * geoP1 + 4 * geoP1) * domainDim + //geoValuesAndDers + workingSpace
+                    dispP1 * (numDerivatives + 1) * domainDim + (dispP1 * dispP1 + 4 * dispP1) * domainDim + //dispValuesAndDers + workingSpace
+                    numActivePerBlock * domainDim * numActivePerBlock * domainDim + //localMat
+                    numActivePerBlock * domainDim; // localRHS
+    size_t shmemBytes = numDouble * sizeof(double);
+    assembleDomainKernel_perTileBlock_loopOverGps<<<gridSize, blockSize2D, shmemBytes>>>(
+                    numDerivatives, numElements, 
+                    numBlocksPerEle, numActivePerBlock,
+                    parameterValues.vectorView(),
+                    m_displacement.deviceView(),
+                    m_multiPatch.deviceView(),
+                    m_multiGaussPoints.view(),
+                    m_bodyForce.vectorView(),
+                    m_sparseSystem.deviceView(),
+                    fixedDofs_assemble);
+
+    err = cudaGetLastError();
+    if (err != cudaSuccess)
+        std::cerr << "Error after kernel assembleDomain_perTileBlock_loopOverGps launch: " 
+                  << cudaGetErrorString(err) << std::endl;
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)        
+        std::cerr << "CUDA error during device synchronization (assembleDomain_perTileBlock_loopOverGps): " 
+                  << cudaGetErrorString(err) << std::endl;
+#endif
+#if 0    
+    m_sparseSystem.csrMatrix().print_host();
+    std::cout << std::endl;
+    std::cout << m_sparseSystem.hostRHS();
+    std::cout << std::endl << std::endl;
+#endif
+#if 0 
+    m_sparseSystem.matrixSetZero();
+    m_sparseSystem.RHSSetZero();
+#endif    
+
+#if 0    
+    int totalGPs = m_multiBasisHost.totalNumGPs();
+    int N_D2 = m_multiBasisHost.numActive();
+    int numActivePerBlock2 = std::min(16, N_D2);
+    dim3 blockSize2D2(numActivePerBlock2, numActivePerBlock2);
+    int numBlocksPerGP2 = (N_D2 + numActivePerBlock2 - 1) / numActivePerBlock2;
+    gridSize = numBlocksPerGP2 * numBlocksPerGP2 * totalGPs;
+    int numDerivatives2 = 1;
+    int geoP12 = m_multiPatchHost.knotOrder() + 1;
+    int dispP12 = m_multiBasisHost.knotOrder() + 1;
+    int numDouble2 = geoP12 * (numDerivatives2 + 1) * domainDim + (geoP12 * geoP12 + 4 * geoP12) * domainDim + //geoValuesAndDers + workingSpace
+                    dispP12 * (numDerivatives2 + 1) * domainDim + (dispP12 * dispP12 + 4 * dispP12) * domainDim; //dispValuesAndDers + workingSpace
+    size_t shmemBytes2 = numDouble2 * sizeof(double);
+    assembleDomainKernel_perTileBlock<<<gridSize, blockSize2D2, shmemBytes2>>>(
+                    numDerivatives2, totalGPs, 
+                    numBlocksPerGP2, numActivePerBlock2,
                     parameterValues.vectorView(),
                     m_displacement.deviceView(),
                     m_multiPatch.deviceView(),
@@ -1243,7 +1822,19 @@ void GPUAssembler::assemble(const DeviceVectorView<double> &solVector,
     if (err != cudaSuccess)        
         std::cerr << "CUDA error during device synchronization (assembleDomain_perTileBlock): " 
                   << cudaGetErrorString(err) << std::endl;
-
+#endif
+#if 0    
+    m_sparseSystem.csrMatrix().print_host();
+    std::cout << std::endl;
+    std::cout << m_sparseSystem.hostRHS();
+    std::cout << std::endl << std::endl;
+#endif
+#if 0 
+    m_sparseSystem.matrixSetZero();
+    m_sparseSystem.RHSSetZero();
+#endif
+#if 0
+    int totalGPs = m_multiBasisHost.totalNumGPs();
     blockSize = m_multiBasisHost.numGPs();
     gridSize = (totalGPs + blockSize - 1) / blockSize;
     assembleDomainKernel<<<gridSize, blockSize>>>(
@@ -1265,7 +1856,13 @@ void GPUAssembler::assemble(const DeviceVectorView<double> &solVector,
     if (err != cudaSuccess)
         std::cerr << "CUDA error during device synchronization (assembleDomain): " 
                   << cudaGetErrorString(err) << std::endl;
-
+#endif
+#if 0 
+    m_sparseSystem.csrMatrix().print_host();
+    std::cout << std::endl;
+    std::cout << m_sparseSystem.hostRHS();
+    std::cout << std::endl << std::endl;
+#endif
     //int entryCountHost;
     //err = cudaMemcpy(&entryCountHost, entryCountDevicePtr, sizeof(int), cudaMemcpyDeviceToHost);
     //assert(err == cudaSuccess && "cudaMemcpy failed in GPUAssembler constructor during counting matrix entries");

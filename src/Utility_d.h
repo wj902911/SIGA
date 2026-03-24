@@ -298,6 +298,18 @@ inline void matrixViewTraceTensor(DeviceMatrixView<T> &C, const DeviceMatrixView
 
 template <class T>
 __device__
+inline void matrixViewTraceTensor_parallel(int tidx, int numThreadsx, int tidy, int numThreadsy,
+    DeviceMatrixView<T> C, const DeviceMatrixView<T> &R, const DeviceMatrixView<T> &S)
+{
+    int dim = R.cols();
+    int dimTensor = (dim * (dim + 1)) / 2;
+    for (int i = tidx; i < dimTensor; i += numThreadsx)
+        for (int j = tidy; j < dimTensor; j += numThreadsy)
+            C(i, j) = R(voigt(dim, i, 0), voigt(dim, i, 1)) * S(voigt(dim, j, 0), voigt(dim, j, 1));
+}
+
+template <class T>
+__device__
 inline void symmetricIdentityTensor(DeviceMatrix<T> &C, const DeviceMatrix<T> &R)
 {
     int dim = R.cols();
@@ -317,6 +329,19 @@ inline void symmetricIdentityViewTensor(DeviceMatrixView<T> &C, const DeviceMatr
     int dimTensor = (dim * (dim + 1)) / 2;
     for (int i = 0; i < dimTensor; i++)
         for (int j = 0; j < dimTensor; j++)
+            C(i, j) = (R(voigt(dim, i, 0), voigt(dim, j, 0)) * R(voigt(dim, i, 1), voigt(dim, j, 1))
+                           + R(voigt(dim, i, 0), voigt(dim, j, 1)) * R(voigt(dim, i, 1), voigt(dim, j, 0)));
+}
+
+template <class T>
+__device__
+inline void symmetricIdentityViewTensor_parallel(int tidx, int numThreadsx, int tidy, int numThreadsy,
+    DeviceMatrixView<T> &C, const DeviceMatrixView<T> &R)
+{
+    int dim = R.cols();
+    int dimTensor = (dim * (dim + 1)) / 2;
+    for (int i = tidx; i < dimTensor; i += numThreadsx)
+        for (int j = tidy; j < dimTensor; j += numThreadsy)
             C(i, j) = (R(voigt(dim, i, 0), voigt(dim, j, 0)) * R(voigt(dim, i, 1), voigt(dim, j, 1))
                            + R(voigt(dim, i, 0), voigt(dim, j, 1)) * R(voigt(dim, i, 1), voigt(dim, j, 0)));
 }

@@ -207,7 +207,6 @@ public:
         DofMapperDeviceView colMap = mapper(m_col(c));
         int ii = m_rstr(r) + activeRow;
         //const int iiLocal = rstrLocal + activeRow;
-        //printf("activeRow=%d, activeCol=%d\n", activeRow, activeCol);
         if (rowMap.is_free_index(activeRow))
         {
 #if defined(USE_PERMUTATION)
@@ -217,6 +216,7 @@ public:
             //const int jjLocal = cstrLocal + activeCol;
             if (colMap.is_free_index(activeCol))
             {
+                //printf("is free\n", activeRow, activeCol);
                 //int out = atomicAdd(counter, 1);
                 //m_rows[out] = ii;
                 //m_cols[out] = jj;
@@ -226,15 +226,21 @@ public:
                 jj = m_perm_old2new(jj);
 #endif
                 //printf("after permutation: ii=%d, jj=%d, value=%f\n", ii, jj, value);
+                //printf("activeRow=%d, activeCol=%d, push to ii=%d, jj=%d\n", activeRow, activeCol, ii, jj);
                 atomicAdd(&m_csrMatrix(ii, jj), value);
             }
             else
             {
+                //printf("col is dead\n", activeRow, activeCol);
                 DeviceVectorView<double> eliminatedDofs_j = eliminatedDofs[c];
                 atomicAdd(&m_RHS(ii), -value * eliminatedDofs_j
                     (colMap.global_to_bindex(activeCol)));
                 //printf("ii=%d, jj=%d\n", ii, jj);
             }
+        }
+        else
+        {
+            //printf("row is dead\n");
         }
     }
 

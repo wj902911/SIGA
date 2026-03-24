@@ -214,6 +214,12 @@ public:
     void resizeRHS(int size) { m_RHS.resize(size); }
 
     __host__
+    void RHSSetZero() { m_RHS.setZero(); }
+
+    __host__
+    void matrixSetZero() { m_csrMatrix.setZero(); }
+
+    __host__
     void setCSRMatrixFromCOO(int numRows, int numCols,
                              DeviceVectorView<int> cooR, 
                              DeviceVectorView<int> cooC, 

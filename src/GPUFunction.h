@@ -1,6 +1,6 @@
 #pragma once
 
-#include <MultiPatchDeviceView.h>
+#include <MultiPatchDeviceData.h>
 
 class GPUFunction
 {
@@ -13,7 +13,9 @@ public:
 class GPUDisplacementFunction : public GPUFunction
 {
 private:
-    const MultiPatchDeviceView &m_displacementDeviceView;
+    const MultiPatch &m_displacementHost;
+    MultiPatchDeviceData m_displacementDeviceData;
+    //const MultiPatchDeviceView &m_displacementDeviceView;
 public:
 
 #if 0
@@ -24,7 +26,8 @@ public:
         cudaDeviceSynchronize();
     }
 #else
-    GPUDisplacementFunction(const MultiPatchDeviceView &view);
+    //GPUDisplacementFunction(const MultiPatchDeviceView &view);
+    GPUDisplacementFunction(const MultiPatch &displacementHost);
 #endif
 
     void eval_into(DeviceMatrixView<double> gridPoints,
@@ -32,5 +35,8 @@ public:
                    DeviceMatrixView<double> values) const override;
     
     const MultiPatchDeviceView& displacementDeviceView() const
-    { return m_displacementDeviceView; }
+    { return m_displacementDeviceData.deviceView(); }
+
+    MultiPatchDeviceView displacementDeviceView()
+    { return m_displacementDeviceData.deviceView(); }
 };

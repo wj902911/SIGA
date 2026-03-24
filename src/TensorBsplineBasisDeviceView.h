@@ -10,7 +10,7 @@
 class TensorBsplineBasisDeviceView
 {
 private:
-    int m_dim;
+    int m_dim = 0;
     DeviceVectorView<int> m_knotsOffset;
     DeviceVectorView<int> m_knotsOrders;
     //DeviceVectorView<int> m_intData; // combined storage for offsets and orders
@@ -18,6 +18,8 @@ private:
     DeviceNestedArrayView<int> m_multSums;
 
 public:
+    __device__
+    TensorBsplineBasisDeviceView() = default;
     __device__
     TensorBsplineBasisDeviceView(int dim,
                                  DeviceVectorView<int> intData,
@@ -176,6 +178,28 @@ public:
     }
 
     __device__
+    void ptCoords_sepId(int gpid, int eleid, DeviceVectorView<int> coords) const
+    {
+        if (coords.size() != m_dim * 2)
+        {
+            assert("ptCoords: coords size mismatch");
+            return;
+        }
+        for (int d = 0; d < m_dim; d++)
+        {
+            int numGPs = knotVector(d).numGaussPoints();
+            coords[d] = gpid % numGPs;
+            gpid /= numGPs;
+        }
+        for (int d = m_dim; d < 2 * m_dim; d++)
+        {
+            int numElements = knotVector(d - m_dim).numElements();
+            coords[d] = eleid % numElements;
+            eleid /= numElements;
+        }
+    }
+
+    __device__
     void ptCoords(int idx, int d, DeviceVectorView<int> coords) const
     {
         if (coords.size() != 1 * 2)
@@ -251,6 +275,26 @@ public:
         double lowerData[3], upperData[3]; //max dim 3
         DeviceVectorView<int> coords(coordsData, m_dim * 2);
         ptCoords(idx, coords);
+        DeviceVectorView<double> lower(lowerData, m_dim);
+        DeviceVectorView<double> upper(upperData, m_dim);
+        elementSupport(coords, lower, upper);
+        return gspts.threadGaussPoint(lower, upper, coords, result);
+    }
+
+    __device__
+    double gsPoint(int gpid, int eleid,
+                   GaussPointsDeviceView gspts,
+                   DeviceVectorView<double> result) const
+    {
+        if (result.size() != m_dim)
+        {
+            assert("gsPoint: result size mismatch");
+            return 0.0;
+        }
+        int coordsData[6]; //max dim 3
+        double lowerData[3], upperData[3]; //max dim 3
+        DeviceVectorView<int> coords(coordsData, m_dim * 2);
+        ptCoords_sepId(gpid, eleid, coords);
         DeviceVectorView<double> lower(lowerData, m_dim);
         DeviceVectorView<double> upper(upperData, m_dim);
         elementSupport(coords, lower, upper);
@@ -544,6 +588,110 @@ public:
     }
 
     __device__
+    void evalAllDers_into(int dir, double u, int n, double* workingSpace,
+                          DeviceMatrixView<double> results) const
+    {
+        int p = knotVector(dir).order();
+        int p1 = p + 1;
+#if 1
+        int dataStart = 0;
+        DeviceVectorView<double> ndu(workingSpace + dataStart, p1 * p1);
+        dataStart += p1 * p1;
+        DeviceVectorView<double> left(workingSpace + dataStart, p1);
+        dataStart += p1;
+        DeviceVectorView<double> right(workingSpace + dataStart, p1);
+        dataStart += p1;
+        DeviceVectorView<double> a(workingSpace + dataStart, 2 * p1);
+        dataStart += 2 * p1;
+#else
+        double nduData[5 * 5]; //max order 4
+        DeviceVectorView<double> ndu(nduData, p1 * p1);
+        double leftData[5]; //max order 4
+        DeviceVectorView<double> left(leftData, p1);
+        double rightData[5]; //max order 4
+        DeviceVectorView<double> right(rightData, p1);
+        double aData[2 * 5]; //max order 4
+        DeviceVectorView<double> a(aData, 2 * p1);
+#endif
+
+        if (!knotVector(dir).inDomain(u))
+        {
+            for(int k=0; k<=n; k++)
+                for (int j=0; j<=p; j++)
+                    results(j, k) = 0.0;
+            return;
+        }
+
+
+        const double* span = knotVector(dir).iFind(u);
+
+        ndu[0] = 1.0;
+        for (int j = 1; j <= p; ++j)
+        {
+            left[j] = u  - *(span+1-j);
+            right[j] = *(span+j) - u;
+            double saved = 0.0;
+            for (int r = 0; r < j; ++r) {
+                ndu[j * p1 + r] = right[r + 1] + left[j - r];
+                double temp = ndu[r * p1 + j - 1] / ndu[j * p1 + r];
+                ndu[r * p1 + j] = saved + right[r + 1] * temp;
+                saved = left[j - r] * temp;
+            }
+            ndu[j * p1 + j] = saved;
+        }
+
+        for(int j = 0; j <= p; j++)
+            results(j, 0) = ndu[j * p1 + p];
+
+        if (n == 0)
+            return;
+            
+        for (int r = 0; r <= p; r++)
+        {
+            double* a1 = &a[0];
+            double* a2 = &a[p1];
+
+            a1[0] = 1.0;
+
+            for(int k = 1; k <= n; k++)
+            {
+                int rk,pk,j1,j2 ;
+                double der = 0.0;
+                rk = r-k ; pk = p-k ;
+                if(r >= k)
+                {
+                    a2[0] = a1[0] / ndu[ (pk+1)*p1 + rk] ;
+                    der = a2[0] * ndu[rk*p1 + pk] ;
+                }
+                j1 = ( rk >= -1  ? 1   : -rk   );
+                j2 = ( r-1 <= pk ? k-1 : p - r );
+                for(int j = j1; j <= j2; j++)
+                {
+                    a2[j] = (a1[j] - a1[j-1]) / ndu[ (pk+1)*p1 + rk+j ] ;
+                    der += a2[j] * ndu[ (rk+j)*p1 + pk ] ;
+                }
+                if(r <= pk)
+                {
+                    a2[k] = -a1[k-1] / ndu[ (pk+1)*p1 + r ] ;
+                    der += a2[k] * ndu[ r*p1 + pk ] ;
+                }
+                results(r, k) = der;
+                double* temp = a1;
+                a1 = a2;
+                a2 = temp;
+            }
+        }
+
+        int r = p;
+        for (int k = 1; k <= n; k++)
+        {
+            for (int j = 0; j <= p; j++)
+                results(j, k) = results(j, k) * double(r);
+            r *= p - k;
+        }
+    }
+
+    __device__
     void evalAllDers_into(DeviceVectorView<double> pt,
                           int n,
                           DeviceMatrixView<double> results) const
@@ -554,6 +702,55 @@ public:
                 results.data() + d * (results.rows() * (n + 1)),
                 results.rows(), n + 1);
             evalAllDers_into(d, pt[d], n, oneDimResults);
+        }
+    }
+
+    __device__
+    void evalAllDers_into(DeviceVectorView<double> pt,
+                          int n, double* workingSpace,
+                          DeviceMatrixView<double> results) const
+    {
+        for (int d = 0; d < m_dim; d++)
+        {
+            DeviceMatrixView<double> oneDimResults(
+                results.data() + d * (results.rows() * (n + 1)),
+                results.rows(), n + 1);
+            evalAllDers_into(d, pt[d], n, workingSpace, oneDimResults);
+        }
+    }
+
+    __device__
+    void evalAllDers_into(int tid, int numThreads,
+                          DeviceVectorView<double> pt,
+                          int n,
+                          DeviceMatrixView<double> results) const
+    {
+        for (int d = tid; d < m_dim; d += numThreads)
+        {
+            //printf("Thread %d evaluating all derivatives for dimension %d.\n", tid, d);
+            DeviceMatrixView<double> oneDimResults(
+                results.data() + d * (results.rows() * (n + 1)),
+                results.rows(), n + 1);
+            //printf("%d\n", oneDimResults.size());
+            evalAllDers_into(d, pt[d], n, oneDimResults);
+            //printf("Thread %d finished evaluating all derivatives for dimension %d.\n", tid, d);
+        }
+    }
+
+    __device__
+    void evalAllDers_into(int tid, int numThreads,
+                          DeviceVectorView<double> pt,
+                          int n, double* workingSpace,
+                          DeviceMatrixView<double> results) const
+    {
+        for (int d = tid; d < m_dim; d += numThreads)
+        {
+            DeviceMatrixView<double> oneDimResults(
+                results.data() + d * (results.rows() * (n + 1)),
+                results.rows(), n + 1);
+            int p1 = knotVector(d).order() + 1;
+            int dataStride = p1 * p1 + p1 * 4;
+            evalAllDers_into(d, pt[d], n, workingSpace + d * dataStride, oneDimResults);
         }
     }
 

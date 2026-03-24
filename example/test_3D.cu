@@ -13,11 +13,11 @@ int main()
 	double YM = 1.0;
 	double PR = 0.3;
 
-	int numRefinements = 0;
-	int numDegElev = 1;
+	int numRefinements = 4;
+	int numDegElev = 2;
 	double deltaDisplacement = 0.1;
 	double maxDisplacement = 1.0;
-	std::vector<int> numPointsPerPatch{ 10000, 10000 };
+	std::vector<int> numPointsPerPatch{ 10000, 5000 };
 
 	if (!std::filesystem::exists("./TwoPatchesTest_3D"))
 		std::filesystem::create_directory("./TwoPatchesTest_3D");
@@ -135,14 +135,14 @@ int main()
 
 	MultiPatch displacementHost;
 	bases.giveBasis(displacementHost, 3);
-	MultiPatchDeviceData displacementDeviceData(displacementHost);
+	//MultiPatchDeviceData displacementDeviceData(displacementHost);
 	//assembler.constructSolution(solver.solutionView(), 
 	//                            solver.allFixedDofsView(), 
 	//							displacementDeviceData.deviceView());
 
 	
 
-	GPUDisplacementFunction displacementFunction(displacementDeviceData.deviceView());
+	GPUDisplacementFunction displacementFunction(displacementHost);
 
 	//printKernel<<<1, 1>>>(displacementFunction.displacementDeviceView());
 	//cudaDeviceSynchronize();
@@ -168,7 +168,7 @@ int main()
 
 		assembler.constructSolution(solver.solutionView(),
 			solver.allFixedDofsView(),
-			displacementDeviceData.deviceView());
+			displacementFunction.displacementDeviceView());
 		start = std::chrono::high_resolution_clock::now();
 		postProcessor.outputToParaview(fileNameWithPath, step, collection);
 		end = std::chrono::high_resolution_clock::now();

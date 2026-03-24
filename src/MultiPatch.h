@@ -74,6 +74,9 @@ public:
 
     int totalNumBdGPs() const;
 
+    int knotOrder() const
+    { return m_bases[0].getOrder(0); }
+
     const std::vector<double>& getGeoKnots(int patchIndex, int direction) const;
     const std::vector<double>& getBasisKnots(int patchIndex, int direction) const;
     //const thrust::device_vector<double>& getControlPoints_ref() const;
@@ -178,6 +181,9 @@ public:
         m_patches.clear();
         m_topology.clearAll();
     }
+
+    int numActive() const
+    { return m_bases[0].numActive(); }
 
 private:
     int m_basisDim = 0;

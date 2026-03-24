@@ -308,6 +308,11 @@ public:
                    DeviceVectorView<double> result) const
     { return patch(patch_idx).basis().gsPoint(idx, gps, result); }
 
+    __device__
+    double gsPoint(int idx, int eleid, int patch_idx, GaussPointsDeviceView gps,
+                   DeviceVectorView<double> result) const
+    { return patch(patch_idx).basis().gsPoint(idx, eleid, gps, result); }
+
     __host__
     void patchLengthes(DeviceVectorView<double> lengths) const;
 

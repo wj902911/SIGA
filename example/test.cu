@@ -22,7 +22,7 @@ int main()
 	double PR = 0.3;
 
 	int numRefinements = 0;
-	int numDegElev = 0;
+	int numDegElev = 4;
 	double deltaDisplacement = 0.1;
 	double maxDisplacement = 1.0;
 	std::vector<int> numPointsPerPatch{ 1000, 500 };
@@ -128,14 +128,14 @@ int main()
 
 	MultiPatch displacementHost;
 	bases.giveBasis(displacementHost, 2);
-	MultiPatchDeviceData displacementDeviceData(displacementHost);
+	//MultiPatchDeviceData displacementDeviceData(displacementHost);
 	//assembler.constructSolution(solver.solutionView(), 
 	//                            solver.allFixedDofsView(), 
 	//							displacementDeviceData.deviceView());
 
 	
 
-	GPUDisplacementFunction displacementFunction(displacementDeviceData.deviceView());
+	GPUDisplacementFunction displacementFunction(displacementHost);
 
 	//printKernel<<<1, 1>>>(displacementFunction.displacementDeviceView());
 	//cudaDeviceSynchronize();
@@ -161,7 +161,7 @@ int main()
 
 		assembler.constructSolution(solver.solutionView(),
 			solver.allFixedDofsView(),
-			displacementDeviceData.deviceView());
+			displacementFunction.displacementDeviceView());
 		start = std::chrono::high_resolution_clock::now();
 		postProcessor.outputToParaview(fileNameWithPath, step, collection);
 		end = std::chrono::high_resolution_clock::now();
