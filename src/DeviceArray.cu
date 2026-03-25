@@ -11,6 +11,7 @@ void inplaceAddNestedArrayKernel(DeviceNestedArrayView<double> arrayA, DeviceNes
     }
 }
 
+template<>
 void DeviceNestedArrayView<double>::operator+=(DeviceNestedArrayView<double> other)
 {
     int threadsPerBlock = 256;
