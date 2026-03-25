@@ -84,14 +84,14 @@ void eval_into_Kernel_displacement_blockPerPoint(
             
             //printf("bidx=%d, idx=%d, blockCoord=%d, threadPatch=%d\n", bidx, idx, blockCoord, threadPatch);
         }
-        TensorBsplineBasisDeviceView basis = displacement.basis(threadPatch);
-        int P = basis.knotsOrder(0);
-        int dim = basis.dim();
         for (int d = threadId; d < displacement.domainDim(); d += blockDim.x)
             gridPoint[d] = gridPoints(d, idx);
         for (int d = threadId; d < displacement.domainDim(); d += blockDim.x)
             value[d] = 0.0;
         __syncthreads();
+        TensorBsplineBasisDeviceView basis = displacement.basis(threadPatch);
+        int P = basis.knotsOrder(0);
+        int dim = basis.dim();
 #if 0
         if (threadId == 0)
         {
