@@ -6,6 +6,7 @@
 
 
 class KnotGPUIterator;
+class KnotVectorDeviceView;
 
 class UKnotGPUIterator
 {
