@@ -21,8 +21,8 @@ int main()
 	double YM = 1.0;
 	double PR = 0.3;
 
-	int numRefinements = 0;
-	int numDegElev = 0;
+	int numRefinements = 7;
+	int numDegElev = 6;
 	double deltaDisplacement = 0.1;
 	double maxDisplacement = 1.0;
 	std::vector<int> numPointsPerPatch{ 1000, 500 };
