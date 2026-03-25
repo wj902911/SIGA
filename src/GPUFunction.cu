@@ -63,7 +63,7 @@ void eval_into_Kernel_displacement_blockPerPoint(
         __shared__ double gridPointData[3], valueData[3]; // Assuming max dimension is 3
         DeviceVectorView<double> gridPoint(gridPointData, displacement.domainDim());
         DeviceVectorView<double> value(valueData, displacement.targetDim());
-        __shared__ TensorBsplineBasisDeviceView basis;
+        TensorBsplineBasisDeviceView basis;
         int threadId = threadIdx.x;
         if (threadId == 0)
         {
