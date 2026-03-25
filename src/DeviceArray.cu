@@ -1,5 +1,6 @@
 #include <DeviceArray.h>
 
+#if 0
 __global__
 void inplaceAddNestedArrayKernel(DeviceNestedArrayView<double> arrayA, DeviceNestedArrayView<double> arrayB)
 {
@@ -19,3 +20,4 @@ void DeviceNestedArrayView<double>::operator+=(DeviceNestedArrayView<double> oth
     inplaceAddNestedArrayKernel<<<blocksPerGrid, threadsPerBlock>>>
         (*this, other);
 }
+#endif
