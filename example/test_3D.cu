@@ -168,7 +168,7 @@ int main()
 
 		assembler.constructSolution(solver.solutionView(),
 			solver.allFixedDofsView(),
-			displacementFunction.displacementDeviceView());
+			displacementFunction);
 		start = std::chrono::high_resolution_clock::now();
 		postProcessor.outputToParaview(fileNameWithPath, step, collection);
 		end = std::chrono::high_resolution_clock::now();

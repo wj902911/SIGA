@@ -325,11 +325,9 @@ void assembleDomainKernel_perTileBlock_loopOverGps(int numDerivatives,
     for (int bidx = blockIdx.x; bidx < totalNumBlocks; bidx += gridDim.x)
     {
         __shared__ int patch_idx, CPdim, dim, blockCoord[2], numThreadsPerBlock;
-        __shared__ int N_D_geo, N_D, dimTensor, ele_idx;
+        __shared__ int dimTensor, ele_idx;
         __shared__ double wt, ptData[3], measure, weightForce, weightBody;
         __shared__ double lambda, mu, J;
-        TensorBsplineBasisDeviceView dispBasis;
-        PatchDeviceView geoPatch, dispPatch;
 
         DeviceVectorView<double> pt(ptData, multiGaussPoints.dim());
         int threadId = threadIdx.y * blockDim.x + threadIdx.x;
@@ -347,11 +345,6 @@ void assembleDomainKernel_perTileBlock_loopOverGps(int numDerivatives,
             dimTensor = (dim * (dim + 1)) / 2;
             ele_idx = displacement.threadPatch_element(idx, patch_idx);
             
-            dispBasis = displacement.basis(patch_idx);
-            geoPatch = multiPatch.patch(patch_idx);
-            dispPatch = displacement.patch(patch_idx);
-            N_D = dispBasis.numActiveControlPoints();
-            N_D_geo = geoPatch.basis().numActiveControlPoints();
             double YM = parameters[1];
             double PR = parameters[0];
             lambda = YM * PR / ( ( 1. + PR ) * ( 1. - 2. * PR ) );
@@ -360,6 +353,11 @@ void assembleDomainKernel_perTileBlock_loopOverGps(int numDerivatives,
             //       blockIdx.x, patch_idx, blockCoord[0], blockCoord[1], wt, pt[0], pt[1]);
         }
         __syncthreads();
+        TensorBsplineBasisDeviceView dispBasis = displacement.basis(patch_idx);
+        PatchDeviceView geoPatch = multiPatch.patch(patch_idx);
+        PatchDeviceView dispPatch = displacement.patch(patch_idx);
+        int N_D = dispBasis.numActiveControlPoints();
+        int N_D_geo = geoPatch.basis().numActiveControlPoints();
 
         __shared__ double geoJacobianData[3*3], dispJacobianData[3*3], geoJacobianInvData[3*3]; //max 3D
         __shared__ double FData[3*3], SData[3*3], CData[6*6], RCGinvData[3*3], CtempData[6*6];
@@ -639,11 +637,10 @@ void assembleDomainKernel_perTileBlock(int numDerivatives,
     for (int bidx = blockIdx.x; bidx < totalNumBlocks; bidx += gridDim.x)
     {
         __shared__ int patch_idx, CPdim, dim, blockCoord[2], numThreadsPerBlock;
-        __shared__ int N_D_geo, N_D, dimTensor;
+        __shared__ int dimTensor;
         __shared__ double wt, ptData[3], measure, weightForce, weightBody;
         __shared__ double lambda, mu, J;
-        TensorBsplineBasisDeviceView dispBasis;
-        PatchDeviceView geoPatch, dispPatch;
+        
         DeviceVectorView<double> pt(ptData, multiGaussPoints.dim());
         int threadId = threadIdx.y * blockDim.x + threadIdx.x;
         if (threadId == 0)
@@ -661,11 +658,7 @@ void assembleDomainKernel_perTileBlock(int numDerivatives,
             int point_idx = displacement.threadPatch(idx, patch_idx);
             wt = displacement.gsPoint(point_idx, patch_idx, 
                                          multiGaussPoints[patch_idx], pt);
-            dispBasis = displacement.basis(patch_idx);
-            geoPatch = multiPatch.patch(patch_idx);
-            dispPatch = displacement.patch(patch_idx);
-            N_D = dispBasis.numActiveControlPoints();
-            N_D_geo = geoPatch.basis().numActiveControlPoints();
+            
             double YM = parameters[1];
             double PR = parameters[0];
             lambda = YM * PR / ( ( 1. + PR ) * ( 1. - 2. * PR ) );
@@ -674,6 +667,12 @@ void assembleDomainKernel_perTileBlock(int numDerivatives,
             //       blockIdx.x, patch_idx, blockCoord[0], blockCoord[1], wt, pt[0], pt[1]);
         }
         __syncthreads();
+        TensorBsplineBasisDeviceView dispBasis = displacement.basis(patch_idx);
+        PatchDeviceView geoPatch = multiPatch.patch(patch_idx);
+        PatchDeviceView dispPatch = displacement.patch(patch_idx);
+        int N_D = dispBasis.numActiveControlPoints();
+        int N_D_geo = geoPatch.basis().numActiveControlPoints();
+
         int geoP1 = geoPatch.basis().knotsOrder(0) + 1;
         int dataStart = 0;
         DeviceMatrixView<double> geoValuesAndDers(shmem + dataStart, geoP1, (numDerivatives + 1) * dim);
@@ -1662,7 +1661,7 @@ int GPUAssembler::numDofs() const
 
 void GPUAssembler::constructSolution(const DeviceVectorView<double>& solVector, 
                                      const DeviceNestedArrayView<double>& fixedDoFs, 
-                                     MultiPatchDeviceView& displacementDeviceView) const
+                                     GPUDisplacementFunction& displacementFunction) const
 {
     int minGrid, blockSize;
     int CPSize = m_displacementHost.CPSize();
@@ -1673,7 +1672,7 @@ void GPUAssembler::constructSolution(const DeviceVectorView<double>& solVector,
     constructSolutionKernel<<<gridSize, blockSize>>>(solVector, fixedDoFs,
                                                      m_multiBasis.deviceView(),
                                                      m_sparseSystem.deviceView(),
-                                                     displacementDeviceView,
+                                                     displacementFunction.displacementDeviceView(),
                                                      CPSize);
     cudaError_t err = cudaDeviceSynchronize();
     assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler::constructSolution");

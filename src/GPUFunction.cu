@@ -59,11 +59,10 @@ void eval_into_Kernel_displacement_blockPerPoint(
     {
         //printf("Kernel thread %d started\n", bidx);
         //displacement.print();
-        __shared__ int threadPatch, /*numThreadsPerBlock,*/ blockCoord, idx , P, dim;
+        __shared__ int threadPatch, /*numThreadsPerBlock,*/ blockCoord, idx;
         __shared__ double gridPointData[3], valueData[3]; // Assuming max dimension is 3
         DeviceVectorView<double> gridPoint(gridPointData, displacement.domainDim());
         DeviceVectorView<double> value(valueData, displacement.targetDim());
-        TensorBsplineBasisDeviceView basis;
         int threadId = threadIdx.x;
         if (threadId == 0)
         {
@@ -82,11 +81,12 @@ void eval_into_Kernel_displacement_blockPerPoint(
                 }
                 point_idx -= patchPoints;
             }
-            basis = displacement.basis(threadPatch);
-            P = basis.knotsOrder(0);
-            dim = basis.dim();
+            
             //printf("bidx=%d, idx=%d, blockCoord=%d, threadPatch=%d\n", bidx, idx, blockCoord, threadPatch);
         }
+        TensorBsplineBasisDeviceView basis = displacement.basis(threadPatch);
+        int P = basis.knotsOrder(0);
+        int dim = basis.dim();
         for (int d = threadId; d < displacement.domainDim(); d += blockDim.x)
             gridPoint[d] = gridPoints(d, idx);
         for (int d = threadId; d < displacement.domainDim(); d += blockDim.x)

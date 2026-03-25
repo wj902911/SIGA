@@ -6,6 +6,7 @@
 #include <BoundaryCondition.h>
 #include <MultiGaussPointsDeviceData.h>
 #include <OptionList.h>
+#include <GPUFunction.h>
 
 class GPUAssembler
 {
@@ -62,7 +63,7 @@ public:
     __host__
     void constructSolution(const DeviceVectorView<double>& solVector,
                            const DeviceNestedArrayView<double>& fixedDoFs,
-                           MultiPatchDeviceView& displacementDeviceView) const;
+                           GPUDisplacementFunction& displacementFunction) const;
     
     __host__
     void assemble(const DeviceVectorView<double>& solVector, int numIter,
