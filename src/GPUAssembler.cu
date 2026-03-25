@@ -328,8 +328,8 @@ void assembleDomainKernel_perTileBlock_loopOverGps(int numDerivatives,
         __shared__ int N_D_geo, N_D, dimTensor, ele_idx;
         __shared__ double wt, ptData[3], measure, weightForce, weightBody;
         __shared__ double lambda, mu, J;
-        __shared__ TensorBsplineBasisDeviceView dispBasis;
-        __shared__ PatchDeviceView geoPatch, dispPatch;
+        TensorBsplineBasisDeviceView dispBasis;
+        PatchDeviceView geoPatch, dispPatch;
 
         DeviceVectorView<double> pt(ptData, multiGaussPoints.dim());
         int threadId = threadIdx.y * blockDim.x + threadIdx.x;
@@ -642,8 +642,8 @@ void assembleDomainKernel_perTileBlock(int numDerivatives,
         __shared__ int N_D_geo, N_D, dimTensor;
         __shared__ double wt, ptData[3], measure, weightForce, weightBody;
         __shared__ double lambda, mu, J;
-        __shared__ TensorBsplineBasisDeviceView dispBasis;
-        __shared__ PatchDeviceView geoPatch, dispPatch;
+        TensorBsplineBasisDeviceView dispBasis;
+        PatchDeviceView geoPatch, dispPatch;
         DeviceVectorView<double> pt(ptData, multiGaussPoints.dim());
         int threadId = threadIdx.y * blockDim.x + threadIdx.x;
         if (threadId == 0)
