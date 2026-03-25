@@ -383,7 +383,7 @@ public:
     }
 
     __host__
-    void operator+=(DeviceMatrixView<double> other);
+    void operator+=(DeviceMatrixView<T> other);
 
     __device__
     T prod() const

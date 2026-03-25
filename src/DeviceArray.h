@@ -106,7 +106,7 @@ public:
     __host__ __device__
     int totalSize() const { return DeviceArrayView<T>::size(); }
 
-#if 0
+#if 1
     __host__
     void operator+=(DeviceNestedArrayView<T> other);
 #endif

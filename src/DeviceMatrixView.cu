@@ -10,6 +10,7 @@ void inplaceAddKernel(double* dataA, const double* dataB, int rows, int cols)
     }
 }
 
+template<>
 void DeviceMatrixView<double>::operator+=(DeviceMatrixView<double> other)
 {
     int threadsPerBlock = 256;

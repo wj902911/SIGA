@@ -1,6 +1,6 @@
 #include <DeviceArray.h>
 
-#if 0
+#if 1
 __global__
 void inplaceAddNestedArrayKernel(DeviceNestedArrayView<double> arrayA, DeviceNestedArrayView<double> arrayB)
 {
