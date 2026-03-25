@@ -3,6 +3,7 @@
 #include <iterator>
 
 class KnotIterator;
+class KnotVector;
 
 class UKnotIterator
 {

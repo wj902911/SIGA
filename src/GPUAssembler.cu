@@ -1,5 +1,7 @@
 #include <GPUAssembler.h>
 
+#define TIME_INITIALIZATION
+
 __global__
 void constructSolutionKernel(DeviceVectorView<double> solVector, 
                              DeviceNestedArrayView<double> fixedDoFs, 
@@ -1502,6 +1504,9 @@ GPUAssembler::GPUAssembler(const MultiPatch &multiPatch,
                          countEntrysKernel, 0, numElements);
     int gridSize = (numElements + blockSize - 1) / blockSize;
 #endif
+#ifdef TIME_INITIALIZATION
+	auto start = std::chrono::high_resolution_clock::now();
+#endif
     countEntrysKernel<<<gridSize, blockSize>>>(numElements, numBlocksPerElement, 
                                                numActivePerBlock,
                                                m_displacement.deviceView(),
@@ -1512,11 +1517,17 @@ GPUAssembler::GPUAssembler(const MultiPatch &multiPatch,
                                                entryCountDevicePtr);
 #endif
     err = cudaDeviceSynchronize();
+#ifdef TIME_INITIALIZATION
+	auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed = end - start;
+    std::cout << "Counted matrix entries in " << elapsed.count() << " s." << std::endl;
+#endif
     assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler constructor during counting matrix entries");
     int entryCountHost;
     err = cudaMemcpy(&entryCountHost, entryCountDevicePtr, sizeof(int), cudaMemcpyDeviceToHost);
     assert(err == cudaSuccess && "cudaMemcpy failed in GPUAssembler constructor during counting matrix entries");
     
+
     //m_sparseSystem.setNumMatrixEntries(entryCountHost);
     //m_sparseSystem.resizeMatrixData(entryCountHost);
 
@@ -1526,6 +1537,9 @@ GPUAssembler::GPUAssembler(const MultiPatch &multiPatch,
 
     err = cudaMemset(entryCountDevicePtr, 0, sizeof(int));
     assert(err == cudaSuccess && "cudaMemset failed in GPUAssembler constructor during counting matrix entries");
+#ifdef TIME_INITIALIZATION
+    start = std::chrono::high_resolution_clock::now();
+#endif
     computeCOOKernel<<<gridSize, blockSize>>>(numElements, entryCountDevicePtr,
                                 numBlocksPerElement, numActivePerBlock,
                                 m_displacement.deviceView(),
@@ -1537,13 +1551,26 @@ GPUAssembler::GPUAssembler(const MultiPatch &multiPatch,
                                 cooCols.vectorView());
 
     err = cudaDeviceSynchronize();
+#ifdef TIME_INITIALIZATION
+	end = std::chrono::high_resolution_clock::now();
+    elapsed = end - start;
+    std::cout << "Constructed COO matrix in " << elapsed.count() << " s." << std::endl;
+#endif
     assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler constructor during COO construction");
 
+#ifdef TIME_INITIALIZATION
+    start = std::chrono::high_resolution_clock::now();
+#endif
     m_sparseSystem.setCSRMatrixFromCOO(sparseSystem.matrixRows(), 
                                        sparseSystem.matrixCols(),
                                        cooRows.vectorView(), 
                                        cooCols.vectorView());
     err = cudaDeviceSynchronize();
+#ifdef TIME_INITIALIZATION
+	end = std::chrono::high_resolution_clock::now();
+    elapsed = end - start;
+    std::cout << "Converted COO to CSR in " << elapsed.count() << " s." << std::endl;
+#endif
     assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler constructor during COO to CSR conversion");
 
     //m_sparseSystem.csrMatrix().sparsePrint_host();
