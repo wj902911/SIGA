@@ -11,7 +11,7 @@ void normKernel(double *data, int size, double* result)
     }
 }
 
-__host__
+template<>
 double DeviceVectorView<double>::norm() const
 {
     double* d_result;
