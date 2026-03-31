@@ -129,6 +129,9 @@ public:
     DeviceVectorView<double> values() const { return m_values.vectorView(); }
 
     __host__
+    const DeviceArray<double>& valuesData() const { return m_values; }
+
+    __host__
     void print_host() const;
 
     __host__

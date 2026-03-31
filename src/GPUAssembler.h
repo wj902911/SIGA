@@ -11,7 +11,23 @@
 class GPUAssembler
 {
 private:
-    int m_problemDim = 2;
+    int m_targetDim = 2;
+    int m_domainDim = 2;
+    int m_dimTensor = 0;
+    int m_numElements = 0;
+    int m_N_D = 0;
+    int m_totalGPs = 0;
+    int m_numDerivatives = 1;
+    int m_geoP1 = 1;
+    int m_dispP1 = 1;
+    //int m_numBatches = 1;
+    //size_t m_batchElements = 0;
+    //size_t m_batchSize = 0;
+    DeviceArray<double> m_GPData;
+    DeviceArray<double> m_GPTable;
+    DeviceArray<double> m_wts;
+    DeviceArray<double> m_geoValuesAndDerss;
+    DeviceArray<double> m_dispValuesAndDerss;
     MultiPatchDeviceData m_multiPatch;
     MultiPatchDeviceData m_displacement;
     MultiPatch m_displacementHost;
@@ -43,7 +59,7 @@ public:
                               const MultiBasis &multiBasis);
 
     __host__
-    int dim() const { return m_problemDim; }
+    int dim() const { return m_targetDim; }
     
     __host__
     void print() const;
@@ -56,6 +72,9 @@ public:
 
     __host__
     int numDofs() const;
+
+    __host__
+    int numElements() const { return m_numElements; }
 
     __host__
     const DeviceNestedArray<double>& allFixedDofs() const { return m_ddof; }

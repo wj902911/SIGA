@@ -351,6 +351,13 @@ public:
     int size(int d) const { return  knotVector(d).numControlPoints(); }
 
     __device__
+    int firstActive(int d, double u) const {
+        int order = knotVector(d).order();
+        KnotVectorDeviceView knot = knotVector(d);
+        return ( knot.inDomain(u) ? (knot.iFind(u)-knot.begin()) - order : 0 );
+    }
+
+    __device__
     void activeIndexes(DeviceVectorView<double> pt,
                        DeviceVectorView<int> activeIndexes) const
     {
@@ -362,10 +369,14 @@ public:
         for (int d = 0; d < m_dim; ++d)
         {
             int order = knotVector(d).order();
+#if 0
             firstAct[d] = pt(d) == 
             knotVector(d).domainEnd() ?
             knotVector(d).numKnots() - order - 2 - order :
             upperBound(d, pt[d]) - order - 1;
+#else
+            firstAct[d] = firstActive(d, pt[d]);
+#endif
             sizes[d] = order + 1;
         }
         for (int r = 0; r < numAct; r++)
@@ -390,10 +401,14 @@ public:
         for (int d = 0; d < m_dim; ++d)
         {
             int order = knotVector(d).order();
+#if 0
             firstAct[d] = pt(d) == 
             knotVector(d).domainEnd() ?
             knotVector(d).numKnots() - order - 2 - order :
             upperBound(d, pt[d]) - order - 1;
+#else
+            firstAct[d] = firstActive(d, pt[d]);
+#endif
             sizes[d] = order + 1;
         }
         int indexData[3]; //max dim 3

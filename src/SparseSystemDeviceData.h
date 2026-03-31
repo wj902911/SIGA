@@ -244,4 +244,7 @@ public:
         m_RHS.copyToHost(h_rhs);
         return Eigen::Map<Eigen::VectorXd>(h_rhs.data(), h_rhs.size());
     }
+
+    __host__
+    const DeviceArray<double>& RHS() const { return m_RHS; }
 };

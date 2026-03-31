@@ -201,6 +201,21 @@ public:
             m_data = nullptr;
     }
 
+    __host__
+    DeviceArray(const DeviceArray<T>& other, int start, int count)
+    : m_size(count)
+    {
+        if (m_size > 0)
+        {
+            cudaError_t err = cudaMalloc(&m_data, m_size * sizeof(T));
+            assert(err == cudaSuccess && "cudaMalloc failed in DeviceArray copy constructor");
+            err = cudaMemcpy(m_data, other.m_data + start, m_size * sizeof(T), cudaMemcpyDeviceToDevice);
+            assert(err == cudaSuccess && "cudaMemcpy failed in DeviceArray copy constructor");
+        }
+        else
+            m_data = nullptr;
+    }
+
     __host__ 
     DeviceArray(DeviceArray&& other) noexcept
      : m_data(other.m_data), m_size(other.m_size)
@@ -299,6 +314,12 @@ public:
         assert(rows * cols == m_size && "Size mismatch in DeviceArray matrixView");
         return DeviceMatrixView<T>(m_data, rows, cols); 
     }
+    __host__
+    DeviceMatrixView<T> matrixPartialView(int rows, int cols) const 
+    { 
+        assert(rows * cols <= m_size && "Size mismatch in DeviceArray matrixPartialView");
+        return DeviceMatrixView<T>(m_data, rows, cols); 
+    }
 
     __host__
     void setZero()
@@ -369,6 +390,9 @@ public:
         assert(err == cudaSuccess && "cudaMemcpy failed in DeviceArray operator[]");
         return value;
     }
+
+    __host__
+    void compare(const DeviceArray<T>& other) const;
 };
 
 template <typename T>

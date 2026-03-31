@@ -8,13 +8,18 @@
 #include <GPUPostProcessor.h>
 #include <filesystem>
 
-int main()
+int main(int argc, char* argv[])
 {
+	if (argc < 3)
+    {
+        std::cerr << "Usage: ./test_3D <numRefinements> <numDegElev>\n";
+        return 1;
+    }
 	double YM = 1.0;
 	double PR = 0.3;
 
-	int numRefinements = 4;
-	int numDegElev = 2;
+	int numRefinements = std::stoi(argv[1]);
+	int numDegElev = std::stoi(argv[2]);
 	double deltaDisplacement = 0.1;
 	double maxDisplacement = 1.0;
 	std::vector<int> numPointsPerPatch{ 10000, 5000 };
@@ -118,6 +123,7 @@ int main()
 	std::cout << "Initializing assembler..." << std::endl;
 	auto start = std::chrono::high_resolution_clock::now();
 	GPUAssembler assembler(multiPatch, bases, bcInfo, bodyForce);
+	//std::cout << "Setting material properties..." << std::endl;
 	assembler.options().setReal("youngs_modulus", YM);
 	assembler.options().setReal("poissons_ratio", PR);
 	auto end = std::chrono::high_resolution_clock::now();
@@ -155,7 +161,7 @@ int main()
 	elapsed = end - start;
 	std::cout << "Output initial geometry in " << elapsed.count() << " s." << std::endl;
 
-	std::cout << "Initialized system with " << assembler.numDofs() << " dofs." << std::endl;
+	std::cout << "Initialized system with " << assembler.numElements() << " elements and " << assembler.numDofs() << " dofs." << std::endl;
 
 	int step = 1;
 	double totalDisplacement = deltaDisplacement;

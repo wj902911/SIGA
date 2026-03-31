@@ -299,6 +299,11 @@ public:
             ii = m_perm_old2new(ii);
 #endif
             atomicAdd(&m_RHS(ii), value);
+            //printf("ii=%d, value=%f\n", ii, value);
+        }
+        else
+        {
+            //printf("row is dead\n");
         }
     }
 

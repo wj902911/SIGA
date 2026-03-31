@@ -374,7 +374,7 @@ __device__
 inline void setBSingleDim(int dir, DeviceVectorView<T> B, DeviceMatrixView<T> F, DeviceVectorView<T> bGrad)
 {
     int dim = F.cols();
-    int dimTensor = (dim * (dim + 1)) / 2;
+    //int dimTensor = (dim * (dim + 1)) / 2;
     for (int i = 0; i < dim; i++)
         B(i) = F(dir,i) * bGrad(i);
     if (dim == 2)

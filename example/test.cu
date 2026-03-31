@@ -14,15 +14,18 @@ void printKernel(MultiPatchDeviceView displacement)
 	displacement.print();
 }
 
-int main()
+int main(int argc, char* argv[])
 {
-	//const char* path = std::getenv("PATH");
-    //std::cout << "PATH = " << (path ? path : "(null)") << std::endl;
+	if (argc < 3)
+    {
+        std::cerr << "Usage: ./test_3D <numRefinements> <numDegElev>\n";
+        return 1;
+    }
 	double YM = 1.0;
 	double PR = 0.3;
 
-	int numRefinements = 0;
-	int numDegElev = 6;
+	int numRefinements = std::stoi(argv[1]);
+	int numDegElev = std::stoi(argv[2]);
 	double deltaDisplacement = 0.1;
 	double maxDisplacement = 1.0;
 	std::vector<int> numPointsPerPatch{ 1000, 500 };
