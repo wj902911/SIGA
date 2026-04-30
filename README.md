@@ -95,7 +95,7 @@ The core requirements are listed below, followed by optional components that can
 - Enable **Spectra** when you want use Spectra to compute eigenvalues. I found it is slower than cusolver's dense eigenvalue solver `cusolverDnXsyevd`.
 - **AMGX is not supported in Debug builds.** If you need to run SIGA in Debug mode, configure the project with `ENABLE_AMGX=OFF`.
 - When **AMGX is disabled**, SIGA falls back to:
-  - **`Eigen::SimplicialLDLT`** for linear solves on the CPU
+  - **`Eigen::SimplicialLDLT`** or **`Eigen::SparseLU`** for linear solves on the CPU
   - **`cusolverDnXsyevd`** for eigenvalue computations on the GPU
 - These fallback solvers remain efficient for small to medium-sized problems, and are convenient for development, verification, and debugging workflows.
 

@@ -105,7 +105,7 @@ int main(int argc, char* argv[])
 	for (int d = 0; d < 2; ++d)
 		bcInfo.addCondition(0, boundary::west, condition_type::dirichlet, 
                             std::vector<double>{0.0, 0.0}, d);
-	std::vector<double> disp{ deltaDisplacement, 0.0 };
+	std::vector<double> disp { deltaDisplacement, 0.0 };
     bcInfo.addCondition(1, boundary::east, condition_type::dirichlet, disp, 0);
 
 	Eigen::VectorXd bodyForce(2);

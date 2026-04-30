@@ -61,6 +61,9 @@ public:
     { return m_fixedDoFs.view(); }
 
     __host__
+    const DeviceNestedArray<double>& allFixedDofs() const { return m_fixedDoFs; }
+
+    __host__
     DeviceVectorView<double> solutionView() const
     { return DeviceVectorView<double>(m_solVector.data(), m_solVector.size()); }
 
@@ -77,4 +80,32 @@ public:
     double smallestEigenvalue_symm_sparse_Eigen(Eigen::SparseMatrix<double> mat);
     //double smallestEigenvalue_SPD_Dense_Spectra(const Eigen::SparseMatrix<double>& K);
     std::string status();
+
+    int numIterations() const { return m_numIterations; }
+
+    void solutionToHost(Eigen::VectorXd& hostSol) const
+    {
+        hostSol.resize(m_solVector.size());
+        m_solVector.copyToHost(hostSol.data());
+    }
+
+    void setSolutionFromHost(const Eigen::VectorXd& hostSol)
+    {
+        assert(hostSol.size() == m_solVector.size() && "Host solution size must match device solution size");
+        m_solVector.updateFromHost(hostSol.data());
+    }
+
+    void fixedDofsToHost(Eigen::VectorXd& hostFixedDofs) const
+    {
+        hostFixedDofs.resize(m_fixedDoFs.size());
+        m_fixedDoFs.copyToHost(hostFixedDofs.data());
+    }
+
+    void setFixedDofsFromHost(const Eigen::VectorXd& hostFixedDofs)
+    {
+        assert(hostFixedDofs.size() == m_fixedDoFs.size() && "Host fixed DoFs size must match device fixed DoFs size");
+        m_fixedDoFs.updateFromHost(hostFixedDofs.data());
+    }
+
+    bool isConverged() const { return m_status == converged; }  
 };

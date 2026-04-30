@@ -251,6 +251,31 @@ public:
     }
 
     __device__
+    void timeTranspose(const DeviceMatrixView<T>& other, 
+                       DeviceMatrixView<T> result) const
+    {
+        // this:  (m x n)  
+        // other: (p x n)  -> other^T: (n x p)
+        // result:(m x p)
+        assert(m_cols == other.m_cols && 
+               "Inner dimensions must match for A * B^T (A.cols == B.cols)");
+        assert(result.m_rows == m_rows && result.m_cols == other.m_rows &&
+               "Result has wrong dimensions for A * B^T");
+        for (int i = 0; i < m_rows; ++i)          // i over m
+        {
+            for (int j = 0; j < other.m_rows; ++j) // j over p
+            {
+                T sum = 0;
+                for (int k = 0; k < m_cols; ++k)   // k over n
+                {
+                    sum += (*this)(i, k) * other(j, k);
+                }
+                result(i, j) = sum;
+            }
+        }
+    }
+
+    __device__
     void times(T scalar, DeviceMatrixView<T> result) const
     {
         for (int i = 0; i < m_rows; i++)

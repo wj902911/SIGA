@@ -335,6 +335,80 @@ inline void symmetricIdentityViewTensor(DeviceMatrixView<T> &C, const DeviceMatr
 
 template <class T>
 __device__
+inline void electroelasticMechanicalTensor(DeviceMatrixView<T> &C, const DeviceMatrixView<T> &R, const DeviceMatrixView<T> &E)
+{
+    int dim = R.cols();
+    int dimTensor = (dim * (dim + 1)) / 2;
+    
+    for (int i = 0; i < dimTensor; i++)
+        for (int j = 0; j < dimTensor; j++)
+        {
+            T tempData[3*3];
+            DeviceMatrixView<T> temp(tempData, dim, dim);
+            for (int m = 0; m < dim; m++)
+                for (int n = 0; n < dim; n++)
+                {
+                    temp(m, n) =       R(voigt(dim, j, 0), voigt(dim, j, 1))                                           //     C^(-1)_CD
+			            		   * ( R(voigt(dim, i, 0),                m) * R(voigt(dim, i, 1),               n)    // * ( C^(-1)_AI * C^(-1)_BJ
+			            			 + R(voigt(dim, i, 0),                n) * R(voigt(dim, i, 1),               m)    //   + C^(-1)_AJ * C^(-1)_BI
+			            			 - R(voigt(dim, i, 0), voigt(dim, i, 1)) * R(               m,               n) )  //   - C^(-1)_AB * C^(-1)_IJ )
+			                       -   R(voigt(dim, i, 1),                n)                                           // -   C^(-1)_BJ
+			                       * ( R(voigt(dim, i, 0), voigt(dim, j, 0)) * R(voigt(dim, j, 1),               m)    // * ( C^(-1)_AC * C^(-1)_DI
+			            			 + R(voigt(dim, i, 0), voigt(dim, j, 1)) * R(voigt(dim, j, 0),               m) )  //   + C^(-1)_AD * C^(-1)_CI )
+			            		   -   R(voigt(dim, i, 0),                m)                                           // -   C^(-1)_AI
+			                       * ( R(voigt(dim, i, 1), voigt(dim, j, 0)) * R(voigt(dim, j, 1),               n)    // * ( C^(-1)_BC * C^(-1)_DJ
+			            		     + R(voigt(dim, i, 1), voigt(dim, j, 1)) * R(voigt(dim, j, 0),               n) )  //   + C^(-1)_BD * C^(-1)_CJ )
+			               /* + */ -   R(voigt(dim, i, 1), m)                                                          // -   C^(-1)_BI
+			                       * ( R(voigt(dim, i, 0), voigt(dim, j, 0)) * R(voigt(dim, j, 1),               n)    // * ( C^(-1)_AC * C^(-1)_DJ
+			            	         + R(voigt(dim, i, 0), voigt(dim, j, 1)) * R(voigt(dim, j, 0),               n) )  //   + C^(-1)_AD * C^(-1)_CJ )
+			                       -   R(voigt(dim, i, 0),                n)                                           // -   C^(-1)_AJ
+			                       * ( R(voigt(dim, i, 1), voigt(dim, j, 0)) * R(voigt(dim, j, 1),               m)    // * ( C^(-1)_BC * C^(-1)_DI
+			            			 + R(voigt(dim, i, 1), voigt(dim, j, 1)) * R(voigt(dim, j, 0),               m) )  //   + C^(-1)_BD * C^(-1)_CI )
+			                       +   R(               m,                n)                                           // +   C^(-1)_IJ
+			                       * ( R(voigt(dim, i, 0), voigt(dim, j, 0)) * R(voigt(dim, i, 1), voigt(dim, j, 1))   // * ( C^(-1)_AC * C^(-1)_BD
+			            			 + R(voigt(dim, i, 0), voigt(dim, j, 1)) * R(voigt(dim, i, 1), voigt(dim, j, 0)))  //   + C^(-1)_AD * C^(-1)_BC
+			                       +   R(voigt(dim, i, 0), voigt(dim, i, 1))                                           // +   C^(-1)_AB
+			                       * ( R(voigt(dim, j, 0),                m) * R(voigt(dim, j, 1),               n)    // * ( C^(-1)_CI * C^(-1)_DJ
+			            			 + R(voigt(dim, j, 0),                n) * R(voigt(dim, j, 1),               m) ); //   + C^(-1)_CJ * C^(-1)_DI )
+                    //printf("temp(%d, %d) = %f\n", m, n, temp(m, n));
+                }
+            double temp2Data[3] = {0};
+            DeviceMatrixView<T> temp2(temp2Data, 1, dim);
+            E.transposeTime(temp, temp2);
+            double temp3Data = 0;
+            DeviceMatrixView<T> temp3(&temp3Data, 1, 1);
+            temp2.times(E, temp3);
+            C(i, j) = temp3Data;
+        }
+}
+
+template <class T>
+__device__
+inline void electroelasticCouplingTensor(DeviceMatrixView<T> &C, const DeviceMatrixView<T> &R, const DeviceMatrixView<T> &E)
+{
+    int dim = R.cols();
+    int dimTensor = (dim * (dim + 1)) / 2;
+    for (int i = 0; i < dimTensor; i++)
+        for (int j = 0; j < dim; j++)
+        {
+            T tempData[3];
+            DeviceMatrixView<T> temp(tempData, dim, 1);
+            for (int m = 0; m < dim; m++)
+            {
+                temp(m, 0) = R(voigt(dim, i, 0),                j) * R(voigt(dim, i, 1), m)  //   C^(-1)_AC * C^(-1)_BI
+						   + R(voigt(dim, i, 0),                m) * R(voigt(dim, i, 1), j)  // + C^(-1)_AI * C^(-1)_BC
+						   - R(voigt(dim, i, 0), voigt(dim, i, 1)) * R(               j, m); // - C^(-1)_AB * C^(-1)_CI
+                //printf("temp(%d, %d) = %f\n", m, n, temp(m, n));
+            }
+            double temp2Data = 0;
+            DeviceMatrixView<T> temp2(&temp2Data, 1, 1);
+            E.transposeTime(temp, temp2);
+            C(i,j) = temp2Data;
+        }
+}
+
+template <class T>
+__device__
 inline void symmetricIdentityViewTensor_parallel(int tidx, int numThreadsx, int tidy, int numThreadsy,
     DeviceMatrixView<T> &C, const DeviceMatrixView<T> &R)
 {
@@ -451,4 +525,41 @@ It upper_bound_it(It first, It last, const U& value)
         }
     }
     return first;
+}
+
+__device__ inline
+void tensorBasisDerivative(int r, int P1, int dim, int numDerivatives,
+    DeviceMatrixView<double> valuesAndDers, 
+    DeviceVectorView<double> dN_r)
+{
+    int tensorCoordData[3]; //max 3D
+    DeviceVectorView<int> tensorCoord(tensorCoordData, dim);
+    getTensorCoordinate(dim, P1, r, tensorCoordData);
+    for (int dir = 0; dir < dim; dir++)
+    {
+        double dN_rj = 1.0;
+        for (int d = 0; d < dim; d++)
+        {
+            if (d == dir)
+                dN_rj *= valuesAndDers(tensorCoord[d], (numDerivatives + 1) * d + 1);
+            else
+                dN_rj *= valuesAndDers(tensorCoord[d], (numDerivatives + 1) * d);
+        }
+        dN_r[dir] = dN_rj;
+    }
+}
+
+__device__ inline
+double tensorBasisValue(int r, int P1, int dim, int numDerivatives,
+    DeviceMatrixView<double> valuesAndDers)
+{
+    int tensorCoordData[3]; //max 3D
+    DeviceVectorView<int> tensorCoord(tensorCoordData, dim);
+    getTensorCoordinate(dim, P1, r, tensorCoordData);
+    double N_r = 1.0;
+    for (int d = 0; d < dim; d++)
+    {
+        N_r *= valuesAndDers(tensorCoord[d], (numDerivatives + 1) * d);
+    }
+    return N_r;
 }

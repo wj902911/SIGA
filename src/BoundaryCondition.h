@@ -97,7 +97,7 @@ public:
 
 private:
     PatchSide m_ps;
-    std::vector<double> m_values;
+    const std::vector<double>& m_values;
     std::string m_label;
     int m_unknown;
     int m_unkcomp;

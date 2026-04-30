@@ -5,7 +5,7 @@
 #include <DofMapperDeviceView.h>
 #include <DeviceCSRMatrix.h>
 
-#define USE_PERMUTATION
+//#define USE_PERMUTATION
 
 class SparseSystemDeviceView
 {
@@ -210,6 +210,7 @@ public:
         if (rowMap.is_free_index(activeRow))
         {
 #if defined(USE_PERMUTATION)
+            //printf("before permutation: ii=%d, ", ii);
             ii = m_perm_old2new(ii);
 #endif
             int jj = m_cstr(c) + activeCol;
@@ -223,11 +224,14 @@ public:
                 //m_values[out] = value;
                 //printf("counter=%d, ii=%d, jj=%d, value=%f\n", out, ii, jj, value);
 #if defined(USE_PERMUTATION)
+                //printf("jj=%d\n", jj);
                 jj = m_perm_old2new(jj);
 #endif
-                //printf("after permutation: ii=%d, jj=%d, value=%f\n", ii, jj, value);
-                //printf("activeRow=%d, activeCol=%d, push to ii=%d, jj=%d\n", activeRow, activeCol, ii, jj);
+                //printf("after permutation: ii=%d, jj=%d\n", ii, jj);
+                //printf("activeRow=%d, activeCol=%d, push to ii=%d, jj=%d, value=%f\n", activeRow, activeCol, ii, jj, value);
+                //printf("before atomicAdd, m_csrMatrix(%d, %d)=%f\n", ii, jj, m_csrMatrix(ii, jj));
                 atomicAdd(&m_csrMatrix(ii, jj), value);
+                //printf("after atomicAdd, m_csrMatrix(%d, %d)=%f\n", ii, jj, m_csrMatrix(ii, jj));
             }
             else
             {
@@ -298,8 +302,10 @@ public:
 #if defined(USE_PERMUTATION)
             ii = m_perm_old2new(ii);
 #endif
+            //printf("pushing value=%f to m_RHS(%d):\n", value, ii);
+            //printf("before atomicAdd, m_RHS(%d)=%f\n", ii, m_RHS(ii));
             atomicAdd(&m_RHS(ii), value);
-            //printf("ii=%d, value=%f\n", ii, value);
+            //printf("after atomicAdd, m_RHS(%d)=%f\n", ii, m_RHS(ii));
         }
         else
         {

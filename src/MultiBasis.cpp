@@ -54,7 +54,7 @@ void MultiBasis::getMappers(bool conforming, const BoundaryConditions &bc,
                             std::vector<DofMapper> &dofMappers, bool finalize) const
 {
     int dim = getDim();
-    dofMappers = std::vector<DofMapper>(dim);
+    //dofMappers = std::vector<DofMapper>(dim);
     for (int d = 0; d < dim; d++)
     {
         getMapper(conforming, bc, d, dofMappers[d], finalize);

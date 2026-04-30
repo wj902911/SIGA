@@ -10,6 +10,9 @@ public:
         : m_fn(fn), m_counter(0)
     {
         m_fn.append(".pvd");
+		m_file << "<?xml version=\"1.0\"?>\n";
+    	m_file << "<VTKFile type=\"Collection\" version=\"0.1\">";
+    	m_file << "<Collection>\n";
     }
 
     void initalize()

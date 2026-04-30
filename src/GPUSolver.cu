@@ -257,10 +257,10 @@ bool GPUSolver::solveSingleIteration()
 
 bool GPUSolver::solveSingleIteration_Eigen()
 {
-    auto start = std::chrono::high_resolution_clock::now();
+    //auto start = std::chrono::high_resolution_clock::now();
     m_assembler.assemble(m_solVector.vectorView(), m_numIterations, m_fixedDoFs.view());
-    auto end = std::chrono::high_resolution_clock::now();
-    printf("Assemble time: %f seconds\n", std::chrono::duration<double>(end - start).count());
+    //auto end = std::chrono::high_resolution_clock::now();
+    //printf("Assemble time: %f seconds\n", std::chrono::duration<double>(end - start).count());
 #if 0
     if(m_numIterations == 0)
     {
@@ -285,7 +285,7 @@ bool GPUSolver::solveSingleIteration_Eigen()
     }
 #endif
 
-    start = std::chrono::high_resolution_clock::now();
+    //start = std::chrono::high_resolution_clock::now();
     DeviceVectorView<double> bdev = m_assembler.rhs();
     const int n = static_cast<int>(bdev.size());
 #if 0
@@ -395,27 +395,30 @@ bool GPUSolver::solveSingleIteration_Eigen()
     }
 #endif
 
-    //std::cout << Eigen::MatrixXd(A) << std::endl;
-    //std::cout << b << std::endl;
+    //std::cout << "Host matrix:\n" << Eigen::MatrixXd(A) << std::endl;
+    //std::cout << "RHS:\n" << b << std::endl;
 
-    Eigen::SimplicialLDLT<SpMat> solver;
+    //Eigen::SimplicialLDLT<SpMat> solver;
+    //Eigen::SparseLU<SpMat> solver;
+    Eigen::SparseLU<SpMat> solver;
     solver.compute(A);
 
     if (solver.info() != Eigen::Success)
     {
-        printf("Eigen SimplicialLDLT factorization failed (matrix not SPD or numerical issue)\n");
+        printf("Eigen solver failed\n");
         return false;
     }
 
     Eigen::VectorXd x = solver.solve(b);
+    //std::cout << "test result:\n" << b - Eigen::MatrixXd(A) * x << std::endl;
 
     if (solver.info() != Eigen::Success)
     {
-        printf("Eigen SimplicialLDLT solve failed\n");
+        printf("Eigen solver failed\n");
         return false;
     }
     //std::cout << std::endl;
-    //std::cout << x << std::endl;
+    //std::cout << "delta solution: " << x << std::endl;
     //auto t_cpu_end = std::chrono::high_resolution_clock::now();
     //printf("Eigen factor+solve time (CPU): %f seconds\n",
     //       std::chrono::duration<double>(t_cpu_end - t_cpu_start).count());
@@ -425,9 +428,9 @@ bool GPUSolver::solveSingleIteration_Eigen()
     // ============================================================
     CHECK_CUDA(cudaMemcpy(m_deltaSolVector.data(), x.data(), n * sizeof(double), cudaMemcpyHostToDevice));
 
-    end = std::chrono::high_resolution_clock::now();
-    printf("Total linear solve time (incl H<->D): %f seconds\n",
-           std::chrono::duration<double>(end - start).count());
+    //end = std::chrono::high_resolution_clock::now();
+    //printf("Total linear solve time (incl H<->D): %f seconds\n",
+    //       std::chrono::duration<double>(end - start).count());
 
     // Update (same as your code)
     m_updateNorm   = m_deltaSolVector.vectorView().norm();
@@ -447,16 +450,16 @@ bool GPUSolver::solveSingleIteration_Eigen()
 #if ENABLE_AMGX
 bool GPUSolver::solveSingleIteration_AMGX()
 {
-    auto start = std::chrono::high_resolution_clock::now();
+    //auto start = std::chrono::high_resolution_clock::now();
     m_assembler.assemble(m_solVector.vectorView(), m_numIterations, m_fixedDoFs.view());
-    auto end = std::chrono::high_resolution_clock::now();
-    printf("Assemble time: %f seconds\n", std::chrono::duration<double>(end - start).count());
+    //auto end = std::chrono::high_resolution_clock::now();
+    //printf("Assemble time: %f seconds\n", std::chrono::duration<double>(end - start).count());
 
     //DeviceMatrixView<double> Adev = m_assembler.matrix();
     DeviceVectorView<double> bdev = m_assembler.rhs();
     const int n = static_cast<int>(bdev.size());
 
-	start = std::chrono::high_resolution_clock::now();
+	//start = std::chrono::high_resolution_clock::now();
 #if 0
     // --- COO from assembler (device pointers) ---
     auto cooR = m_assembler.rows();    // int, length nnz_coo
@@ -622,8 +625,8 @@ bool GPUSolver::solveSingleIteration_AMGX()
     //AMGX_CHECK(AMGX_vector_download(m_amgx_x, x_host.data()));
     //m_deltaSolVector.updateFromHost(x_host.data());
     //std::cout << "Solution vector (host): " << x_host.transpose() << std::endl;
-    end = std::chrono::high_resolution_clock::now();
-    printf("Linear solve time: %f seconds\n", std::chrono::duration<double>(end - start).count());
+    //end = std::chrono::high_resolution_clock::now();
+    //printf("Linear solve time: %f seconds\n", std::chrono::duration<double>(end - start).count());
 
     m_updateNorm   = m_deltaSolVector.vectorView().norm();
     m_residualNorm = bdev.norm();
@@ -647,20 +650,20 @@ bool GPUSolver::solveSingleIteration_AMGX()
 
 void GPUSolver::solve()
 {
-    double absTol = 1e-10;
-    double relTol = 1e-9;
+    double absTol = 1e-11;
+    double relTol = 1e-11;
     int maxIterations = 50;
     m_numIterations = 0;
     m_status = working;
     std::cout << std::scientific;
     while (m_status == working)
     {
-        //if(!solveSingleIteration())
 #if ENABLE_AMGX
         if(!solveSingleIteration_AMGX())
         //if(!solveSingleIteration_Eigen())
 #else
         if(!solveSingleIteration_Eigen())
+        //if(!solveSingleIteration())
 #endif
         {
             m_status = bad_solution;
@@ -676,9 +679,12 @@ void GPUSolver::solve()
             m_status = interrupted;
         if (m_numIterations == 0)
         {
+            //std::cout << "Old fixed DoFs:\n";
+            //m_fixedDoFs.view().wholeView().print();
+
             m_fixedDoFs.view().wholeView() += m_assembler.allFixedDofs().view().wholeView();
 
-            //std::cout << "Initial fixed DoFs after first iteration:\n";
+            //std::cout << "New fixed DoFs:\n";
             //m_fixedDoFs.view().wholeView().print();
         }
             

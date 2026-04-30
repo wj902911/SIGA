@@ -72,7 +72,14 @@ public:
             printf("Control points:\n");
             m_controlPoints.print();
     }
-    
+
+    __device__
+    void printControlPoints() const
+    {
+            printf("Control points:\n");
+            m_controlPoints.print();
+    }
+
     __device__
     int numControlPoints() const { return m_controlPoints.rows(); }
 
@@ -134,11 +141,14 @@ public:
 		int dim = m_basis.dim();
 		int P = m_basis.knotsOrder(0); //assume same order in all directions
         int numActiveCPs = m_basis.numActiveControlPoints();
+        //printf("numActiveCPs: %d\n", numActiveCPs);
         for (int r = 0; r < numActiveCPs; r++)
 		{
             int tensorCoordData[3]; //max 3D
 			DeviceVectorView<int> tensorCoord(tensorCoordData, m_basis.dim());
 			getTensorCoordinate(dim, P+1, r, tensorCoordData);
+            //printf("tensor coord for r=%d:\n", r);
+            //tensorCoord.print();
 			for (int j = 0; j < dim; j++)
 			{
                 double dN_rj = 1.0;
@@ -151,8 +161,13 @@ public:
 					else
 						dN_rj *= basisValuesAndDers(tensorCoord[d], (numDerivatives + 1) * d);
 				}
+                //printf("dN_rj for j=%d: %f\n", j, dN_rj);
                 for (int i = 0; i < m_targetDim; i++)
-					result(i, j) += activeControlPointComponent(pt, r, i) * dN_rj;
+				{
+                    //printf("activeControlPointComponent: %f\n", activeControlPointComponent(pt, r, i));
+                    result(i, j) += activeControlPointComponent(pt, r, i) * dN_rj;
+                    //printf("result(%d, %d) after addition: %f\n", i, j, result(i, j));
+                }
 			}
 		}
     }

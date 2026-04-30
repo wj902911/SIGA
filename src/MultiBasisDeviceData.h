@@ -7,14 +7,17 @@
 class MultiBasisDeviceData
 {
 private:
-    int m_numPatches;
-    int m_domainDim;
+    int m_numPatches = 0;
+    int m_domainDim = 0;
     DeviceArray<int> m_intData;
     DeviceArray<double> m_knotsPools;
     DeviceNestedArray<int> m_multSumsOffsets;
     DeviceNestedArray<int> m_multSums;
 
 public:
+	__host__
+    MultiBasisDeviceData() = default;
+
     __host__
     MultiBasisDeviceData(int numPatches,
                          int domainDim,

@@ -32,9 +32,9 @@ void constructSolutionKernel(DeviceVectorView<double> solVector,
             result.setCoefficients(patch, point_idx, unk, fixedDoFs[unk][index]);
         }
     }
-    //result.print();
+    //result.printControlPoints();
 }
-
+#if 0
 __device__
 void tensorBasisDerivative(int r, int P1, int dim, int numDerivatives,
     DeviceMatrixView<double> valuesAndDers, 
@@ -56,7 +56,6 @@ void tensorBasisDerivative(int r, int P1, int dim, int numDerivatives,
         dN_r[dir] = dN_rj;
     }
 }
-
 __device__
 double tensorBasisValue(int r, int P1, int dim, int numDerivatives,
     DeviceMatrixView<double> valuesAndDers)
@@ -71,6 +70,7 @@ double tensorBasisValue(int r, int P1, int dim, int numDerivatives,
     }
     return N_r;
 }
+#endif
 
 #if 1
 __global__
@@ -140,8 +140,8 @@ void countEntrysKernel(int numElements, int numBlocksPerElement, int numActivePe
                 }
             }
         }
-        __syncthreads();
     }
+    __syncthreads();
     if (threadIdx.x == 0 && threadIdx.y == 0)
         atomicAdd(entryCount, sharedEntryCount);
 }
@@ -211,7 +211,7 @@ void computeCOOKernel(int totalNumElements, int* counter,
                       MultiPatchDeviceView multiPatch,
                       MultiGaussPointsDeviceView multiGaussPoints,
                       SparseSystemDeviceView system,
-                      DeviceNestedArrayView<double> eliminatedDofs,
+                      //DeviceNestedArrayView<double> eliminatedDofs,
                       DeviceVectorView<int> rows,
                       DeviceVectorView<int> cols)
 {
@@ -501,7 +501,7 @@ void assembleMatrixWithGPDataKernel(int numDerivatives, int EleStartId,
             //if(blockIdx.x == 334 && threadId == 32)
             //    printf("i_GP: %d, GPIdx: %d\n", i_GP, idx * N_D + i_GP);
             int GPIdx = idx * N_D + i_GP;
-            DeviceVectorView<double> pt(pts.data() + GPIdx * dim, dim);
+            //DeviceVectorView<double> pt(pts.data() + GPIdx * dim, dim);
             //if(blockIdx.x == 334 && threadId == 32)
             //    pt.print();
             //double wt = wts[GPIdx];
@@ -1898,7 +1898,8 @@ void printMultiBasisKernel(MultiBasisDeviceView multiBasis)
 GPUAssembler::GPUAssembler(const MultiPatch &multiPatch, 
                            const MultiBasis &multiBasis, 
                            const BoundaryConditions &bc, 
-                           const Eigen::VectorXd &bodyForce)
+                           const Eigen::VectorXd &bodyForce,
+                           bool baseInitial)
 :   m_multiPatch(multiPatch), m_multiBasis(multiBasis), 
     m_boundaryConditions(bc), m_bodyForce(bodyForce),
     m_multiGaussPoints(multiBasis), 
@@ -1913,93 +1914,91 @@ GPUAssembler::GPUAssembler(const MultiPatch &multiPatch,
     m_totalGPs = multiBasis.totalNumGPs();
     m_geoP1 = multiPatch.knotOrder() + 1;
     m_dispP1 = multiBasis.knotOrder() + 1;
-    std::vector<DofMapper> dofMappers_stdVec(targetDim);
-    multiBasis.getMappers(true, m_boundaryConditions, 
+    if (!baseInitial) {
+        std::vector<DofMapper> dofMappers_stdVec(targetDim);
+        multiBasis.getMappers(true, m_boundaryConditions, 
                           dofMappers_stdVec, true);
 #if 0
-    m_sparseSystemHost = SparseSystem(dofMappers_stdVec, 
+        m_sparseSystemHost = SparseSystem(dofMappers_stdVec, 
                               Eigen::VectorXi::Ones(targetDim));
 #else
-    SparseSystem sparseSystem(dofMappers_stdVec, 
-                              Eigen::VectorXi::Ones(targetDim));
+        SparseSystem sparseSystem(dofMappers_stdVec, Eigen::VectorXi::Ones(targetDim));
 #endif
 #ifdef STORE_MATRIX
-    m_sparseSystem.setMatrixRows(sparseSystem.matrix().rows());
-    m_sparseSystem.setMatrixCols(sparseSystem.matrix().cols());
+        m_sparseSystem.setMatrixRows(sparseSystem.matrix().rows());
+        m_sparseSystem.setMatrixCols(sparseSystem.matrix().cols());
 #else
-    m_sparseSystem.setMatrixRows(sparseSystem.matrixRows());
-    m_sparseSystem.setMatrixCols(sparseSystem.matrixCols());
+        m_sparseSystem.setMatrixRows(sparseSystem.matrixRows());
+        m_sparseSystem.setMatrixCols(sparseSystem.matrixCols());
 #endif
-    std::vector<int> intDataOffsets;
-    std::vector<int> intData;
+        std::vector<int> intDataOffsets;
+        std::vector<int> intData;
 #ifdef STORE_MATRIX
-    std::vector<double> doubleData;
-    sparseSystem.getDataVector(intDataOffsets, intData, doubleData);
+        std::vector<double> doubleData;
+        sparseSystem.getDataVector(intDataOffsets, intData, doubleData);
 #else
-    sparseSystem.getDataVector(intDataOffsets, intData);
+        sparseSystem.getDataVector(intDataOffsets, intData);
 #endif
-    m_sparseSystem.setIntDataOffsets(intDataOffsets);
-    m_sparseSystem.setIntData(intData);
+        m_sparseSystem.setIntDataOffsets(intDataOffsets);
+        m_sparseSystem.setIntData(intData);
 #ifdef STORE_MATRIX
-    m_sparseSystem.setDoubleData(doubleData);
+        m_sparseSystem.setDoubleData(doubleData);
 #else
-    //m_sparseSystem.resizeDoubleData(sparseSystem.matrixRows() * 
-    //                                sparseSystem.matrixCols() + 
-    //                                sparseSystem.matrixRows());
-    m_sparseSystem.resizeRHS(sparseSystem.matrixRows());
+        //m_sparseSystem.resizeDoubleData(sparseSystem.matrixRows() * 
+        //                                sparseSystem.matrixCols() + 
+        //                                sparseSystem.matrixRows());
+        m_sparseSystem.resizeRHS(sparseSystem.matrixRows());
 #endif
-    m_sparseSystem.setPermVectors(sparseSystem.permOld2New(), 
+        m_sparseSystem.setPermVectors(sparseSystem.permOld2New(), 
                                   sparseSystem.permNew2Old());
 
-    std::vector<Eigen::VectorXd> ddof(targetDim);
-    std::vector<Eigen::VectorXd> ddof_zero(targetDim);
-    for (int unk = 0; unk < targetDim; ++unk)
-    {
-        computeDirichletDofs(unk, dofMappers_stdVec, ddof, multiBasis);
-        ddof_zero[unk] = Eigen::VectorXd::Zero(ddof[unk].size());
-    }    
-    m_ddof.setData(ddof);
-    m_ddof_zero.setData(ddof_zero);
+        std::vector<Eigen::VectorXd> ddof(targetDim);
+        std::vector<Eigen::VectorXd> ddof_zero(targetDim);
+        for (int unk = 0; unk < targetDim; ++unk)
+        {
+            computeDirichletDofs(unk, dofMappers_stdVec, ddof, multiBasis);
+            ddof_zero[unk] = Eigen::VectorXd::Zero(ddof[unk].size());
+        }    
+        m_ddof.setData(ddof);
+        m_ddof_zero.setData(ddof_zero);
 
-    m_multiBasisHost.giveBasis(m_displacementHost, targetDim);
-    m_displacement = MultiPatchDeviceData(m_displacementHost);
+        m_multiBasisHost.giveBasis(m_displacementHost, targetDim);
+        m_displacement = MultiPatchDeviceData(m_displacementHost);
 
-    int* entryCountDevicePtr;
-    cudaError_t err = cudaMalloc((void**)&entryCountDevicePtr, sizeof(int));
-    assert(err == cudaSuccess && "cudaMalloc failed in GPUAssembler constructor during counting matrix entries");
-    err = cudaMemset(entryCountDevicePtr, 0, sizeof(int));
-    assert(err == cudaSuccess && "cudaMemset failed in GPUAssembler constructor during counting matrix entries");
+        int* entryCountDevicePtr;
+        cudaError_t err = cudaMalloc((void**)&entryCountDevicePtr, sizeof(int));
+        assert(err == cudaSuccess && "cudaMalloc failed in GPUAssembler constructor during counting matrix entries");
+        err = cudaMemset(entryCountDevicePtr, 0, sizeof(int));
+        assert(err == cudaSuccess && "cudaMemset failed in GPUAssembler constructor during counting matrix entries");
 #if 0
-    int totalGPs = m_multiBasisHost.totalNumGPs();
-    int minGrid, blockSize;
-    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, 
-                         countEntrysKernel, 0, totalGPs);
-    int gridSize = (totalGPs + blockSize - 1) / blockSize;
-    countEntrysKernel<<<gridSize, blockSize>>>(totalGPs,
-                                               m_displacement.deviceView(),
-                                               m_multiPatch.deviceView(),
-                                               m_multiGaussPoints.view(),
-                                               m_sparseSystem.deviceView(),
-                                               m_ddof.view(),
-                                               entryCountDevicePtr);
+        int totalGPs = m_multiBasisHost.totalNumGPs();
+        int minGrid, blockSize;
+        cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, 
+                             countEntrysKernel, 0, totalGPs);
+        int gridSize = (totalGPs + blockSize - 1) / blockSize;
+        countEntrysKernel<<<gridSize, blockSize>>>(totalGPs,
+                                                   m_displacement.deviceView(),
+                                                   m_multiPatch.deviceView(),
+                                                   m_multiGaussPoints.view(),
+                                                   m_sparseSystem.deviceView(),
+                                                   m_ddof.view(),
+                                                   entryCountDevicePtr);
 #else
-    int numElements = m_multiBasisHost.totalNumElements();
 #if 1
-    int N_D = m_multiBasisHost.numActive();
-    int numActivePerBlock = std::min(16, N_D);
-    int numBlocksPerElement = (N_D + numActivePerBlock - 1) / numActivePerBlock;
-    dim3 blockSize(numActivePerBlock, numActivePerBlock);
-    int gridSize = numElements * numBlocksPerElement * numBlocksPerElement;
+        int numActivePerBlock = std::min(16, m_N_D);
+        int numBlocksPerElement = (m_N_D + numActivePerBlock - 1) / numActivePerBlock;
+        dim3 blockSize(numActivePerBlock, numActivePerBlock);
+        int gridSize = m_numElements * numBlocksPerElement * numBlocksPerElement;
 #else
-    int minGrid, blockSize;
-    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, 
-                         countEntrysKernel, 0, numElements);
-    int gridSize = (numElements + blockSize - 1) / blockSize;
+        int minGrid, blockSize;
+        cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, 
+                             countEntrysKernel, 0, numElements);
+        int gridSize = (numElements + blockSize - 1) / blockSize;
 #endif
 #ifdef TIME_INITIALIZATION
-	auto start = std::chrono::high_resolution_clock::now();
+	    auto start = std::chrono::high_resolution_clock::now();
 #endif
-    countEntrysKernel<<<gridSize, blockSize>>>(numElements, numBlocksPerElement, 
+        countEntrysKernel<<<gridSize, blockSize>>>(m_numElements, numBlocksPerElement, 
                                                numActivePerBlock,
                                                m_displacement.deviceView(),
                                                m_multiPatch.deviceView(),
@@ -2008,71 +2007,69 @@ GPUAssembler::GPUAssembler(const MultiPatch &multiPatch,
                                                m_ddof.view(),
                                                entryCountDevicePtr);
 #endif
-    err = cudaDeviceSynchronize();
+        err = cudaDeviceSynchronize();
 #ifdef TIME_INITIALIZATION
-	auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> elapsed = end - start;
-    std::cout << "Counted matrix entries in " << elapsed.count() << " s." << std::endl;
+	    auto end = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> elapsed = end - start;
+        std::cout << "Counted matrix entries in " << elapsed.count() << " s." << std::endl;
 #endif
-    assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler constructor during counting matrix entries");
-    int entryCountHost;
-    err = cudaMemcpy(&entryCountHost, entryCountDevicePtr, sizeof(int), cudaMemcpyDeviceToHost);
-    assert(err == cudaSuccess && "cudaMemcpy failed in GPUAssembler constructor during counting matrix entries");
-    
+        assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler constructor during counting matrix entries");
+        int entryCountHost;
+        err = cudaMemcpy(&entryCountHost, entryCountDevicePtr, sizeof(int), cudaMemcpyDeviceToHost);
+        assert(err == cudaSuccess && "cudaMemcpy failed in GPUAssembler constructor during counting matrix entries");
+            
 
-    //m_sparseSystem.setNumMatrixEntries(entryCountHost);
-    //m_sparseSystem.resizeMatrixData(entryCountHost);
+        //m_sparseSystem.setNumMatrixEntries(entryCountHost);
+        //m_sparseSystem.resizeMatrixData(entryCountHost);
 
-    DeviceArray<int> cooRows(entryCountHost);
-    DeviceArray<int> cooCols(entryCountHost);
-    DeviceArray<double> cooValues(entryCountHost);
+        DeviceArray<int> cooRows(entryCountHost);
+        DeviceArray<int> cooCols(entryCountHost);
+        //DeviceArray<double> cooValues(entryCountHost);
 
-    err = cudaMemset(entryCountDevicePtr, 0, sizeof(int));
-    assert(err == cudaSuccess && "cudaMemset failed in GPUAssembler constructor during counting matrix entries");
+        err = cudaMemset(entryCountDevicePtr, 0, sizeof(int));
+        assert(err == cudaSuccess && "cudaMemset failed in GPUAssembler constructor during counting matrix entries");
 #ifdef TIME_INITIALIZATION
-    start = std::chrono::high_resolution_clock::now();
+        start = std::chrono::high_resolution_clock::now();
 #endif
-    computeCOOKernel<<<gridSize, blockSize>>>(numElements, entryCountDevicePtr,
+        computeCOOKernel<<<gridSize, blockSize>>>(m_numElements, entryCountDevicePtr,
                                 numBlocksPerElement, numActivePerBlock,
                                 m_displacement.deviceView(),
                                 m_multiPatch.deviceView(),
                                 m_multiGaussPoints.view(),
                                 m_sparseSystem.deviceView(),
-                                m_ddof.view(),
+                                //m_ddof.view(),
                                 cooRows.vectorView(),
                                 cooCols.vectorView());
 
-    err = cudaDeviceSynchronize();
+        err = cudaDeviceSynchronize();
 #ifdef TIME_INITIALIZATION
-	end = std::chrono::high_resolution_clock::now();
-    elapsed = end - start;
-    std::cout << "Constructed COO matrix in " << elapsed.count() << " s." << std::endl;
+	    end = std::chrono::high_resolution_clock::now();
+        elapsed = end - start;
+        std::cout << "Constructed COO matrix in " << elapsed.count() << " s." << std::endl;
 #endif
-    assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler constructor during COO construction");
+        assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler constructor during COO construction");
 
 #ifdef TIME_INITIALIZATION
-    start = std::chrono::high_resolution_clock::now();
+        start = std::chrono::high_resolution_clock::now();
 #endif
-    m_sparseSystem.setCSRMatrixFromCOO(sparseSystem.matrixRows(), 
+        m_sparseSystem.setCSRMatrixFromCOO(sparseSystem.matrixRows(), 
                                        sparseSystem.matrixCols(),
                                        cooRows.vectorView(), 
                                        cooCols.vectorView());
-    err = cudaDeviceSynchronize();
 #ifdef TIME_INITIALIZATION
-	end = std::chrono::high_resolution_clock::now();
-    elapsed = end - start;
-    std::cout << "Converted COO to CSR in " << elapsed.count() << " s." << std::endl;
+	    end = std::chrono::high_resolution_clock::now();
+        elapsed = end - start;
+        std::cout << "Converted COO to CSR in " << elapsed.count() << " s." << std::endl;
 #endif
-    assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler constructor during COO to CSR conversion");
 
-    //m_sparseSystem.csrMatrix().sparsePrint_host();
+        //m_sparseSystem.csrMatrix().sparsePrint_host();
 
-    err = cudaFree(entryCountDevicePtr);
-    assert(err == cudaSuccess && "cudaFree failed in GPUAssembler constructor during counting matrix entries");
+        err = cudaFree(entryCountDevicePtr);
+        assert(err == cudaSuccess && "cudaFree failed in GPUAssembler constructor during counting matrix entries");
 
-    m_options = defaultOptions();
+        m_options = defaultOptions();
 
-    int numDoublePerGP = /*m_domainDim // pts
+        int numDoublePerGP = /*m_domainDim // pts
                        + */m_domainDim * m_domainDim * 3 // geoJacobianInvs, Fs, Ss
                        + 3 // measures, weightForces, weightBodys
                        //+ m_geoP1 * (m_numDerivatives + 1) * m_domainDim // geoValuesAndDers
@@ -2080,61 +2077,63 @@ GPUAssembler::GPUAssembler(const MultiPatch &multiPatch,
                        //+ (m_geoP1 * (m_geoP1 + 4) + m_dispP1 * (m_dispP1 + 4)) * m_domainDim // working space
                        + m_dimTensor * m_dimTensor; // Cs
 
-    size_t bytesPerGP = numDoublePerGP * sizeof(double);
-    size_t totalBytes = bytesPerGP * m_totalGPs;
-    printf("Total bytes needed for GPData: %zu\n", totalBytes);
-    size_t freeMem = 0, totalMem = 0;
-    err = cudaMemGetInfo(&freeMem, &totalMem);
-    if (err != cudaSuccess)
-        std::cerr << "Error during cudaMemGetInfo: " << cudaGetErrorString(err) << std::endl;
-    double safetyFactor = 0.8;
-    size_t usableMem = static_cast<size_t>(freeMem * safetyFactor);
-    printf("Usable memory for GPData: %zu bytes\n", usableMem);
+        size_t bytesPerGP = numDoublePerGP * sizeof(double);
+        size_t totalBytes = bytesPerGP * m_totalGPs;
+        printf("Total bytes needed for GPData: %zu\n", totalBytes);
+        size_t freeMem = 0, totalMem = 0;
+        err = cudaMemGetInfo(&freeMem, &totalMem);
+        if (err != cudaSuccess)
+            std::cerr << "Error during cudaMemGetInfo: " << cudaGetErrorString(err) << std::endl;
+        double safetyFactor = 0.8;
+        size_t usableMem = static_cast<size_t>(freeMem * safetyFactor);
+        printf("Usable memory for GPData: %zu bytes\n", usableMem);
 #if 0
-    if (usableMem < totalBytes)
-        m_numBatches = (totalBytes + usableMem - 1) / usableMem;
-    else
-        m_numBatches = 1;
-    if (m_numBatches > std::numeric_limits<int>::max())
-        m_numBatches = std::numeric_limits<int>::max();
-    printf("Number of batches: %d\n", m_numBatches);
-    m_batchElements = (numElements + m_numBatches - 1) / m_numBatches;
-    m_batchSize = m_batchElements * m_N_D;
-    m_GPData.resize(numDoublePerGP * m_batchSize);
+        if (usableMem < totalBytes)
+            m_numBatches = (totalBytes + usableMem - 1) / usableMem;
+        else
+            m_numBatches = 1;
+        if (m_numBatches > std::numeric_limits<int>::max())
+            m_numBatches = std::numeric_limits<int>::max();
+        printf("Number of batches: %d\n", m_numBatches);
+        m_batchElements = (numElements + m_numBatches - 1) / m_numBatches;
+        m_batchSize = m_batchElements * m_N_D;
+        m_GPData.resize(numDoublePerGP * m_batchSize);
 #endif
-    m_GPData.resize(numDoublePerGP * m_totalGPs);
-    //printf("Size of GPData: %zu bytes\n", m_GPData.size() * sizeof(double));
+        m_GPData.resize(numDoublePerGP * m_totalGPs);
+        //printf("Size of GPData: %zu bytes\n", m_GPData.size() * sizeof(double));
 
-    m_GPTable.resize(m_totalGPs * m_domainDim);
-    m_wts.resize(m_totalGPs);
-    int minGrid, blockSize_GPTable;
-    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize_GPTable, 
-                         countEntrysKernel, 0, m_totalGPs);
-    gridSize = (m_totalGPs + blockSize_GPTable - 1) / blockSize_GPTable;
-    computeGPTableKernel<<<gridSize, blockSize_GPTable>>>(m_totalGPs, 
-        m_displacement.deviceView(), m_multiGaussPoints.view(),
-        m_GPTable.matrixView(m_domainDim, m_totalGPs), m_wts.vectorView());
-    err = cudaDeviceSynchronize();
-    assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler constructor during GP table computation");
+        m_GPTable.resize(m_totalGPs * m_domainDim);
+        m_wts.resize(m_totalGPs);
+        int minGrid, blockSize_GPTable;
+        cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize_GPTable, 
+                             countEntrysKernel, 0, m_totalGPs);
+        gridSize = (m_totalGPs + blockSize_GPTable - 1) / blockSize_GPTable;
+        computeGPTableKernel<<<gridSize, blockSize_GPTable>>>(m_totalGPs, 
+            m_displacement.deviceView(), m_multiGaussPoints.view(),
+            m_GPTable.matrixView(m_domainDim, m_totalGPs), m_wts.vectorView());
+        err = cudaDeviceSynchronize();
+        assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler constructor during GP table computation");
 
-    m_geoValuesAndDerss.resize(m_geoP1 * m_totalGPs * (m_numDerivatives + 1) * m_domainDim);
-    m_dispValuesAndDerss.resize(m_dispP1 * m_totalGPs * (m_numDerivatives + 1) * m_domainDim);
-    DeviceArray<double> geoWorkingSpaces(m_totalGPs * m_geoP1 * (m_geoP1 + 4) * m_domainDim);
-    DeviceArray<double> dispWorkingSpaces(m_totalGPs * m_dispP1 * (m_dispP1 + 4) * m_domainDim);
+        m_geoValuesAndDerss.resize(m_geoP1 * m_totalGPs * (m_numDerivatives + 1) * m_domainDim);
+        m_dispValuesAndDerss.resize(m_dispP1 * m_totalGPs * (m_numDerivatives + 1) * m_domainDim);
+        DeviceArray<double> geoWorkingSpaces(m_totalGPs * m_geoP1 * (m_geoP1 + 4) * m_domainDim);
+        DeviceArray<double> dispWorkingSpaces(m_totalGPs * m_dispP1 * (m_dispP1 + 4) * m_domainDim);
 
-    int blockSize_evaluateValAbdDers;
-    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize_evaluateValAbdDers, evaluateBasisValuesAndDerivativesAtGPsKernel, 0, m_totalGPs * m_domainDim);
-    gridSize = (m_totalGPs * m_domainDim + blockSize_evaluateValAbdDers - 1) / blockSize_evaluateValAbdDers;
-    evaluateBasisValuesAndDerivativesAtGPsKernel<<<gridSize, blockSize_evaluateValAbdDers>>>(
-        m_numDerivatives, m_totalGPs, 
-        m_domainDim, m_displacement.deviceView(),
-        m_multiPatch.deviceView(), 
-        m_GPTable.matrixView(m_domainDim, m_totalGPs), 
-        geoWorkingSpaces.vectorView(), dispWorkingSpaces.vectorView(),
-        m_geoValuesAndDerss.matrixView(m_geoP1, m_totalGPs * (m_numDerivatives + 1) * m_domainDim), 
-        m_dispValuesAndDerss.matrixView(m_dispP1, m_totalGPs * (m_numDerivatives + 1) * m_domainDim));
-    err = cudaDeviceSynchronize();
-    assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler constructor during basis values and derivatives evaluation at GPs");
+        int blockSize_evaluateValAbdDers;
+        cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize_evaluateValAbdDers, evaluateBasisValuesAndDerivativesAtGPsKernel, 0, m_totalGPs * m_domainDim);
+        gridSize = (m_totalGPs * m_domainDim + blockSize_evaluateValAbdDers - 1) / blockSize_evaluateValAbdDers;
+        evaluateBasisValuesAndDerivativesAtGPsKernel<<<gridSize, blockSize_evaluateValAbdDers>>>(
+            m_numDerivatives, m_totalGPs, 
+            m_domainDim, m_displacement.deviceView(),
+            m_multiPatch.deviceView(), 
+            m_GPTable.matrixView(m_domainDim, m_totalGPs), 
+            geoWorkingSpaces.vectorView(), dispWorkingSpaces.vectorView(),
+            m_geoValuesAndDerss.matrixView(m_geoP1, m_totalGPs * (m_numDerivatives + 1) * m_domainDim), 
+            m_dispValuesAndDerss.matrixView(m_dispP1, m_totalGPs * (m_numDerivatives + 1) * m_domainDim));
+        err = cudaDeviceSynchronize();
+        assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler constructor during basis values and derivatives evaluation at GPs");
+    }
+    
 }
 
 OptionList GPUAssembler::defaultOptions()
@@ -2144,6 +2143,9 @@ OptionList GPUAssembler::defaultOptions()
     opt.addReal("poissons_ratio", "Poisson's ratio", 0.3);
     return opt;
 }
+
+void GPUAssembler::setDefaultOptions(const OptionList &opt)
+{ m_options = opt; }
 
 void GPUAssembler::
 computeDirichletDofs(int unk_, 
@@ -2166,7 +2168,7 @@ computeDirichletDofs(int unk_,
         for (int i = 0; i != boundary.size(); ++i)
         {
             const int ii = dofMapper.bindex(boundary[i], k);
-            ddof[unk_][ii] = it->value(unk_);
+            ddof[unk_][ii] = it->value(unk_ > (m_targetDim - 1) ? unk_ - m_targetDim : unk_);
         }
     }
 
@@ -2179,7 +2181,7 @@ computeDirichletDofs(int unk_,
             continue;
         const int i = multiBasis.basis(k).corner(it -> corner());
         const int ii = dofMapper.bindex(i, k);
-        ddof[unk_][ii] = it->value(unk_);
+        ddof[unk_][ii] = it->value(unk_ > (m_targetDim - 1) ? unk_ - m_targetDim : unk_);
     }
 }
 
@@ -2230,6 +2232,23 @@ void GPUAssembler::constructSolution(const DeviceVectorView<double>& solVector,
                                                      m_multiBasis.deviceView(),
                                                      m_sparseSystem.deviceView(),
                                                      displacementFunction.displacementDeviceView(),
+                                                     CPSize);
+    cudaError_t err = cudaDeviceSynchronize();
+    assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler::constructSolution");
+}
+
+void GPUAssembler::constructDispSolution(const DeviceVectorView<double> &solVector, 
+                                     const DeviceNestedArrayView<double> &fixedDoFs) const
+{
+    int minGrid, blockSize;
+    int CPSize = m_displacementHost.CPSize();
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, 
+        &blockSize, constructSolutionKernel, 0, CPSize);
+    int gridSize = (CPSize + blockSize - 1) / blockSize;
+    constructSolutionKernel<<<gridSize, blockSize>>>(solVector, fixedDoFs,
+                                                     m_multiBasis.deviceView(),
+                                                     m_sparseSystem.deviceView(),
+                                                     m_displacement.deviceView(),
                                                      CPSize);
     cudaError_t err = cudaDeviceSynchronize();
     assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler::constructSolution");
@@ -2664,7 +2683,178 @@ void GPUAssembler::assemble(const DeviceVectorView<double> &solVector,
 #endif
 }
 
+void GPUAssembler::refreshFixedDofs()
+{
+    std::vector<DofMapper> dofMappers_stdVec(m_targetDim);
+    m_multiBasisHost.getMappers(true, m_boundaryConditions, dofMappers_stdVec, true);
+    std::vector<Eigen::VectorXd> ddof(m_targetDim);
+    for (int unk = 0; unk < m_targetDim; ++unk)
+        computeDirichletDofs(unk, dofMappers_stdVec, ddof, m_multiBasisHost);
+    m_ddof.setData(ddof);
+}
+
+void GPUAssembler::assembleMatrix(
+    const DeviceNestedArrayView<double>& fixedDofs_assemble,
+    const DeviceMatrixView<double>& geoJacobianInvs,
+    const DeviceVectorView<double>& measures,
+    const DeviceVectorView<double>& weightForces,
+    const DeviceVectorView<double>& weightBodys,
+    const DeviceMatrixView<double>& Fs,
+    const DeviceMatrixView<double>& Ss,
+    const DeviceMatrixView<double>& Cs)
+{
+    int blockSize = m_N_D;
+    int gridSize = m_N_D * m_N_D * m_numElements;
+
+    assembleMatrixWithGPDataKernel<<<gridSize, blockSize>>>(m_numDerivatives, 0,
+            m_numElements, m_N_D, 
+            m_displacement.deviceView(), m_sparseSystem.deviceView(), fixedDofs_assemble,
+            m_GPTable.matrixView(m_domainDim, m_totalGPs), geoJacobianInvs, measures, weightForces, weightBodys, m_dispValuesAndDerss.matrixView(m_dispP1, m_totalGPs * (m_numDerivatives + 1) * m_domainDim), 
+            Fs, Ss, Cs);
+    
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess)
+        std::cerr << "Error after kernel assembleMatrixWithGPDataKernel launch: " << cudaGetErrorString(err) << std::endl;  
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+        std::cerr << "CUDA error during device synchronization (assembleMatrixWithGPDataKernel): " << cudaGetErrorString(err) << std::endl;
+}
+
 void GPUAssembler::denseMatrix(DeviceMatrixView<double> denseMat) const
 {
     m_sparseSystem.csrMatrix().toDense(denseMat);
+}
+
+int GPUAssembler::numDispMatrixEntries() const
+{
+    int numActivePerBlock = std::min(16, m_N_D);
+    int numBlocksPerElement = (m_N_D + numActivePerBlock - 1) / numActivePerBlock;
+    dim3 blockSize(numActivePerBlock, numActivePerBlock);
+    int gridSize = m_numElements * numBlocksPerElement * numBlocksPerElement;
+
+    int* entryCountDevicePtr;
+    cudaError_t err = cudaMalloc((void**)&entryCountDevicePtr, sizeof(int));
+    assert(err == cudaSuccess && "cudaMalloc failed in GPUAssembler::numDispMatrixEntries");
+    err = cudaMemset(entryCountDevicePtr, 0, sizeof(int));
+    assert(err == cudaSuccess && "cudaMemset failed in GPUAssembler::numDispMatrixEntries");
+
+    countEntrysKernel<<<gridSize, blockSize>>>(m_numElements, numBlocksPerElement, 
+                                               numActivePerBlock,
+                                               m_displacement.deviceView(),
+                                               m_multiPatch.deviceView(),
+                                               m_multiGaussPoints.view(),
+                                               m_sparseSystem.deviceView(),
+                                               m_ddof.view(),
+                                               entryCountDevicePtr);
+
+    err = cudaGetLastError();
+    if (err != cudaSuccess)
+        std::cerr << "Error after kernel countEntrysKernel launch: " 
+                  << cudaGetErrorString(err) << std::endl;
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+        std::cerr << "CUDA error during device synchronization (countEntrysKernel): " 
+                  << cudaGetErrorString(err) << std::endl;
+
+    int entryCountHost;
+    err = cudaMemcpy(&entryCountHost, entryCountDevicePtr, sizeof(int), cudaMemcpyDeviceToHost);
+    assert(err == cudaSuccess && "cudaMemcpy failed in GPUAssembler::numDispMatrixEntries");
+
+    cudaFree(entryCountDevicePtr);
+
+    return entryCountHost;
+
+}
+
+void GPUAssembler::computeCOO(DeviceVectorView<int> cooRows, 
+                              DeviceVectorView<int> cooCols) const
+{
+    int numActivePerBlock = std::min(16, m_N_D);
+    int numBlocksPerElement = (m_N_D + numActivePerBlock - 1) / numActivePerBlock;
+    dim3 blockSize(numActivePerBlock, numActivePerBlock);
+    int gridSize = m_numElements * numBlocksPerElement * numBlocksPerElement;
+
+    int* entryCountDevicePtr;
+    cudaError_t err = cudaMalloc((void**)&entryCountDevicePtr, sizeof(int));
+    assert(err == cudaSuccess && "cudaMalloc failed in GPUAssembler::computeCOO");
+    err = cudaMemset(entryCountDevicePtr, 0, sizeof(int));
+    assert(err == cudaSuccess && "cudaMemset failed in GPUAssembler::computeCOO");
+
+    computeCOOKernel<<<gridSize, blockSize>>>(m_numElements, 
+                                entryCountDevicePtr,
+                                numBlocksPerElement, numActivePerBlock,
+                                m_displacement.deviceView(),
+                                m_multiPatch.deviceView(),
+                                m_multiGaussPoints.view(),
+                                m_sparseSystem.deviceView(),
+                                //m_ddof.view(),
+                                cooRows,
+                                cooCols);
+
+    err = cudaGetLastError();
+    if (err != cudaSuccess)
+        std::cerr << "Error after kernel computeCOOKernel launch: " 
+                  << cudaGetErrorString(err) << std::endl;
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+        std::cerr << "CUDA error during device synchronization (computeCOOKernel): " 
+                  << cudaGetErrorString(err) << std::endl;
+    
+    cudaFree(entryCountDevicePtr);
+}
+
+void GPUAssembler::computeGPTable()
+{
+    m_GPTable.resize(m_totalGPs * m_domainDim);
+    m_wts.resize(m_totalGPs);
+    int minGrid, blockSize_GPTable;
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize_GPTable, 
+                         countEntrysKernel, 0, m_totalGPs);
+    int gridSize = (m_totalGPs + blockSize_GPTable - 1) / blockSize_GPTable;
+    computeGPTableKernel<<<gridSize, blockSize_GPTable>>>(m_totalGPs, 
+        m_displacement.deviceView(), m_multiGaussPoints.view(),
+        m_GPTable.matrixView(m_domainDim, m_totalGPs), m_wts.vectorView());
+    cudaError_t err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+        std::cerr << "CUDA error during device synchronization (computeGPTableKernel): " 
+                  << cudaGetErrorString(err) << std::endl;
+}
+
+void GPUAssembler::evaluateBasisValuesAndDerivativesAtGPs()
+{
+    m_geoValuesAndDerss.resize(m_geoP1 * m_totalGPs * (m_numDerivatives + 1) * m_domainDim);
+    m_dispValuesAndDerss.resize(m_dispP1 * m_totalGPs * (m_numDerivatives + 1) * m_domainDim);
+    DeviceArray<double> geoWorkingSpaces(m_totalGPs * m_geoP1 * (m_geoP1 + 4) * m_domainDim);
+    DeviceArray<double> dispWorkingSpaces(m_totalGPs * m_dispP1 * (m_dispP1 + 4) * m_domainDim);
+
+    int minGrid, blockSize;
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, evaluateBasisValuesAndDerivativesAtGPsKernel, 0, m_totalGPs * m_domainDim);
+    int gridSize = (m_totalGPs * m_domainDim + blockSize - 1) / blockSize;
+    evaluateBasisValuesAndDerivativesAtGPsKernel<<<gridSize, blockSize>>>(
+            m_numDerivatives, m_totalGPs, 
+            m_domainDim, m_displacement.deviceView(),
+            m_multiPatch.deviceView(), 
+            m_GPTable.matrixView(m_domainDim, m_totalGPs), 
+            geoWorkingSpaces.vectorView(), dispWorkingSpaces.vectorView(),
+            m_geoValuesAndDerss.matrixView(m_geoP1, m_totalGPs * (m_numDerivatives + 1) * m_domainDim), 
+            m_dispValuesAndDerss.matrixView(m_dispP1, m_totalGPs * (m_numDerivatives + 1) * m_domainDim));
+    cudaError_t err = cudaDeviceSynchronize();
+    assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler constructor during basis values and derivatives evaluation at GPs");
+}
+
+void GPUAssembler::allocateGPData()
+{ m_GPData.resize(numDoublesPerGP() * m_totalGPs); }
+
+void GPUAssembler::setBasisPatches()
+{
+    m_multiBasisHost.giveBasis(m_displacementHost, m_targetDim);
+    m_displacement = MultiPatchDeviceData(m_displacementHost);
+}
+
+void GPUAssembler::getFixedDofsForAssemble(int numIter, DeviceNestedArrayView<double> &fixedDofs_assemble) const
+{
+    if (numIter != 0)
+        fixedDofs_assemble = m_ddof_zero.view();
+    else
+        fixedDofs_assemble = m_ddof.view();
 }

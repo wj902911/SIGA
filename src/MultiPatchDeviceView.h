@@ -166,6 +166,16 @@ public:
     }
 
     __device__
+    void printControlPoints() const
+    {
+        for (int p = 0; p < m_numPatches; p++)
+        {
+            printf("Patch %d:\n", p);
+            patch(p).printControlPoints();
+        }
+    }
+
+    __device__
     void printRawData() const
     {
         printf("MultiPatch raw data:\n");
@@ -243,6 +253,23 @@ public:
             point_idx_patch -= patch_points;
         }
         return point_idx_patch;
+    }
+
+    __device__
+    int threadPatch_CPBase(int idx, int& p) const
+    {
+        int point_idx = idx;
+        for (int i = 0; i < m_numPatches; i++)
+        {
+            int patch_points = numControlPoints(i);
+            if (point_idx < patch_points) 
+            {
+                p = i;
+                break;
+            }
+            point_idx -= patch_points;
+        }
+        return point_idx;
     }
 
     __device__

@@ -12,9 +12,9 @@ Patch::Patch(
     }
 }
 
-Patch::Patch(const TensorBsplineBasis &basis, int geoDim)
+Patch::Patch(const TensorBsplineBasis &basis, int targetDim)
     : m_basis(basis), 
-    m_controlPoints(Eigen::MatrixXd::Zero(basis.getNumControlPoints(), geoDim))
+    m_controlPoints(Eigen::MatrixXd::Zero(basis.getNumControlPoints(), targetDim))
 {
 }
 

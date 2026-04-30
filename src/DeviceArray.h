@@ -492,7 +492,7 @@ public:
         }
 
         m_offsets = std::move(offsets);
-        DeviceArray<T>::operator=(data);  // host->device copy (assuming your operator= does that)
+        DeviceArray<T>::operator=(data);  // host->device copy 
     }
 
     __host__

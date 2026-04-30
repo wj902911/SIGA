@@ -13,6 +13,8 @@ private:
     DeviceArray<double> m_doubleData; //m_gaussPointsPool, m_gaussWeightsPool
 public:
     __host__
+    MultiGaussPointsDeviceData() = default;
+    __host__
     MultiGaussPointsDeviceData(const std::vector<std::vector<int>>& numGPs)
     {
         m_dim = static_cast<int>(numGPs[0].size());
