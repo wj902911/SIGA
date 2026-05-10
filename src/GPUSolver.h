@@ -26,6 +26,10 @@ private:
     int m_numIterations = 0;
     DeviceNestedArray<double> m_fixedDoFs;
 
+    double m_absTol = 1e-10;
+    double m_relTol = 1e-10;
+    int m_maxIter = 100;
+
 #if ENABLE_AMGX
     bool m_amgx_initialized = false;
 
@@ -108,4 +112,12 @@ public:
     }
 
     bool isConverged() const { return m_status == converged; }  
+
+    void setTolerance(double absTol, double relTol)
+    {
+        m_absTol = absTol;
+        m_relTol = relTol;
+    }
+
+    void setMaxIterations(int maxIter) { m_maxIter = maxIter; }
 };

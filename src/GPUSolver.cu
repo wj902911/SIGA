@@ -257,6 +257,7 @@ bool GPUSolver::solveSingleIteration()
 
 bool GPUSolver::solveSingleIteration_Eigen()
 {
+    //m_solVector.vectorView().print();
     //auto start = std::chrono::high_resolution_clock::now();
     m_assembler.assemble(m_solVector.vectorView(), m_numIterations, m_fixedDoFs.view());
     //auto end = std::chrono::high_resolution_clock::now();
@@ -382,6 +383,11 @@ bool GPUSolver::solveSingleIteration_Eigen()
     using SpMat = Eigen::SparseMatrix<double, Eigen::RowMajor, int>;
     SpMat A = m_assembler.csrMatrix().toEigenCSR();
     Eigen::VectorXd b = m_assembler.hostRHS();
+
+    //std::cout << std::scientific << std::setprecision(12);
+    //std::cout << "Matrix:\n" << Eigen::MatrixXd(A) << std::endl;
+    //std::cout << "RHS:\n" << b << std::endl;
+    //std::cout << std::fixed << std::setprecision(6);
 
 #if 0
     if (m_numIterations == 0)
@@ -650,9 +656,9 @@ bool GPUSolver::solveSingleIteration_AMGX()
 
 void GPUSolver::solve()
 {
-    double absTol = 1e-11;
-    double relTol = 1e-11;
-    int maxIterations = 50;
+    //double absTol = 1e-10;
+    //double relTol = 1e-10;
+    //int maxIterations = 100;
     m_numIterations = 0;
     m_status = working;
     std::cout << std::scientific;
@@ -670,12 +676,12 @@ void GPUSolver::solve()
             break;
         }
         std::cout << status() << std::endl;
-        if (m_residualNorm < absTol || 
-            m_updateNorm < absTol || 
-            m_residualNorm/m_initResidualNorm < relTol ||
-            m_updateNorm/m_initUpdateNorm < relTol)
+        if (m_residualNorm < m_absTol || 
+            m_updateNorm < m_absTol || 
+            m_residualNorm/m_initResidualNorm < m_relTol ||
+            m_updateNorm/m_initUpdateNorm < m_relTol)
             m_status = converged;
-        else if (m_numIterations >= maxIterations)
+        else if (m_numIterations >= m_maxIter)
             m_status = interrupted;
         if (m_numIterations == 0)
         {

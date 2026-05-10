@@ -5,7 +5,7 @@
 #include <iostream>
 #include <cassert>
 #include <Eigen/Core>
-
+#include <iomanip>
 
 template <typename T>
 class DeviceMatrixView
@@ -71,7 +71,9 @@ public:
                                      m_rows * m_cols * sizeof(T), 
                                      cudaMemcpyDeviceToHost);
         assert(err == cudaSuccess && "cudaMemcpy failed in DeviceMatrixView::print");
+        std::cout << std::setprecision(12);
         std::cout << hostMat << std::endl;
+        std::cout << std::setprecision(6);
     #endif
     }
     

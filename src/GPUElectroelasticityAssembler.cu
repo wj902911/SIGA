@@ -477,6 +477,7 @@ void evaluateGPKernel(int numDerivatives, int totalNumGPs,
                       DeviceMatrixView<double> elecDisps,
                       DeviceMatrixView<double> As)
 {
+    //electricPotential.patch(0).print();
     for (int idx = blockIdx.x * blockDim.x + threadIdx.x; idx < totalNumGPs; idx += blockDim.x * gridDim.x) 
     {
         int dim = multiPatch.domainDim();
@@ -494,6 +495,7 @@ void evaluateGPKernel(int numDerivatives, int totalNumGPs,
 
         PatchDeviceView dispPatch = displacement.patch(patch_idx);
         PatchDeviceView elecPatch = electricPotential.patch(patch_idx);
+        //elecPatch.print();
         TensorBsplineBasisDeviceView dispBasis = displacement.basis(patch_idx);
         int P1 = dispBasis.knotsOrder(0) + 1;
         DeviceMatrixView<double> dispValuesAndDers(dispValuesAndDerss.data() + idx * P1 * (numDerivatives + 1) * dim, P1, (numDerivatives + 1) * dim);
@@ -523,8 +525,12 @@ void evaluateGPKernel(int numDerivatives, int totalNumGPs,
             elecJacobian.times(geoJacobianInv, electricFieldTrans);
             electricFieldTrans.transpose(electricField);
             electricField.times(-1.0);
+            //printf("geo JacobianInv at GP %d:\n", idx);
+            //geoJacobianInv.print();
+            //printf("electric jacobian at GP %d:\n", idx);
+            //elecJacobian.print();
         }
-        //printf("Electric field at GP %d in patch %d: ", idx, patch_idx);
+        //printf("Electric field at GP %d:\n", idx);
         //electricField.print();
         DeviceMatrixView<double> F(Fs.data() + idx * dim * dim, dim, dim);
         {
@@ -791,8 +797,9 @@ void assembleMatrixKernel(int numDerivatives, int EleStartId,
                     double stiffnessEntryData = 0.0;
                     DeviceMatrixView<double> stiffnessEntry(&stiffnessEntryData, 1, 1);
                     temp.times(physPGrad_j, stiffnessEntry);
-                    atomicAdd(&localMatrix(di, dim), - stiffnessEntryData);
-                    atomicAdd(&localMatrix(dim, di), - stiffnessEntryData);
+                    stiffnessEntryData *= - weightBody;
+                    atomicAdd(&localMatrix(di, dim), stiffnessEntryData);
+                    //atomicAdd(&localMatrix(dim, di), stiffnessEntryData);
                 }
                 //materialTangentTemp.print();
                 for (int dj = 0; dj < dim; dj++){
@@ -800,16 +807,32 @@ void assembleMatrixKernel(int numDerivatives, int EleStartId,
                     //if(blockIdx.x == 334 && threadId == 32)
                     //    printf("materialTangent: %f\n", materialTangent);
                     DeviceMatrixView<double> materialTangentMat(&materialTangent, 1, 1);
-                    {
-                        double B_j_djData[6] = {0.0}; //max 3D
-                        DeviceVectorView<double> B_j_dj(B_j_djData, dimTensor);
-                        setBSingleDim<double>(dj, B_j_dj, F, physGrad_j);
-                        materialTangentTemp.times(B_j_dj, materialTangentMat);
-                    }
+                    double B_j_djData[6] = {0.0}; //max 3D
+                    DeviceVectorView<double> B_j_dj(B_j_djData, dimTensor);
+                    setBSingleDim<double>(dj, B_j_dj, F, physGrad_j);
+                    materialTangentTemp.times(B_j_dj, materialTangentMat);
                     if (di == dj)
                         materialTangent += geometricTangent;
                     double stiffnessEntry = weightBody *materialTangent;
                     atomicAdd(&localMatrix(di, dj), stiffnessEntry);
+                    if (di == 0) {
+                        double tempData[6] = {0.0}; //max 3D
+                        DeviceMatrixView<double> temp(tempData, dimTensor, 1);
+                        //printf("dj = %d\n\n", dj);
+                        //physPGrad_i.print();
+                        //printf("\n");
+                        //A.print();
+                        //printf("\n");
+                        A.times(physPGrad_i, temp);
+                        //temp.print();
+                        //printf("\n");
+                        double mixStiffnessEntryData = 0.0;
+                        DeviceMatrixView<double> mixStiffnessEntry(&mixStiffnessEntryData, 1, 1);
+                        temp.transposeTime(B_j_dj, mixStiffnessEntry);
+                        //printf("%f\n\n", mixStiffnessEntryData);
+                        mixStiffnessEntryData *= - weightBody;
+                        atomicAdd(&localMatrix(dim, dj), mixStiffnessEntryData);
+                    }
                     //if(blockIdx.x == 334 && threadIdx.x == 32) {
                     //    localMatrix.print();
                     //    printf("di:%d, dj:%d, stiffnessEntry: %f\n", di, dj, stiffnessEntry);
@@ -1039,6 +1062,8 @@ void assembleRHSKernel(int numDerivatives, int EleStartId,
             DeviceMatrixView<double> dispValuesAndDers(dispValuesAndDerss.data() + GPIdx * P1 * (numDerivatives + 1) * dim, P1, (numDerivatives + 1) * dim);
             DeviceMatrixView<double> elecValuesAndDers(elecValuesAndDerss.data() + GPIdx * elecP1 * (numDerivatives + 1) * dim, elecP1, (numDerivatives + 1) * dim);
             DeviceVectorView<double> elecDisp(elecDisps.data() + GPIdx * dim, dim);
+            //printf("elecDisp at GP %d:\n", GPIdx);
+            //elecDisp.print();
             DeviceMatrixView<double> F(Fs.data() + GPIdx * dim * dim, dim, dim);
             DeviceMatrixView<double> S(Ss.data() + GPIdx * dim * dim, dim, dim);
             double dN_iData[3] = {0.0}; //max 3D
@@ -1054,6 +1079,8 @@ void assembleRHSKernel(int numDerivatives, int EleStartId,
             DeviceVectorView<double> physGrad_elec_i(physGrad_elec_iData, dim);
             geoJacobianInv.transposeTime(dN_i, physGrad_i);
             geoJacobianInv.transposeTime(dN_elec_i, physGrad_elec_i);
+            //printf("physGrad_elec_i at GP %d:\n", GPIdx);
+            //physGrad_elec_i.print();
             double SvecData[6] = {0.0}; //max 3D
             DeviceVectorView<double> Svec(SvecData, dimTensor);
             voigtStressView(Svec, S);
