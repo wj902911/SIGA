@@ -16,6 +16,29 @@ foreach(EXAMPLE_FILE ${EXAMPLE_FILES})
 
     target_link_libraries(${EXAMPLE_NAME} PRIVATE SIGA)
 
+    if (WIN32 AND (EIGEN_USE_MKL_ALL OR ENABLE_PARDISO))
+      file(GLOB SIGA_MKL_RUNTIME_DLLS
+        "${MKL_ROOT}/bin/mkl_*.2.dll"
+      )
+      if (OMP_DLL_DIR)
+        list(APPEND SIGA_MKL_RUNTIME_DLLS "${OMP_DLL_DIR}/libiomp5md.dll")
+      endif()
+
+      add_custom_command(TARGET ${EXAMPLE_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          $<TARGET_RUNTIME_DLLS:${EXAMPLE_NAME}>
+          $<TARGET_FILE_DIR:${EXAMPLE_NAME}>
+        COMMAND_EXPAND_LISTS
+      )
+
+      add_custom_command(TARGET ${EXAMPLE_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${SIGA_MKL_RUNTIME_DLLS}
+          $<TARGET_FILE_DIR:${EXAMPLE_NAME}>
+        COMMAND_EXPAND_LISTS
+      )
+    endif()
+
     if (ENABLE_AMGX)
       target_link_libraries(${EXAMPLE_NAME} PRIVATE AMGX::amgxsh)
     
@@ -27,6 +50,12 @@ foreach(EXAMPLE_FILE ${EXAMPLE_FILES})
             "$<TARGET_FILE_DIR:${EXAMPLE_NAME}>"
         )
       endif()
+
+      add_custom_command(TARGET ${EXAMPLE_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${PROJECT_SOURCE_DIR}/AMGX_config/SOLVER_CONFIG_INUSE.json"
+          "$<TARGET_FILE_DIR:${EXAMPLE_NAME}>/SOLVER_CONFIG_INUSE.json"
+      )
     endif()
 
 endforeach()

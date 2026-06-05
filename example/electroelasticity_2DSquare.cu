@@ -82,7 +82,7 @@ int main(int argc, char* argv[])
 
 	MultiPatch displacementHost;
     basisDisplacement.giveBasis(displacementHost, 2);
-	GPUDisplacementFunction displacementFunction(displacementHost);
+	GPUFunction displacementFunction(displacementHost);
 	postProcessor.addFunction("displacement", &displacementFunction);
 
 	postProcessor.outputToParaview(fileNameWithPath, 0, collection);

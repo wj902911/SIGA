@@ -5,6 +5,7 @@
 #include <string>
 #include <deque>
 #include <map>
+#include <Eigen/Core>
 #include "Boundary.h"
 
 struct condition_type
@@ -95,6 +96,11 @@ public:
 
     std::vector<double> values() const { return m_values; }
 
+    Eigen::VectorXd valuesVector() const
+    {
+        return Eigen::Map<const Eigen::VectorXd>(m_values.data(), static_cast<Eigen::Index>(m_values.size()));
+    }
+
 private:
     PatchSide m_ps;
     const std::vector<double>& m_values;
@@ -174,7 +180,16 @@ public:
 
     int unknown()  const { return m_unknown; }
 
+    int unkcomp()  const { return m_unkcomp; }
+
     double value(int i) const { return m_values[i]; }
+
+    std::vector<double> values() const { return m_values; }
+
+    Eigen::VectorXd valuesVector() const
+    {
+        return Eigen::Map<const Eigen::VectorXd>(m_values.data(), static_cast<Eigen::Index>(m_values.size()));
+    }
     
 private:
     PatchCorner m_pc;
@@ -182,6 +197,32 @@ private:
     std::string m_label;
     int m_unknown;
     int m_unkcomp;
+};
+
+struct boundary_coupling_condition
+{
+public:
+    boundary_coupling_condition(int p, BoxSide s, int offset, int unknown)
+        : m_ps(p, s),
+          m_offset(offset),
+          m_unknown(unknown)
+    {
+    }
+
+    const PatchSide& patchSide() const { return m_ps; }
+
+    const BoxSide& side() const { return m_ps.side(); }
+
+    int patchIndex() const { return m_ps.patchIndex(); }
+
+    int offset() const { return m_offset; }
+
+    int unknown() const { return m_unknown; }
+
+private:
+    PatchSide m_ps;
+    int m_offset;
+    int m_unknown;
 };
 
 class BoundaryConditions
@@ -201,12 +242,16 @@ public:
 
     typedef std::map<std::string, cornerContainer> cornerData;
 
+    typedef typename std::deque<boundary_coupling_condition> couplingContainer;
+    typedef typename couplingContainer::const_iterator const_coupling_iterator;
+
     BoundaryConditions() = default;
 
     void clear()
     {
         m_bc.clear();
         m_cc.clear();
+        m_couplings.clear();
     }
 
     const bcContainer & container(const std::string & label) const 
@@ -235,11 +280,21 @@ public:
         addCondition(p, BoxSide(s), t, v, unknown, unkcomp);
     }
 
-    void addCondition(int p, boundary::corner c, condition_type::type t, 
-                      const std::vector<double>& v, 
+    void addCondition(int p, boundary::corner c, condition_type::type t,
+                      const std::vector<double>& v,
                       int unknown = 0, int unkcomp = -1)
     {
         addCondition(p, BoxCorner(c), t, v, unknown, unkcomp);
+    }
+
+    void addBoundaryCoupling(int p, BoxSide s, int offset, int unknown = -1)
+    {
+        m_couplings.emplace_back(p, s, offset, unknown);
+    }
+
+    void addBoundaryCoupling(int p, boundary::side s, int offset, int unknown = -1)
+    {
+        addBoundaryCoupling(p, BoxSide(s), offset, unknown);
     }
 
     const_iterator dirichletBegin() const
@@ -292,7 +347,14 @@ public:
 
     const bcContainer & neumannSides()   const { return m_bc["Neumann"]; }
 
+    const_coupling_iterator couplingBegin() const
+    { return m_couplings.begin(); }
+
+    const_coupling_iterator couplingEnd() const
+    { return m_couplings.end(); }
+
 private:
     mutable bcData m_bc;
     mutable cornerData m_cc;
+    couplingContainer m_couplings;
 };

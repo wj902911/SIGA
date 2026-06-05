@@ -74,6 +74,7 @@ int main(int argc, char* argv[])
     assembler.options().setReal("youngs_modulus", YM);
 	assembler.options().setReal("poissons_ratio", PR);
     assembler.options().setReal("dielectric_permittivity", fsp * rp);
+    std::cout << "Initialized system with " << assembler.numDofs() << " dofs.\n";
 
     GPUSolver solver(assembler);
     solver.setTolerance(1e-10, 1e-10);
@@ -84,7 +85,7 @@ int main(int argc, char* argv[])
 
 	MultiPatch displacementHost;
     basisDisplacement.giveBasis(displacementHost, 2);
-	GPUDisplacementFunction displacementFunction(displacementHost);
+	GPUFunction displacementFunction(displacementHost);
 	postProcessor.addFunction("displacement", &displacementFunction);
 
 	postProcessor.outputToParaview(fileNameWithPath, 0, collection);
@@ -138,7 +139,7 @@ int main(int argc, char* argv[])
         
         assembler.constructSolution(solver.solutionView(), solver.allFixedDofsView(), displacementFunction);
         //if (step % 500 == 0 || endingSimulation)
-		    postProcessor.outputToParaview(fileNameWithPath, step, collection);
+		postProcessor.outputToParaview(fileNameWithPath, step, collection);
 
         #if 0
         int numIter = solver.numIterations();

@@ -14,10 +14,18 @@
 #include <Eigen/Sparse>
 #include <Eigen/SparseCholesky>
 #include <Eigen/Eigenvalues>
+#if ENABLE_PARDISO
+#include <Eigen/PardisoSupport>
+#endif
 
 #if ENABLE_SPECTRA
 #include "SpectraEigenSolver.h"
 #endif
+
+#include <algorithm>
+#include <cmath>
+#include <filesystem>
+#include <limits>
 
 #define CUSOLVER_CHECK(stat) do { \
     cusolverStatus_t _s = (stat); \
@@ -49,6 +57,83 @@
 
 #if ENABLE_AMGX
 #define AMGX_CHECK(call) AMGX_SAFE_CALL(call)
+
+namespace
+{
+const char* amgxSolveStatusName(AMGX_SOLVE_STATUS status)
+{
+    switch (status)
+    {
+    case AMGX_SOLVE_SUCCESS:
+        return "success";
+    case AMGX_SOLVE_FAILED:
+        return "failed";
+    case AMGX_SOLVE_DIVERGED:
+        return "diverged";
+    case AMGX_SOLVE_NOT_CONVERGED:
+        return "not converged";
+    default:
+        return "unknown";
+    }
+}
+} // namespace
+#endif
+
+namespace
+{
+const char* cpuDirectSolverName()
+{
+#if ENABLE_PARDISO
+    return "Eigen PARDISO LDLT";
+#else
+    return "Eigen SparseLU";
+#endif
+}
+} // namespace
+
+#if ENABLE_PARDISO
+bool GPUSolver::solveWithPardiso(const PardisoSpMat& A,
+                                 const Eigen::VectorXd& b,
+                                 Eigen::VectorXd& x,
+                                 const char* context)
+{
+    const bool matrixShapeChanged =
+        A.rows() != m_pardisoRows ||
+        A.cols() != m_pardisoCols ||
+        A.nonZeros() != m_pardisoNonZeros;
+
+    if (!m_pardisoPatternAnalyzed || matrixShapeChanged)
+    {
+        m_pardisoSolver.analyzePattern(A);
+        if (m_pardisoSolver.info() != Eigen::Success)
+        {
+            printf("Eigen PARDISO LDLT analyzePattern failed in %s\n", context);
+            m_pardisoPatternAnalyzed = false;
+            return false;
+        }
+
+        m_pardisoRows = static_cast<int>(A.rows());
+        m_pardisoCols = static_cast<int>(A.cols());
+        m_pardisoNonZeros = static_cast<int>(A.nonZeros());
+        m_pardisoPatternAnalyzed = true;
+    }
+
+    m_pardisoSolver.factorize(A);
+    if (m_pardisoSolver.info() != Eigen::Success)
+    {
+        printf("Eigen PARDISO LDLT factorization failed in %s\n", context);
+        return false;
+    }
+
+    x = m_pardisoSolver.solve(b);
+    if (m_pardisoSolver.info() != Eigen::Success)
+    {
+        printf("Eigen PARDISO LDLT solve failed in %s\n", context);
+        return false;
+    }
+
+    return true;
+}
 #endif
 
 struct BlockedToInterleavedND
@@ -404,18 +489,19 @@ bool GPUSolver::solveSingleIteration_Eigen()
     //std::cout << "Host matrix:\n" << Eigen::MatrixXd(A) << std::endl;
     //std::cout << "RHS:\n" << b << std::endl;
 
-    //Eigen::SimplicialLDLT<SpMat> solver;
-    //Eigen::SparseLU<SpMat> solver;
+    Eigen::VectorXd x;
+#if ENABLE_PARDISO
+    if (!solveWithPardiso(A, b, x, "Newton correction"))
+        return false;
+#else
     Eigen::SparseLU<SpMat> solver;
     solver.compute(A);
-
     if (solver.info() != Eigen::Success)
     {
         printf("Eigen solver failed\n");
         return false;
     }
-
-    Eigen::VectorXd x = solver.solve(b);
+    x = solver.solve(b);
     //std::cout << "test result:\n" << b - Eigen::MatrixXd(A) * x << std::endl;
 
     if (solver.info() != Eigen::Success)
@@ -423,8 +509,9 @@ bool GPUSolver::solveSingleIteration_Eigen()
         printf("Eigen solver failed\n");
         return false;
     }
+#endif
     //std::cout << std::endl;
-    //std::cout << "delta solution: " << x << std::endl;
+    //std::cout << "delta solution:\n" << x << std::endl;
     //auto t_cpu_end = std::chrono::high_resolution_clock::now();
     //printf("Eigen factor+solve time (CPU): %f seconds\n",
     //       std::chrono::duration<double>(t_cpu_end - t_cpu_start).count());
@@ -456,16 +543,16 @@ bool GPUSolver::solveSingleIteration_Eigen()
 #if ENABLE_AMGX
 bool GPUSolver::solveSingleIteration_AMGX()
 {
-    //auto start = std::chrono::high_resolution_clock::now();
+    auto start = std::chrono::high_resolution_clock::now();
     m_assembler.assemble(m_solVector.vectorView(), m_numIterations, m_fixedDoFs.view());
-    //auto end = std::chrono::high_resolution_clock::now();
-    //printf("Assemble time: %f seconds\n", std::chrono::duration<double>(end - start).count());
+    auto end = std::chrono::high_resolution_clock::now();
+    printf("Assemble time: %f seconds\n", std::chrono::duration<double>(end - start).count());
 
     //DeviceMatrixView<double> Adev = m_assembler.matrix();
     DeviceVectorView<double> bdev = m_assembler.rhs();
     const int n = static_cast<int>(bdev.size());
 
-	//start = std::chrono::high_resolution_clock::now();
+	start = std::chrono::high_resolution_clock::now();
 #if 0
     // --- COO from assembler (device pointers) ---
     auto cooR = m_assembler.rows();    // int, length nnz_coo
@@ -560,14 +647,16 @@ bool GPUSolver::solveSingleIteration_AMGX()
     }
     else
     {
-        // Same n/nnz: update only coefficients (faster)
+        // Same pattern: update coefficients and rebuild the AMG hierarchy.
+        // The tangent matrix changes every Newton iteration, so reusing an old
+        // hierarchy can make AMGX stall on larger strain-gradient systems.
         AMGX_CHECK(AMGX_matrix_replace_coefficients(
             m_amgx_A,
             n, nnz,
             m_assembler.csrMatrix().values().data(),
             nullptr));
-        // If your sparsity pattern changes even when nnz is same, DON'T use replace_coefficients.
-        // In that case call AMGX_matrix_upload_all + AMGX_solver_setup every time.
+
+        AMGX_CHECK(AMGX_solver_setup(m_amgx_solver, m_amgx_A));
     }
 
     //auto idx0   = thrust::make_counting_iterator<int>(0);
@@ -608,22 +697,56 @@ bool GPUSolver::solveSingleIteration_AMGX()
     {
         int iters = 0;
         AMGX_CHECK(AMGX_solver_get_iterations_number(m_amgx_solver, &iters));
-        printf("AMGX solve status=%d after %d iters\n", (int)st, iters);
-        return false;
-    }
-    Eigen::VectorXd xprime_host(n);
-    AMGX_CHECK(AMGX_vector_download(m_amgx_x, xprime_host.data()));
-#if 0
-    Eigen::VectorXd x_old(n);
-    for (int i = 0; i < n; ++i)
-    {
-        int comp = i / N;
-        int node = i - comp * N;
-        int j = node * d + comp;   // P(i)
-        x_old[i] = xprime_host[j];
-    }
+        printf("AMGX solve status=%d (%s) after %d iters\n",
+               (int)st, amgxSolveStatusName(st), iters);
+
+        using SpMat = Eigen::SparseMatrix<double, Eigen::RowMajor, int>;
+        SpMat A = m_assembler.csrMatrix().toEigenCSR();
+        Eigen::VectorXd b = m_assembler.hostRHS();
+
+        Eigen::VectorXd x;
+#if ENABLE_PARDISO
+        if (!solveWithPardiso(A, b, x, "AMGX fallback Newton correction"))
+            return false;
+#else
+        Eigen::SparseLU<SpMat> fallbackSolver;
+        fallbackSolver.compute(A);
+        if (fallbackSolver.info() != Eigen::Success)
+        {
+            printf("%s fallback solver factorization failed after AMGX non-convergence\n",
+                   cpuDirectSolverName());
+            return false;
+        }
+
+        x = fallbackSolver.solve(b);
+        if (fallbackSolver.info() != Eigen::Success)
+        {
+            printf("%s fallback solver solve failed after AMGX non-convergence\n",
+                   cpuDirectSolverName());
+            return false;
+        }
 #endif
-    m_deltaSolVector.updateFromHost(xprime_host.data());
+
+        CHECK_CUDA(cudaMemcpy(m_deltaSolVector.data(), x.data(),
+                              n * sizeof(double), cudaMemcpyHostToDevice));
+        printf("Used %s fallback for this Newton correction\n", cpuDirectSolverName());
+    }
+    else
+    {
+        Eigen::VectorXd xprime_host(n);
+        AMGX_CHECK(AMGX_vector_download(m_amgx_x, xprime_host.data()));
+    #if 0
+        Eigen::VectorXd x_old(n);
+        for (int i = 0; i < n; ++i)
+        {
+            int comp = i / N;
+            int node = i - comp * N;
+            int j = node * d + comp;   // P(i)
+            x_old[i] = xprime_host[j];
+        }
+    #endif
+        m_deltaSolVector.updateFromHost(xprime_host.data());
+    }
 
     //Eigen::VectorXd x_host(m_deltaSolVector.size());
     //m_deltaSolVector.copyToHost(x_host.data());
@@ -631,8 +754,8 @@ bool GPUSolver::solveSingleIteration_AMGX()
     //AMGX_CHECK(AMGX_vector_download(m_amgx_x, x_host.data()));
     //m_deltaSolVector.updateFromHost(x_host.data());
     //std::cout << "Solution vector (host): " << x_host.transpose() << std::endl;
-    //end = std::chrono::high_resolution_clock::now();
-    //printf("Linear solve time: %f seconds\n", std::chrono::duration<double>(end - start).count());
+    end = std::chrono::high_resolution_clock::now();
+    printf("Linear solve time: %f seconds\n", std::chrono::duration<double>(end - start).count());
 
     m_updateNorm   = m_deltaSolVector.vectorView().norm();
     m_residualNorm = bdev.norm();
@@ -661,7 +784,7 @@ void GPUSolver::solve()
     //int maxIterations = 100;
     m_numIterations = 0;
     m_status = working;
-    std::cout << std::scientific;
+    //std::cout << std::scientific;
     while (m_status == working)
     {
 #if ENABLE_AMGX
@@ -700,8 +823,253 @@ void GPUSolver::solve()
     std::cout << status() << std::endl;
 }
 
+double GPUSolver::smallestEigenValue()
+{
+    Eigen::VectorXd eigenvector;
+    return smallestEigenValue(eigenvector);
+}
+
+double GPUSolver::smallestEigenValue(Eigen::VectorXd& eigenvector)
+{
+    //m_assembler.assemble(m_solVector.vectorView(), m_numIterations, m_fixedDoFs.view());
+
+    double smallestEigenvalue = 0.0;
+    eigenvector.resize(0);
+#if ENABLE_AMGX
+    using SpMat = Eigen::SparseMatrix<double, Eigen::RowMajor, int>;
+
+    const int n = m_assembler.csrMatrix().numRows();
+    const int nnz = m_assembler.csrMatrix().numNonZeros();
+    if (n <= 0 || n != m_assembler.csrMatrix().numCols())
+        return smallestEigenvalue;
+
+    if (m_amgx_n != n || m_amgx_nnz != nnz)
+    {
+        AMGX_CHECK(AMGX_matrix_upload_all(
+            m_amgx_A,
+            n, nnz,
+            1, 1,
+            m_assembler.csrMatrix().rowPtr().data(),
+            m_assembler.csrMatrix().colInd().data(),
+            m_assembler.csrMatrix().values().data(),
+            nullptr));
+        AMGX_CHECK(AMGX_solver_setup(m_amgx_solver, m_amgx_A));
+        m_amgx_n = n;
+        m_amgx_nnz = nnz;
+        m_cachedSmallestEigenvector.resize(0);
+    }
+    else
+    {
+        AMGX_CHECK(AMGX_matrix_replace_coefficients(
+            m_amgx_A,
+            n, nnz,
+            m_assembler.csrMatrix().values().data(),
+            nullptr));
+        AMGX_CHECK(AMGX_solver_setup(m_amgx_solver, m_amgx_A));
+    }
+
+    Eigen::VectorXd x;
+    const bool hasCachedEigenvector = (m_cachedSmallestEigenvector.size() == n);
+    if (hasCachedEigenvector)
+        x = m_cachedSmallestEigenvector;
+    else
+    {
+        x.resize(n);
+        for (int i = 0; i < n; ++i)
+            x[i] = std::sin(0.37 * static_cast<double>(i + 1)) +
+                   0.5 * std::cos(0.11 * static_cast<double>(i + 1));
+    }
+    x.normalize();
+
+    DeviceArray<double> rhsDev(n);
+    DeviceArray<double> solDev(n);
+    Eigen::VectorXd y(n);
+    SpMat fallbackMatrix;
+#if ENABLE_PARDISO
+    bool fallbackPatternReady = false;
+#else
+    Eigen::SparseLU<SpMat> fallbackSolver;
+#endif
+    bool useFallbackSolver = false;
+
+    const int maxOuterIterations = hasCachedEigenvector ? 8 : 20;
+    constexpr double tolerance = 1e-6;
+    double previousEigenvalue = hasCachedEigenvector
+        ? m_cachedSmallestEigenvalue
+        : std::numeric_limits<double>::infinity();
+
+    for (int outer = 0; outer < maxOuterIterations; ++outer)
+    {
+        if (!useFallbackSolver)
+        {
+            rhsDev.updateFromHost(x.data());
+            solDev.setZero();
+
+            AMGX_CHECK(AMGX_vector_upload(m_amgx_b, n, 1, rhsDev.data()));
+            AMGX_CHECK(AMGX_vector_upload(m_amgx_x, n, 1, solDev.data()));
+            AMGX_CHECK(AMGX_solver_solve(m_amgx_solver, m_amgx_b, m_amgx_x));
+
+            AMGX_SOLVE_STATUS status = AMGX_SOLVE_FAILED;
+            AMGX_CHECK(AMGX_solver_get_status(m_amgx_solver, &status));
+            if (status == AMGX_SOLVE_SUCCESS)
+            {
+                AMGX_CHECK(AMGX_vector_download(m_amgx_x, y.data()));
+            }
+            else
+            {
+                int iters = 0;
+                AMGX_CHECK(AMGX_solver_get_iterations_number(m_amgx_solver, &iters));
+                printf("AMGX eigen inverse iteration solve status=%d (%s) after %d iters\n",
+                       (int)status, amgxSolveStatusName(status), iters);
+
+                fallbackMatrix = m_assembler.csrMatrix().toEigenCSR();
+#if ENABLE_PARDISO
+                fallbackPatternReady = true;
+                useFallbackSolver = true;
+                printf("Using %s fallback for inverse iteration\n", cpuDirectSolverName());
+#else
+                fallbackSolver.compute(fallbackMatrix);
+                if (fallbackSolver.info() != Eigen::Success)
+                {
+                    printf("%s fallback factorization failed in inverse iteration\n",
+                           cpuDirectSolverName());
+                    break;
+                }
+                useFallbackSolver = true;
+                printf("Using %s fallback for inverse iteration\n", cpuDirectSolverName());
+#endif
+            }
+        }
+
+        if (useFallbackSolver)
+        {
+#if ENABLE_PARDISO
+            if (!fallbackPatternReady ||
+                !solveWithPardiso(fallbackMatrix, x, y, "AMGX fallback inverse iteration"))
+                break;
+#else
+            y = fallbackSolver.solve(x);
+            if (fallbackSolver.info() != Eigen::Success)
+            {
+                printf("%s fallback solve failed in inverse iteration\n", cpuDirectSolverName());
+                break;
+            }
+#endif
+        }
+
+        const double yNorm = y.norm();
+        if (yNorm <= 0.0 || !std::isfinite(yNorm))
+            break;
+
+        const double inverseEigenvalue = x.dot(y);
+        if (std::abs(inverseEigenvalue) > 0.0)
+            smallestEigenvalue = 1.0 / inverseEigenvalue;
+
+        x = y / yNorm;
+
+        const double eigenvalueDelta = std::abs(smallestEigenvalue - previousEigenvalue);
+        if (eigenvalueDelta < tolerance * (std::max)(1.0, std::abs(smallestEigenvalue)))
+            break;
+
+        previousEigenvalue = smallestEigenvalue;
+    }
+
+    const SpMat A = useFallbackSolver ? fallbackMatrix : m_assembler.csrMatrix().toEigenCSR();
+    smallestEigenvalue = x.dot(A * x);
+    m_cachedSmallestEigenvector = x;
+    m_cachedSmallestEigenvalue = smallestEigenvalue;
+    eigenvector = x;
+#else
+    using SpMat = Eigen::SparseMatrix<double, Eigen::RowMajor, int>;
+
+    const SpMat A = m_assembler.csrMatrix().toEigenCSR();
+    const int n = A.rows();
+    if (n <= 0 || n != A.cols())
+        return smallestEigenvalue;
+
+#if !ENABLE_PARDISO
+    Eigen::SparseLU<SpMat> inverseIterationSolver;
+    inverseIterationSolver.compute(A);
+    if (inverseIterationSolver.info() != Eigen::Success)
+    {
+        printf("%s factorization failed in inverse iteration\n", cpuDirectSolverName());
+        return smallestEigenvalue;
+    }
+#endif
+
+    Eigen::VectorXd x(n);
+    for (int i = 0; i < n; ++i)
+        x[i] = std::sin(0.37 * static_cast<double>(i + 1)) +
+               0.5 * std::cos(0.11 * static_cast<double>(i + 1));
+    x.normalize();
+
+    constexpr int maxOuterIterations = 20;
+    constexpr double tolerance = 1e-6;
+    double previousEigenvalue = std::numeric_limits<double>::infinity();
+
+    for (int outer = 0; outer < maxOuterIterations; ++outer)
+    {
+#if ENABLE_PARDISO
+        Eigen::VectorXd y;
+        if (!solveWithPardiso(A, x, y, "inverse iteration"))
+            break;
+#else
+        Eigen::VectorXd y = inverseIterationSolver.solve(x);
+        if (inverseIterationSolver.info() != Eigen::Success)
+        {
+            printf("%s solve failed in inverse iteration\n", cpuDirectSolverName());
+            break;
+        }
+#endif
+
+        const double yNorm = y.norm();
+        if (yNorm <= 0.0 || !std::isfinite(yNorm))
+            break;
+
+        const double inverseEigenvalue = x.dot(y);
+        if (std::abs(inverseEigenvalue) > 0.0)
+            smallestEigenvalue = 1.0 / inverseEigenvalue;
+
+        x = y / yNorm;
+
+        const double eigenvalueDelta = std::abs(smallestEigenvalue - previousEigenvalue);
+        if (eigenvalueDelta < tolerance * (std::max)(1.0, std::abs(smallestEigenvalue)))
+            break;
+
+        previousEigenvalue = smallestEigenvalue;
+    }
+
+    smallestEigenvalue = x.dot(A * x);
+    eigenvector = x;
+#endif
+    return smallestEigenvalue;
+}
+
+double GPUSolver::stability()
+{
+    //m_assembler.assemble(m_solVector.vectorView(), m_numIterations, m_fixedDoFs.view());
+
+    using RowMajorSpMat = Eigen::SparseMatrix<double, Eigen::RowMajor, int>;
+    using ColMajorSpMat = Eigen::SparseMatrix<double, Eigen::ColMajor, int>;
+
+    RowMajorSpMat hostCSR = m_assembler.csrMatrix().toEigenCSR();
+    ColMajorSpMat hostCSC = hostCSR;
+
+    Eigen::SimplicialLDLT<ColMajorSpMat> solver;
+    solver.compute(hostCSC);
+
+    if (solver.info() != Eigen::Success)
+    {
+        printf("Eigen SimplicialLDLT failed while computing stability\n");
+        return -std::numeric_limits<double>::infinity();
+    }
+
+    return solver.vectorD().minCoeff();
+}
+
 void GPUSolver::eigenvalues_symm_dense(DeviceMatrixView<double> matrix, 
-                                       DeviceVectorView<double> eigenvalues)
+                                       DeviceVectorView<double> eigenvalues,
+                                       bool computeEigenvectors)
 {
     int n = matrix.rows();
 
@@ -713,7 +1081,9 @@ void GPUSolver::eigenvalues_symm_dense(DeviceMatrixView<double> matrix,
     size_t work_dev_bytes = 0;
     size_t work_host_bytes = 0;
 
-    const cusolverEigMode_t jobz = CUSOLVER_EIG_MODE_NOVECTOR;
+    const cusolverEigMode_t jobz = computeEigenvectors
+        ? CUSOLVER_EIG_MODE_VECTOR
+        : CUSOLVER_EIG_MODE_NOVECTOR;
     const cublasFillMode_t uplo = CUBLAS_FILL_MODE_UPPER;
 
     CUSOLVER_CHECK(cusolverDnXsyevd_bufferSize(
@@ -861,9 +1231,22 @@ void GPUSolver::initAMGXOnce()
 #endif
         ;
     //AMGX_config_handle config;
-    AMGX_CHECK(AMGX_config_create_from_file(&m_amgx_cfg, "./SOLVER_CONFIG_INUSE.json"));
-
-    //AMGX_CHECK(AMGX_config_create(&m_amgx_cfg, cfg_str));
+    const std::filesystem::path configPaths[] = {
+        "./SOLVER_CONFIG_INUSE.json",
+        "./AMGX_config/SOLVER_CONFIG_INUSE.json",
+        "../AMGX_config/SOLVER_CONFIG_INUSE.json",
+        "../../AMGX_config/SOLVER_CONFIG_INUSE.json"
+    };
+    for (const auto& path : configPaths)
+    {
+        if (std::filesystem::exists(path))
+        {
+            AMGX_CHECK(AMGX_config_create_from_file(&m_amgx_cfg, path.string().c_str()));
+            break;
+        }
+    }
+    if (!m_amgx_cfg)
+        AMGX_CHECK(AMGX_config_create(&m_amgx_cfg, cfg_str));
     AMGX_CHECK(AMGX_resources_create_simple(&m_amgx_rsrc, m_amgx_cfg))
 
     AMGX_CHECK(AMGX_matrix_create(&m_amgx_A, m_amgx_rsrc, m_amgx_mode));

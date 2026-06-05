@@ -75,7 +75,15 @@ if (ENABLE_AMGX)
 endif()
 
 option(EIGEN_USE_MKL_ALL "Use MKL for all Eigen operations" OFF)
-if (EIGEN_USE_MKL_ALL)
+option(ENABLE_PARDISO "Use Intel oneMKL PARDISO for Eigen sparse direct solves" OFF)
+
+if (ENABLE_PARDISO)
+  # SIGA currently stores sparse indices as int, so use MKL's LP64 interface.
+  set(MKL_INTERFACE lp64 CACHE STRING "Intel MKL interface layer" FORCE)
+  set(MKL_INTERFACE_FULL intel_lp64 CACHE STRING "Intel MKL full interface layer" FORCE)
+endif()
+
+if (EIGEN_USE_MKL_ALL OR ENABLE_PARDISO)
   find_package(MKL CONFIG REQUIRED PATHS $ENV{MKLROOT})
 #  target_link_libraries(Eigen3 INTERFACE MKL::MKL)
 endif()

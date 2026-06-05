@@ -1,5 +1,40 @@
 #include "GPUFunction.h"
 
+#include <cassert>
+#include <vector>
+
+GPUFunction::GPUFunction(const MultiPatch &multiPatchHost)
+    : m_multiPatchHost(multiPatchHost), m_multiPatchDeviceData(multiPatchHost)
+{
+    //GPUFunctionPrintKernel<<<1, 1>>>(m_multiPatchDeviceView);
+    //cudaDeviceSynchronize();
+}
+
+Eigen::MatrixXd GPUFunction::eval(int patch, const Eigen::MatrixXd &u) const
+{
+    const int rows = static_cast<int>(u.rows());
+    const int numPoints = static_cast<int>(u.cols());
+    const int patches = numPatches();
+
+    assert(rows == domainDim() && "Input point dimension does not match function domain dimension");
+    assert(patches > 0 && "Cannot evaluate a GPUFunction with no patches");
+    assert(patch >= 0 && patch < patches && "Patch index out of bounds");
+
+    std::vector<int> numPointsPerPatch(patches, 0);
+    numPointsPerPatch[patch] = numPoints;
+    DeviceArray<double> gridPointsDeviceData(u);
+    DeviceArray<int> numPointsPerPatchDeviceData(numPointsPerPatch);
+    DeviceArray<double> valuesDeviceData(targetDim() * numPoints);
+
+    eval_into(gridPointsDeviceData.matrixView(rows, numPoints),
+              numPointsPerPatchDeviceData.vectorView(),
+              valuesDeviceData.matrixView(targetDim(), numPoints));
+
+    Eigen::MatrixXd values(targetDim(), numPoints);
+    valuesDeviceData.copyToHost(values.data());
+    return values;
+}
+
 __global__
 void eval_into_Kernel_displacement(
     int numPoints,
@@ -31,7 +66,7 @@ void eval_into_Kernel_displacement(
         DeviceVectorView<double> gridPoint(gridPointData, displacement.domainDim());
         for (int d = 0; d < displacement.domainDim(); d++)
             gridPoint[d] = gridPoints(d, idx);
-        double valueData[3] = {0}; // Assuming max dimension is 3
+        double valueData[9] = {0}; // Supports vector fields and full 3D tensors
         DeviceVectorView<double> value(valueData, displacement.targetDim());
 
         //printf("Thread %d evaluating at point:\n", idx);
@@ -60,7 +95,7 @@ void eval_into_Kernel_displacement_blockPerPoint(
         //printf("Kernel thread %d started\n", bidx);
         //displacement.print();
         __shared__ int threadPatch, /*numThreadsPerBlock,*/ blockCoord, idx;
-        __shared__ double gridPointData[3], valueData[3]; // Assuming max dimension is 3
+        __shared__ double gridPointData[3], valueData[9]; // Supports vector fields and full 3D tensors
         DeviceVectorView<double> gridPoint(gridPointData, displacement.domainDim());
         DeviceVectorView<double> value(valueData, displacement.targetDim());
         int threadId = threadIdx.x;
@@ -86,7 +121,7 @@ void eval_into_Kernel_displacement_blockPerPoint(
         }
         for (int d = threadId; d < displacement.domainDim(); d += blockDim.x)
             gridPoint[d] = gridPoints(d, idx);
-        for (int d = threadId; d < displacement.domainDim(); d += blockDim.x)
+        for (int d = threadId; d < displacement.targetDim(); d += blockDim.x)
             value[d] = 0.0;
         __syncthreads();
         TensorBsplineBasisDeviceView basis = displacement.basis(threadPatch);
@@ -137,30 +172,23 @@ void GPUFunctionPrintKernel(const MultiPatchDeviceView& displacement)
 }
 #endif
 
-GPUDisplacementFunction::GPUDisplacementFunction(const MultiPatch &displacementHost)
-    : m_displacementHost(displacementHost), m_displacementDeviceData(displacementHost)
-{
-    //GPUFunctionPrintKernel<<<1, 1>>>(m_displacementDeviceView);
-    //cudaDeviceSynchronize();
-}
-
-void GPUDisplacementFunction::eval_into(DeviceMatrixView<double> gridPoints,
-                                        DeviceVectorView<int> numPointsPerPatch,
-                                        DeviceMatrixView<double> values) const
+void GPUFunction::eval_into(DeviceMatrixView<double> gridPoints,
+                            DeviceVectorView<int> numPointsPerPatch,
+                            DeviceMatrixView<double> values) const
 {
     int numPoints = gridPoints.cols();
     cudaError_t err;
-    int N_D = m_displacementHost.numActive();
+    int N_D = m_multiPatchHost.numActive();
     int blockSize = std::min(256, N_D);
     int numBlocksPerPoint = (N_D + blockSize - 1) / blockSize;
     int gridSize = numPoints * numBlocksPerPoint;
-    int p1 = m_displacementHost.knotOrder() + 1;
-    int dim = m_displacementHost.getBasisDim();
+    int p1 = m_multiPatchHost.knotOrder() + 1;
+    int dim = m_multiPatchHost.getBasisDim();
     //int numDouble = p1 * dim;
     int numDouble = p1 * dim + (p1 * p1 + 4 * p1) * dim;
     size_t shmemBytes = numDouble * sizeof(double);
     eval_into_Kernel_displacement_blockPerPoint<<<gridSize, blockSize, shmemBytes>>>(numPoints, numBlocksPerPoint, 
-        blockSize, m_displacementDeviceData.deviceView(), numPointsPerPatch, gridPoints, values);
+        blockSize, m_multiPatchDeviceData.deviceView(), numPointsPerPatch, gridPoints, values);
     err = cudaGetLastError();
     if (err != cudaSuccess)
     {
@@ -194,7 +222,7 @@ void GPUDisplacementFunction::eval_into(DeviceMatrixView<double> gridPoints,
         eval_into_Kernel_displacement, 0, numPoints);
     gridSize = (numPoints + blockSize - 1) / blockSize;
     eval_into_Kernel_displacement<<<gridSize, blockSize>>>(numPoints,
-        m_displacementDeviceData.deviceView(), numPointsPerPatch, gridPoints, values);
+        m_multiPatchDeviceData.deviceView(), numPointsPerPatch, gridPoints, values);
     err = cudaGetLastError();
     if (err != cudaSuccess)
     {

@@ -1,42 +1,31 @@
 #pragma once
 
 #include <MultiPatchDeviceData.h>
+#include <Eigen/Core>
 
 class GPUFunction
 {
-public:
-    virtual void eval_into(DeviceMatrixView<double> gridPoints,
-                           DeviceVectorView<int> numPointsPerPatch,
-                           DeviceMatrixView<double> values) const = 0;
-};
-
-class GPUDisplacementFunction : public GPUFunction
-{
 private:
-    const MultiPatch &m_displacementHost;
-    MultiPatchDeviceData m_displacementDeviceData;
-    //const MultiPatchDeviceView &m_displacementDeviceView;
+    const MultiPatch &m_multiPatchHost;
+    MultiPatchDeviceData m_multiPatchDeviceData;
 public:
+    GPUFunction(const MultiPatch &multiPatchHost);
 
-#if 0
-    GPUDisplacementFunction(const MultiPatchDeviceView &view) 
-        : m_displacementDeviceView(view) 
-    {
-        GPUFunctionPrintKernel<<<1, 1>>>(m_displacementDeviceView);
-        cudaDeviceSynchronize();
-    }
-#else
-    //GPUDisplacementFunction(const MultiPatchDeviceView &view);
-    GPUDisplacementFunction(const MultiPatch &displacementHost);
-#endif
+    Eigen::MatrixXd eval(int patch, const Eigen::MatrixXd &u) const;
 
     void eval_into(DeviceMatrixView<double> gridPoints,
                    DeviceVectorView<int> numPointsPerPatch,
-                   DeviceMatrixView<double> values) const override;
-    
-    const MultiPatchDeviceView& displacementDeviceView() const
-    { return m_displacementDeviceData.deviceView(); }
+                   DeviceMatrixView<double> values) const;
 
-    MultiPatchDeviceView displacementDeviceView()
-    { return m_displacementDeviceData.deviceView(); }
+    int domainDim() const
+    { return m_multiPatchHost.getBasisDim(); }
+
+    int targetDim() const
+    { return m_multiPatchHost.getCPDim(); }
+
+    int numPatches() const
+    { return m_multiPatchHost.getNumPatches(); }
+    
+    MultiPatchDeviceView multiPatchDeviceView() const
+    { return m_multiPatchDeviceData.deviceView(); }
 };

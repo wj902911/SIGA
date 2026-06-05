@@ -1516,6 +1516,7 @@ void GPUElectroelasticityAssembler::setDefaultOptions()
     opt.addReal("youngs_modulus", "Young's modulus", 1.0);
     opt.addReal("poissons_ratio", "Poisson's ratio", 0.3);
     opt.addReal("dielectric_permittivity", "Dielectric permittivity of the material", 1.0);
+    opt.addReal("neumann_load_scaling", "Multiplier for Neumann boundary and corner loads", 1.0);
     GPUAssembler::setDefaultOptions(opt);
 }
 

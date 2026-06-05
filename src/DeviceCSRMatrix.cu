@@ -133,7 +133,7 @@ void DeviceCSRMatrix::setFromCOO(int numRows, int numCols,
 {
     m_numCols = numCols;
     const int nnz_coo = static_cast<int>(cooR.size());
-    std::cout << "Setting CSR matrix from COO with " << nnz_coo << " entries." << std::endl;
+    //std::cout << "Setting CSR matrix from COO with " << nnz_coo << " entries." << std::endl;
     thrust::device_vector<int> R(cooR.data(), cooR.data() + nnz_coo);
     thrust::device_vector<int> C(cooC.data(), cooC.data() + nnz_coo);
 
@@ -145,12 +145,12 @@ void DeviceCSRMatrix::setFromCOO(int numRows, int numCols,
     thrust::sort(keys_begin, keys_end);
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsed = end - start;
-    std::cout << "Sorted COO entries in " << elapsed.count() << " s." << std::endl;
+    //std::cout << "Sorted COO entries in " << elapsed.count() << " s." << std::endl;
 
     // 2. Remove duplicate (row, col) pairs
     auto new_end = thrust::unique(keys_begin, keys_end);
     const int nnz = static_cast<int>(new_end - keys_begin);
-    std::cout << "Reduced COO entries to " << nnz << " unique entries." << std::endl;
+    //std::cout << "Reduced COO entries to " << nnz << " unique entries." << std::endl;
 
     m_rowPtr.resize(numRows + 1);
     m_colInd.resize(nnz);

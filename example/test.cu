@@ -28,7 +28,7 @@ int main(int argc, char* argv[])
 	int numDegElev = std::stoi(argv[2]);
 	double deltaDisplacement = 0.1;
 	double maxDisplacement = 1.0;
-	std::vector<int> numPointsPerPatch{ 1000, 500 };
+	std::vector<int> numPointsPerPatch{ 10000, 5000 };
 
 	if (!std::filesystem::exists("./TwoPatchesTest"))
 		std::filesystem::create_directory("./TwoPatchesTest");
@@ -102,9 +102,9 @@ int main(int argc, char* argv[])
 		bases.uniformRefine();
 
     BoundaryConditions bcInfo;
+    std::vector<double> zeros{0.0, 0.0};
 	for (int d = 0; d < 2; ++d)
-		bcInfo.addCondition(0, boundary::west, condition_type::dirichlet, 
-                            std::vector<double>{0.0, 0.0}, d);
+		bcInfo.addCondition(0, boundary::west, condition_type::dirichlet, zeros, d);
 	std::vector<double> disp { deltaDisplacement, 0.0 };
     bcInfo.addCondition(1, boundary::east, condition_type::dirichlet, disp, 0);
 
@@ -135,16 +135,18 @@ int main(int argc, char* argv[])
 	//assembler.constructSolution(solver.solutionView(), 
 	//                            solver.allFixedDofsView(), 
 	//							displacementDeviceData.deviceView());
+	GPUFunction displacementFunction(displacementHost);
 
-	
+	MultiPatch cauchyStressHost;
+	bases.giveBasis(cauchyStressHost, assembler.dimTensor());
+	GPUFunction cauchyStressFunction(cauchyStressHost);
 
-	GPUDisplacementFunction displacementFunction(displacementHost);
-
-	//printKernel<<<1, 1>>>(displacementFunction.displacementDeviceView());
+	//printKernel<<<1, 1>>>(displacementFunction.multiPatchDeviceView());
 	//cudaDeviceSynchronize();
 
 	postProcessor.addFunction("displacement", &displacementFunction);
-	collection.initalize();
+	postProcessor.addFunction("stress_cauchy", &cauchyStressFunction);
+	//collection.initalize();
 	start = std::chrono::high_resolution_clock::now();
 	postProcessor.outputToParaview(fileNameWithPath, 0, collection);
 	end = std::chrono::high_resolution_clock::now();
@@ -165,6 +167,7 @@ int main(int argc, char* argv[])
 		assembler.constructSolution(solver.solutionView(),
 			solver.allFixedDofsView(),
 			displacementFunction);
+		assembler.constructCauchyStressFunction(displacementFunction, cauchyStressFunction);
 		start = std::chrono::high_resolution_clock::now();
 		postProcessor.outputToParaview(fileNameWithPath, step, collection);
 		end = std::chrono::high_resolution_clock::now();

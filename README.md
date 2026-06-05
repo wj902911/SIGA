@@ -86,16 +86,19 @@ The core requirements are listed below, followed by optional components that can
 |---------|-------------|--------------|
 | **NVIDIA AMGX** | GPU-accelerated iterative solvers and algebraic multigrid preconditioning for large sparse linear systems. | `ENABLE_AMGX` |
 | **Intel MKL** | High-performance CPU linear algebra backend for Eigen-based operations. | `EIGEN_USE_MKL_ALL` |
+| **Intel oneMKL PARDISO** | CPU sparse direct solver used through Eigen's PARDISO wrapper. | `ENABLE_PARDISO` |
 | **Spectra** | Iterative eigensolver library for computing a small number of eigenvalues and eigenvectors of large sparse systems. | `ENABLE_SPECTRA` |
 
 ### Notes
 
 - Enable **AMGX** when GPU-based sparse linear solves and AMG preconditioning are needed.
 - Enable **MKL** when faster CPU-side dense or sparse linear algebra is desired through Eigen.
+- Enable **PARDISO** when a robust MKL-backed CPU sparse direct solver is preferred over Eigen's built-in `SparseLU` fallback.
 - Enable **Spectra** when you want use Spectra to compute eigenvalues. I found it is slower than cusolver's dense eigenvalue solver `cusolverDnXsyevd`.
 - **AMGX is not supported in Debug builds.** If you need to run SIGA in Debug mode, configure the project with `ENABLE_AMGX=OFF`.
 - When **AMGX is disabled**, SIGA falls back to:
   - **`Eigen::SimplicialLDLT`** or **`Eigen::SparseLU`** for linear solves on the CPU
+  - **`Eigen::PardisoLU`** for CPU sparse direct solves when `ENABLE_PARDISO=ON`
   - **`cusolverDnXsyevd`** for eigenvalue computations on the GPU
 - These fallback solvers remain efficient for small to medium-sized problems, and are convenient for development, verification, and debugging workflows.
 
@@ -147,6 +150,14 @@ If Intel MKL is available and Eigen is configured to use it, you may configure w
 ```bash
 cmake .. -DCMAKE_BUILD_TYPE=Release -DEIGEN_USE_MKL_ALL=ON
 ```
+
+To use Intel oneMKL PARDISO for SIGA's CPU sparse direct solves:
+
+```bash
+cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_PARDISO=ON
+```
+
+`ENABLE_PARDISO=ON` selects MKL's LP64 interface because SIGA stores sparse matrix indices as `int`.
 
 For debugging, disable AMGX explicitly:
 

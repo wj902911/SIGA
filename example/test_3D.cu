@@ -111,9 +111,9 @@ int main(int argc, char* argv[])
 		bases.uniformRefine();
 
     BoundaryConditions bcInfo;
+    std::vector<double> zeros{0.0, 0.0, 0.0};
 	for (int d = 0; d < 3; ++d)
-		bcInfo.addCondition(0, boundary::west, condition_type::dirichlet, 
-                            std::vector<double>{0.0, 0.0, 0.0}, d);
+		bcInfo.addCondition(0, boundary::west, condition_type::dirichlet, zeros, d);
 	std::vector<double> disp{ deltaDisplacement, 0.0, 0.0 };
     bcInfo.addCondition(1, boundary::east, condition_type::dirichlet, disp, 0);
 
@@ -148,13 +148,13 @@ int main(int argc, char* argv[])
 
 	
 
-	GPUDisplacementFunction displacementFunction(displacementHost);
+	GPUFunction displacementFunction(displacementHost);
 
-	//printKernel<<<1, 1>>>(displacementFunction.displacementDeviceView());
+	//printKernel<<<1, 1>>>(displacementFunction.multiPatchDeviceView());
 	//cudaDeviceSynchronize();
 
 	postProcessor.addFunction("displacement", &displacementFunction);
-	collection.initalize();
+	//collection.initalize();
 	start = std::chrono::high_resolution_clock::now();
 	postProcessor.outputToParaview(fileNameWithPath, 0, collection);
 	end = std::chrono::high_resolution_clock::now();

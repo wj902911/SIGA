@@ -43,13 +43,18 @@ private:
     MultiGaussPointsDeviceData m_multiGaussPoints;
     bool m_initialAssemble = true;
     OptionList m_options;
+
+    __host__
+    void constructCauchyStressFunctionFromDisplacement(MultiPatchDeviceView displacementView,
+                                                       GPUFunction& cauchyStressFunction);
 public:
     __host__
     GPUAssembler(const MultiPatch& multiPatch,
                   const MultiBasis& multiBasis,
                   const BoundaryConditions& bc,
                   const Eigen::VectorXd& bodyForce,
-                  bool baseInitial = false);
+                  bool baseInitial = false,
+                  int numDerivatives = 1);
     __host__
     OptionList defaultOptions(); 
     __host__
@@ -85,7 +90,16 @@ public:
     __host__
     void constructSolution(const DeviceVectorView<double>& solVector,
                            const DeviceNestedArrayView<double>& fixedDoFs,
-                           GPUDisplacementFunction& displacementFunction) const;
+                           GPUFunction& displacementFunction) const;
+
+    __host__
+    void constructCauchyStressFunction(const DeviceVectorView<double>& solVector,
+                                       const DeviceNestedArrayView<double>& fixedDoFs,
+                                       GPUFunction& cauchyStressFunction);
+
+    __host__
+    void constructCauchyStressFunction(GPUFunction& displacementFunction,
+                                       GPUFunction& cauchyStressFunction);
 
     __host__
     void constructDispSolution(const DeviceVectorView<double>& solVector,
@@ -109,6 +123,12 @@ public:
         const DeviceMatrixView<double>& Fs,
         const DeviceMatrixView<double>& Ss,
         const DeviceMatrixView<double>& Cs);
+
+    __host__
+    void assembleNeumannBoundaryCondition();
+
+    __host__
+    void assembleNeumannCornerPointLoads();
 
     //__host__
     //DeviceMatrixView<double> matrix() const
@@ -163,15 +183,15 @@ public:
     const MultiPatch& geometryHost() const { return m_multiPatchHost; }
 
     __host__
-    const MultiPatchDeviceView& geometryView() const
+    MultiPatchDeviceView geometryView() const
     { return m_multiPatch.deviceView(); }
 
     __host__
-    const MultiGaussPointsDeviceView& gaussPointsView() const
+    MultiGaussPointsDeviceView gaussPointsView() const
     { return m_multiGaussPoints.view(); }
 
     __host__
-    const DeviceMatrixView<double>& gpTable() const 
+    DeviceMatrixView<double> gpTable() const
     { return m_GPTable.matrixView(m_domainDim, m_totalGPs); }
 
     __host__
@@ -236,10 +256,10 @@ public:
     int numDispMatrixEntries() const;
 
     __host__
-    const MultiPatchDeviceView& displacementView() const { return m_displacement.deviceView(); }
+    MultiPatchDeviceView displacementView() const { return m_displacement.deviceView(); }
 
     __host__
-    const SparseSystemDeviceView& sparseSystemDeviceView() const { return m_sparseSystem.deviceView(); }
+    SparseSystemDeviceView sparseSystemDeviceView() const { return m_sparseSystem.deviceView(); }
 
     __host__
     void setCSRMatrixFromCOO(int numRows, int numCols,
@@ -285,7 +305,7 @@ public:
     }
 
     __host__
-    const MultiBasisDeviceView& multiBasisDeviceView() const 
+    MultiBasisDeviceView multiBasisDeviceView() const
     { return m_multiBasis.deviceView(); }
 
     __host__

@@ -94,6 +94,30 @@ public:
     }
 
     __host__
+    MultiGaussPointsDeviceData(const MultiBasis& multiBasis, const BoundaryConditions::bcContainer& bcs)
+    {
+        int domainDim = multiBasis.getDim();
+        int numPatches = multiBasis.getNumBases();
+        int numBcs = bcs.size();
+        std::vector<std::vector<int>> numGPs;
+        numGPs.resize(numBcs);
+        for (BoundaryConditions::bcContainer::const_iterator it = bcs.begin(); it != bcs.end(); ++it)
+        {
+            int bi = std::distance(bcs.begin(), it);
+            numGPs[bi].resize(domainDim);
+            int fixDir = it->side().direction();
+            numGPs[bi][fixDir] = 1;
+            int p = it->patchIndex();
+            int d;
+            for (d = 0; d !=fixDir; ++d)
+                numGPs[bi][d] = multiBasis.basis(p).getNumGaussPoints(d);
+            for (++d; d < domainDim; ++d)
+                numGPs[bi][d] = multiBasis.basis(p).getNumGaussPoints(d);
+        }
+        *this = MultiGaussPointsDeviceData(numGPs);
+    }
+
+    __host__
     MultiGaussPointsDeviceView view() const
     {
         return MultiGaussPointsDeviceView(m_dim,

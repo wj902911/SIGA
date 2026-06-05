@@ -560,9 +560,10 @@ void GPUPostProcessor::evalFunctionsAtPoints(std::map<std::string, Eigen::Matrix
          it != m_functions.end(); ++it)
     {
         int domainDim = m_assembler.domainDim();
+        int targetDim = it->second->targetDim();
         int numPoints = m_pointGrid.size() / domainDim;
         int numPatches = m_assembler.numPatches();
-        DeviceArray<double> deviceData(m_geoPointsDeviceArray.size());
+        DeviceArray<double> deviceData(targetDim * numPoints);
         std::vector<int> numPointsPerPatchHost;
         numPointsPerPatchHost.reserve(numPatches);
         for (int p = 0; p < numPatches; p++)
@@ -575,8 +576,8 @@ void GPUPostProcessor::evalFunctionsAtPoints(std::map<std::string, Eigen::Matrix
         DeviceArray<int> numPointsPerPatchDeviceData(numPointsPerPatchHost);
         it->second->eval_into(m_pointGrid.matrixView(domainDim, numPoints), 
                               numPointsPerPatchDeviceData.vectorView(),
-                              deviceData.matrixView(domainDim, numPoints));
-        data[it->first].resize(domainDim, numPoints);
+                              deviceData.matrixView(targetDim, numPoints));
+        data[it->first].resize(targetDim, numPoints);
         deviceData.copyToHost(data[it->first].data());
         //std::cout << data[it->first] << std::endl;
         if ( data[it->first].rows() == 2 )
@@ -594,9 +595,10 @@ void GPUPostProcessor::evalFunctionsAtMeshPoints(std::map<std::string, Eigen::Ma
          it != m_functions.end(); ++it)
     {
         int domainDim = m_assembler.domainDim();
+        int targetDim = it->second->targetDim();
         int numPoints = m_meshPointGrid.size() / domainDim;
         int numPatches = m_assembler.numPatches();
-        DeviceArray<double> deviceData(m_meshGeoPoints.size());
+        DeviceArray<double> deviceData(targetDim * numPoints);
         std::vector<int> numPointsPerPatchHost;
         numPointsPerPatchHost.reserve(numPatches);
         for (int p = 0; p < numPatches; p++)
@@ -606,8 +608,8 @@ void GPUPostProcessor::evalFunctionsAtMeshPoints(std::map<std::string, Eigen::Ma
         DeviceArray<int> numPointsPerPatchDeviceData(numPointsPerPatchHost);
         it->second->eval_into(m_meshPointGrid.matrixView(domainDim, numPoints), 
                               numPointsPerPatchDeviceData.vectorView(),
-                              deviceData.matrixView(domainDim, numPoints));
-        data[it->first].resize(domainDim, numPoints);
+                              deviceData.matrixView(targetDim, numPoints));
+        data[it->first].resize(targetDim, numPoints);
         deviceData.copyToHost(data[it->first].data());
         //std::cout << data[it->first].transpose() << std::endl;
         if ( data[it->first].rows() == 2 )
@@ -737,7 +739,7 @@ void GPUPostProcessor::writeParaviewSinglePatch(const std::string &fn,
     file <<"<PointData>\n";
     for (const auto& item : data)
     {
-        file << "<DataArray type=\"Float32\" Name=\"" << item.first << "\" format=\"ascii\" NumberOfComponents=\"" << (item.second.rows() ==1 ? 1 : 3) << "\">\n";
+        file << "<DataArray type=\"Float32\" Name=\"" << item.first << "\" format=\"ascii\" NumberOfComponents=\"" << item.second.rows() << "\">\n";
         if (item.second.rows() == 1)
             for (int i = 0; i < item.second.cols(); ++i)
                 file << item.second(0, i) << " ";
@@ -793,7 +795,7 @@ void GPUPostProcessor::writeParaviewSinglePatchMesh(const std::string &fn,
     file << "<PointData>\n";
     for (const auto& item : data)
     {
-        file << "<DataArray type=\"Float32\" Name=\"" << item.first << "\" format=\"ascii\" NumberOfComponents=\"" << (item.second.rows() ==1 ? 1 : 3) << "\">\n";
+        file << "<DataArray type=\"Float32\" Name=\"" << item.first << "\" format=\"ascii\" NumberOfComponents=\"" << item.second.rows() << "\">\n";
         if (item.second.rows() == 1)
             for (int i = 0; i < item.second.cols(); ++i)
                 file << item.second(0, i) << " ";

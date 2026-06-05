@@ -1,7 +1,12 @@
 #pragma once
 
 #include <GPUAssembler.h>
+#include <Eigen/Core>
 #include <Eigen/Sparse>
+
+#if ENABLE_PARDISO
+#include <Eigen/PardisoSupport>
+#endif
 
 #if ENABLE_AMGX
 #include <amgx_c.h>
@@ -30,6 +35,22 @@ private:
     double m_relTol = 1e-10;
     int m_maxIter = 100;
 
+#if ENABLE_PARDISO
+    using PardisoSpMat = Eigen::SparseMatrix<double, Eigen::RowMajor, int>;
+    using PardisoSolver = Eigen::PardisoLDLT<PardisoSpMat, Eigen::Upper>;
+
+    PardisoSolver m_pardisoSolver;
+    bool m_pardisoPatternAnalyzed = false;
+    int m_pardisoRows = -1;
+    int m_pardisoCols = -1;
+    int m_pardisoNonZeros = -1;
+
+    bool solveWithPardiso(const PardisoSpMat& A,
+                          const Eigen::VectorXd& b,
+                          Eigen::VectorXd& x,
+                          const char* context);
+#endif
+
 #if ENABLE_AMGX
     bool m_amgx_initialized = false;
 
@@ -43,6 +64,8 @@ private:
 
     int m_amgx_n   = -1;
     int m_amgx_nnz = -1;
+    Eigen::VectorXd m_cachedSmallestEigenvector;
+    double m_cachedSmallestEigenvalue = 0.0;
 
     void initAMGXOnce();
     void finalizeAMGX();
@@ -77,8 +100,12 @@ public:
     bool solveSingleIteration_AMGX();
 #endif
     void solve();
+    double smallestEigenValue();
+    double smallestEigenValue(Eigen::VectorXd& eigenvector);
+    double stability();
     void eigenvalues_symm_dense(DeviceMatrixView<double> matrix, 
-                                DeviceVectorView<double> eigenvalues);
+                                DeviceVectorView<double> eigenvalues,
+                                bool computeEigenvectors = false);
 
     double smallestEigenvalue_symm_dense_Eigen(Eigen::MatrixXd mat);
     double smallestEigenvalue_symm_sparse_Eigen(Eigen::SparseMatrix<double> mat);

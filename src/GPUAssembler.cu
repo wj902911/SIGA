@@ -1,6 +1,6 @@
 #include <GPUAssembler.h>
 
-#define TIME_INITIALIZATION
+//#define TIME_INITIALIZATION
 
 __global__
 void constructSolutionKernel(DeviceVectorView<double> solVector, 
@@ -33,6 +33,107 @@ void constructSolutionKernel(DeviceVectorView<double> solVector,
         }
     }
     //result.printControlPoints();
+}
+
+__global__
+void zeroFunctionControlPointsKernel(MultiPatchDeviceView result, int totalEntries)
+{
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x;
+         idx < totalEntries; idx += blockDim.x * gridDim.x)
+    {
+        int patch(0);
+        int component(0);
+        int point_idx = result.threadPatchAndDof(idx, patch, component);
+        result.setCoefficients(patch, point_idx, component, 0.0);
+    }
+}
+
+__global__
+void recoverCauchyStressAtNodesKernel(int numDerivatives,
+                                      int totalNumGPs,
+                                      MultiPatchDeviceView displacement,
+                                      MultiPatchDeviceView cauchyStress,
+                                      DeviceMatrixView<double> pts,
+                                      DeviceVectorView<double> weightForces,
+                                      DeviceMatrixView<double> dispValuesAndDerss,
+                                      DeviceMatrixView<double> Fs,
+                                      DeviceMatrixView<double> Ss,
+                                      DeviceVectorView<double> nodalWeights)
+{
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x;
+         idx < totalNumGPs; idx += blockDim.x * gridDim.x)
+    {
+        int dim = displacement.domainDim();
+        int dimTensor = dim * (dim + 1) / 2;
+        int patch_idx(0);
+        displacement.threadPatch(idx, patch_idx);
+
+        TensorBsplineBasisDeviceView basis = displacement.basis(patch_idx);
+        int P1 = basis.knotsOrder(0) + 1;
+        int numActive = basis.numActiveControlPoints();
+        DeviceVectorView<double> pt(pts.data() + idx * dim, dim);
+        DeviceMatrixView<double> dispValuesAndDers(
+            dispValuesAndDerss.data() + idx * P1 * (numDerivatives + 1) * dim,
+            P1, (numDerivatives + 1) * dim);
+
+        DeviceMatrixView<double> F(Fs.data() + idx * dim * dim, dim, dim);
+        DeviceMatrixView<double> S(Ss.data() + idx * dim * dim, dim, dim);
+
+        double FSData[3 * 3] = {0.0};
+        double sigmaData[3 * 3] = {0.0};
+        DeviceMatrixView<double> FS(FSData, dim, dim);
+        DeviceMatrixView<double> sigma(sigmaData, dim, dim);
+        F.times(S, FS);
+        FS.timeTranspose(F, sigma);
+        sigma.times(1.0 / F.determinant());
+
+        double sigmaVecData[6] = {0.0};
+        DeviceVectorView<double> sigmaVec(sigmaVecData, dimTensor);
+        voigtStressView(sigmaVec, sigma);
+
+        int patchControlPointOffset = 0;
+        for (int p = 0; p < patch_idx; ++p)
+            patchControlPointOffset += cauchyStress.numControlPoints(p);
+
+        for (int r = 0; r < numActive; ++r)
+        {
+            int localControlPoint = basis.activeIndex(pt, r);
+            int globalControlPoint = patchControlPointOffset + localControlPoint;
+            double N = tensorBasisValue(r, P1, dim, numDerivatives, dispValuesAndDers);
+            double weight = N * weightForces[idx];
+
+            atomicAdd(&nodalWeights[globalControlPoint], weight);
+            DeviceMatrixView<double> stressControlPoints = cauchyStress.controlPoints(patch_idx);
+            for (int c = 0; c < dimTensor; ++c)
+                atomicAdd(&stressControlPoints(localControlPoint, c), weight * sigmaVec[c]);
+        }
+    }
+}
+
+__global__
+void normalizeRecoveredStressKernel(MultiPatchDeviceView cauchyStress,
+                                    DeviceVectorView<double> nodalWeights,
+                                    int totalControlPoints)
+{
+    int dimTensor = cauchyStress.targetDim();
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x;
+         idx < totalControlPoints * dimTensor; idx += blockDim.x * gridDim.x)
+    {
+        int patch(0);
+        int component(0);
+        int localControlPoint = cauchyStress.threadPatchAndDof(idx, patch, component);
+
+        int globalControlPoint = localControlPoint;
+        for (int p = 0; p < patch; ++p)
+            globalControlPoint += cauchyStress.numControlPoints(p);
+
+        double weight = nodalWeights[globalControlPoint];
+        if (weight != 0.0)
+        {
+            DeviceMatrixView<double> stressControlPoints = cauchyStress.controlPoints(patch);
+            stressControlPoints(localControlPoint, component) /= weight;
+        }
+    }
 }
 #if 0
 __device__
@@ -445,6 +546,129 @@ void assembleRHSWithGPDataKernel(int numDerivatives, int EleStartId,
 #endif
     }
 
+}
+
+__global__
+void assembleNeumannBoundaryConditionKernel(int totalNumBoundaryGPs,
+                                            int numActive,
+                                            MultiPatchDeviceView displacement,
+                                            MultiPatchDeviceView geometry,
+                                            SparseSystemDeviceView system,
+                                            MultiGaussPointsDeviceView gaussPoints,
+                                            DeviceVectorView<int> bcOffsets,
+                                            DeviceVectorView<int> bcPatches,
+                                            DeviceVectorView<int> bcSideIndexes,
+                                            DeviceMatrixView<double> bcValues)
+{
+    const int dim = displacement.domainDim();
+    const int targetDim = displacement.targetDim();
+
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x;
+         idx < totalNumBoundaryGPs * numActive;
+         idx += blockDim.x * gridDim.x)
+    {
+        const int shapeFuncIdx = idx % numActive;
+        const int boundaryGPIdx = idx / numActive;
+
+        int bcIdx = 0;
+        while (bcIdx + 1 < bcOffsets.size() && boundaryGPIdx >= bcOffsets[bcIdx + 1])
+            ++bcIdx;
+
+        const int patchIdx = bcPatches[bcIdx];
+        BoxSide_d side(bcSideIndexes[bcIdx]);
+        const int fixedDir = side.direction();
+        const int localBoundaryGPIdx = boundaryGPIdx - bcOffsets[bcIdx];
+
+        TensorBsplineBasisDeviceView dispBasis = displacement.basis(patchIdx);
+        const int P1 = dispBasis.knotsOrder(0) + 1;
+
+        double fullPtData[3] = {0.0, 0.0, 0.0};
+        double boundaryPtData[2] = {0.0, 0.0};
+        DeviceVectorView<double> fullPt(fullPtData, dim);
+        DeviceVectorView<double> boundaryPt(boundaryPtData, dim - 1);
+
+        double weight = 1.0;
+        int gpRemainder = localBoundaryGPIdx;
+        for (int d = 0, bd = 0; d < dim; ++d)
+        {
+            if (d == fixedDir)
+            {
+                fullPt[d] = side.parameter()
+                    ? dispBasis.knotVector(d).domainEnd()
+                    : dispBasis.knotVector(d).domainBegin();
+                continue;
+            }
+
+            const int totalInDir = dispBasis.totalNumGPsInDir(d);
+            const int oneDimGPIdx = gpRemainder % totalInDir;
+            gpRemainder /= totalInDir;
+
+            double coordinate = 0.0;
+            weight *= dispBasis.gsPoint(oneDimGPIdx, d, gaussPoints[patchIdx], coordinate);
+            fullPt[d] = coordinate;
+            boundaryPt[bd++] = coordinate;
+        }
+
+        PatchDeviceView geoPatch = geometry.patch(patchIdx);
+        double boundaryJacobianData[3 * 2] = {0.0};
+        DeviceMatrixView<double> boundaryJacobian(boundaryJacobianData, targetDim, dim - 1);
+        geoPatch.boundaryJacobian(side, boundaryPt, boundaryJacobian);
+
+        double measure = 1.0;
+        if (dim == 2)
+        {
+            double tangentData[3] = {0.0, 0.0, 0.0};
+            DeviceVectorView<double> tangent(tangentData, targetDim);
+            for (int i = 0; i < targetDim; ++i)
+                tangent[i] = boundaryJacobian(i, 0);
+            measure = tangent.norm_device();
+        }
+        else if (dim == 3)
+        {
+            const double ax = boundaryJacobian(0, 0);
+            const double ay = boundaryJacobian(1, 0);
+            const double az = boundaryJacobian(2, 0);
+            const double bx = boundaryJacobian(0, 1);
+            const double by = boundaryJacobian(1, 1);
+            const double bz = boundaryJacobian(2, 1);
+            const double cx = ay * bz - az * by;
+            const double cy = az * bx - ax * bz;
+            const double cz = ax * by - ay * bx;
+            measure = sqrt(cx * cx + cy * cy + cz * cz);
+        }
+
+        double dispValuesAndDersData[5 * 3] = {0.0};
+        DeviceMatrixView<double> dispValuesAndDers(dispValuesAndDersData, P1, dim);
+        dispBasis.evalAllDers_into(fullPt, 0, dispValuesAndDers);
+
+        const double N = tensorBasisValue(shapeFuncIdx, P1, dim, 0, dispValuesAndDers);
+        const int activeIndex = dispBasis.activeIndex(fullPt, shapeFuncIdx);
+        const double weightedBasis = N * weight * measure;
+
+        for (int di = 0; di < targetDim; ++di)
+            system.pushToRhs(weightedBasis * bcValues(di, bcIdx), activeIndex, di);
+    }
+}
+
+__global__
+void assembleNeumannCornerPointLoadKernel(int numCornerLoads,
+                                          SparseSystemDeviceView system,
+                                          DeviceVectorView<int> cornerPatches,
+                                          DeviceVectorView<int> cornerDofs,
+                                          DeviceMatrixView<double> loadValues)
+{
+    const int targetDim = loadValues.rows();
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x;
+         idx < numCornerLoads * targetDim;
+         idx += blockDim.x * gridDim.x)
+    {
+        const int component = idx % targetDim;
+        const int loadIdx = idx / targetDim;
+        const int activeRow = system.mapColIndex(cornerDofs[loadIdx],
+                                                 cornerPatches[loadIdx],
+                                                 component);
+        system.pushToRhs(loadValues(component, loadIdx), activeRow, component);
+    }
 }
 
 __global__
@@ -1899,7 +2123,8 @@ GPUAssembler::GPUAssembler(const MultiPatch &multiPatch,
                            const MultiBasis &multiBasis, 
                            const BoundaryConditions &bc, 
                            const Eigen::VectorXd &bodyForce,
-                           bool baseInitial)
+                           bool baseInitial,
+                           int numDerivatives)
 :   m_multiPatch(multiPatch), m_multiBasis(multiBasis), 
     m_boundaryConditions(bc), m_bodyForce(bodyForce),
     m_multiGaussPoints(multiBasis), 
@@ -1912,6 +2137,7 @@ GPUAssembler::GPUAssembler(const MultiPatch &multiPatch,
     m_numElements = multiBasis.totalNumElements();
     m_N_D = multiBasis.numActive();
     m_totalGPs = multiBasis.totalNumGPs();
+    m_numDerivatives = numDerivatives;
     m_geoP1 = multiPatch.knotOrder() + 1;
     m_dispP1 = multiBasis.knotOrder() + 1;
     if (!baseInitial) {
@@ -2079,14 +2305,14 @@ GPUAssembler::GPUAssembler(const MultiPatch &multiPatch,
 
         size_t bytesPerGP = numDoublePerGP * sizeof(double);
         size_t totalBytes = bytesPerGP * m_totalGPs;
-        printf("Total bytes needed for GPData: %zu\n", totalBytes);
+        //printf("Total bytes needed for GPData: %zu\n", totalBytes);
         size_t freeMem = 0, totalMem = 0;
         err = cudaMemGetInfo(&freeMem, &totalMem);
         if (err != cudaSuccess)
             std::cerr << "Error during cudaMemGetInfo: " << cudaGetErrorString(err) << std::endl;
         double safetyFactor = 0.8;
         size_t usableMem = static_cast<size_t>(freeMem * safetyFactor);
-        printf("Usable memory for GPData: %zu bytes\n", usableMem);
+        //printf("Usable memory for GPData: %zu bytes\n", usableMem);
 #if 0
         if (usableMem < totalBytes)
             m_numBatches = (totalBytes + usableMem - 1) / usableMem;
@@ -2141,6 +2367,7 @@ OptionList GPUAssembler::defaultOptions()
     OptionList opt;
     opt.addReal("youngs_modulus", "Young's modulus", 1.0);
     opt.addReal("poissons_ratio", "Poisson's ratio", 0.3);
+    opt.addReal("neumann_load_scaling", "Multiplier for Neumann boundary and corner loads", 1.0);
     return opt;
 }
 
@@ -2220,7 +2447,7 @@ int GPUAssembler::numDofs() const
 
 void GPUAssembler::constructSolution(const DeviceVectorView<double>& solVector, 
                                      const DeviceNestedArrayView<double>& fixedDoFs, 
-                                     GPUDisplacementFunction& displacementFunction) const
+                                     GPUFunction& displacementFunction) const
 {
     int minGrid, blockSize;
     int CPSize = m_displacementHost.CPSize();
@@ -2231,10 +2458,129 @@ void GPUAssembler::constructSolution(const DeviceVectorView<double>& solVector,
     constructSolutionKernel<<<gridSize, blockSize>>>(solVector, fixedDoFs,
                                                      m_multiBasis.deviceView(),
                                                      m_sparseSystem.deviceView(),
-                                                     displacementFunction.displacementDeviceView(),
+                                                     displacementFunction.multiPatchDeviceView(),
                                                      CPSize);
     cudaError_t err = cudaDeviceSynchronize();
     assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler::constructSolution");
+}
+
+void GPUAssembler::constructCauchyStressFunction(const DeviceVectorView<double>& solVector,
+                                                 const DeviceNestedArrayView<double>& fixedDoFs,
+                                                 GPUFunction& cauchyStressFunction)
+{
+    int minGrid, blockSize;
+    int CPSize = m_displacementHost.CPSize();
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+        constructSolutionKernel, 0, CPSize);
+    int gridSize = (CPSize + blockSize - 1) / blockSize;
+    constructSolutionKernel<<<gridSize, blockSize>>>(solVector, fixedDoFs,
+                                                     m_multiBasis.deviceView(),
+                                                     m_sparseSystem.deviceView(),
+                                                     m_displacement.deviceView(),
+                                                     CPSize);
+    cudaError_t err = cudaDeviceSynchronize();
+    assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler::constructCauchyStressFunction constructSolutionKernel");
+
+    constructCauchyStressFunctionFromDisplacement(m_displacement.deviceView(), cauchyStressFunction);
+}
+
+void GPUAssembler::constructCauchyStressFunction(GPUFunction& displacementFunction,
+                                                 GPUFunction& cauchyStressFunction)
+{
+    assert(displacementFunction.domainDim() == m_domainDim &&
+           "Displacement function domain dimension must match assembler domain dimension");
+    assert(displacementFunction.targetDim() == m_targetDim &&
+           "Displacement function target dimension must match assembler target dimension");
+
+    constructCauchyStressFunctionFromDisplacement(displacementFunction.multiPatchDeviceView(),
+                                                  cauchyStressFunction);
+}
+
+void GPUAssembler::constructCauchyStressFunctionFromDisplacement(MultiPatchDeviceView displacementView,
+                                                                 GPUFunction& cauchyStressFunction)
+{
+    assert(cauchyStressFunction.domainDim() == m_domainDim &&
+           "Cauchy stress function domain dimension must match assembler domain dimension");
+    assert(cauchyStressFunction.targetDim() == m_dimTensor &&
+           "Cauchy stress function target dimension must be dim * (dim + 1) / 2");
+
+    int minGrid, blockSize;
+    int gridSize;
+    cudaError_t err;
+    const int totalControlPoints = m_displacementHost.getTotalNumControlPoints();
+    const int totalStressEntries = totalControlPoints * m_dimTensor;
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+        zeroFunctionControlPointsKernel, 0, totalStressEntries);
+    gridSize = (totalStressEntries + blockSize - 1) / blockSize;
+    zeroFunctionControlPointsKernel<<<gridSize, blockSize>>>(
+        cauchyStressFunction.multiPatchDeviceView(), totalStressEntries);
+    err = cudaDeviceSynchronize();
+    assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler::constructCauchyStressFunction zeroFunctionControlPointsKernel");
+
+    m_GPData.setZero();
+    int offset = 0;
+    DeviceMatrixView<double> geoJacobianInvs(m_GPData.data() + offset, m_domainDim, m_totalGPs * m_domainDim);
+    offset += geoJacobianInvs.size();
+    DeviceVectorView<double> measures(m_GPData.data() + offset, m_totalGPs);
+    offset += measures.size();
+    DeviceVectorView<double> weightForces(m_GPData.data() + offset, m_totalGPs);
+    offset += weightForces.size();
+    DeviceVectorView<double> weightBodys(m_GPData.data() + offset, m_totalGPs);
+    offset += weightBodys.size();
+    DeviceMatrixView<double> Fs(m_GPData.data() + offset, m_domainDim, m_totalGPs * m_domainDim);
+    offset += Fs.size();
+    DeviceMatrixView<double> Ss(m_GPData.data() + offset, m_domainDim, m_totalGPs * m_domainDim);
+    offset += Ss.size();
+    DeviceMatrixView<double> Cs(m_GPData.data() + offset, m_dimTensor, m_totalGPs * m_dimTensor);
+    offset += Cs.size();
+
+    const std::vector<double> materialParameters{
+        options().getReal("poissons_ratio"),
+        options().getReal("youngs_modulus")
+    };
+    DeviceArray<double> parameterValues(materialParameters);
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+        evaluateGPKernel_withoutComputingGPTableAndDers, 0, m_totalGPs);
+    gridSize = (m_totalGPs + blockSize - 1) / blockSize;
+    evaluateGPKernel_withoutComputingGPTableAndDers<<<gridSize, blockSize>>>(
+        m_numDerivatives, m_totalGPs,
+        parameterValues.vectorView(),
+        displacementView,
+        m_multiPatch.deviceView(),
+        m_GPTable.matrixView(m_domainDim, m_totalGPs),
+        m_wts.vectorView(),
+        m_geoValuesAndDerss.matrixView(m_geoP1, m_totalGPs * (m_numDerivatives + 1) * m_domainDim),
+        m_dispValuesAndDerss.matrixView(m_dispP1, m_totalGPs * (m_numDerivatives + 1) * m_domainDim),
+        geoJacobianInvs, measures, weightForces, weightBodys,
+        Fs, Ss, Cs);
+    err = cudaDeviceSynchronize();
+    assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler::constructCauchyStressFunction evaluateGPKernel_withoutComputingGPTableAndDers");
+
+    DeviceArray<double> nodalWeights(totalControlPoints);
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+        recoverCauchyStressAtNodesKernel, 0, m_totalGPs);
+    gridSize = (m_totalGPs + blockSize - 1) / blockSize;
+    recoverCauchyStressAtNodesKernel<<<gridSize, blockSize>>>(
+        m_numDerivatives, m_totalGPs,
+        displacementView,
+        cauchyStressFunction.multiPatchDeviceView(),
+        m_GPTable.matrixView(m_domainDim, m_totalGPs),
+        weightForces,
+        m_dispValuesAndDerss.matrixView(m_dispP1, m_totalGPs * (m_numDerivatives + 1) * m_domainDim),
+        Fs, Ss,
+        nodalWeights.vectorView());
+    err = cudaDeviceSynchronize();
+    assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler::constructCauchyStressFunction recoverCauchyStressAtNodesKernel");
+
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+        normalizeRecoveredStressKernel, 0, totalStressEntries);
+    gridSize = (totalStressEntries + blockSize - 1) / blockSize;
+    normalizeRecoveredStressKernel<<<gridSize, blockSize>>>(
+        cauchyStressFunction.multiPatchDeviceView(),
+        nodalWeights.vectorView(),
+        totalControlPoints);
+    err = cudaDeviceSynchronize();
+    assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler::constructCauchyStressFunction normalizeRecoveredStressKernel");
 }
 
 void GPUAssembler::constructDispSolution(const DeviceVectorView<double> &solVector, 
@@ -2339,7 +2685,11 @@ void GPUAssembler::assemble(const DeviceVectorView<double> &solVector,
     printf("RHS Vector:\n");
     m_sparseSystem.deviceView().rhs().print();
 #endif
-    DeviceArray<double> parameterValues(m_options.realValues());
+    const std::vector<double> materialParameters{
+        options().getReal("poissons_ratio"),
+        options().getReal("youngs_modulus")
+    };
+    DeviceArray<double> parameterValues(materialParameters);
     //int* entryCountDevicePtr;
     //err = cudaMalloc((void**)&entryCountDevicePtr, sizeof(int));
     //assert(err == cudaSuccess && "cudaMalloc failed in GPUAssembler constructor during counting matrix entries");
@@ -2441,28 +2791,31 @@ void GPUAssembler::assemble(const DeviceVectorView<double> &solVector,
     int gridSize_assembleRHs = m_N_D * m_numElements;
 
     assembleMatrixWithGPDataKernel<<<gridSize_assembleMatrix, blockSize_assembleMatrix>>>(m_numDerivatives, 0,
-            m_numElements, m_N_D, 
-            m_displacement.deviceView(), m_sparseSystem.deviceView(), fixedDofs_assemble,
-            m_GPTable.matrixView(m_domainDim, m_totalGPs), geoJacobianInvs, measures, weightForces, weightBodys, m_dispValuesAndDerss.matrixView(m_dispP1, m_totalGPs * (m_numDerivatives + 1) * m_domainDim), 
-            Fs, Ss, Cs);
-        err = cudaGetLastError();
-        if (err != cudaSuccess)
-            std::cerr << "Error after kernel assembleMatrixWithGPDataKernel launch: " << cudaGetErrorString(err) << std::endl;
-        err = cudaDeviceSynchronize();
-        if (err != cudaSuccess)
-            std::cerr << "CUDA error during device synchronization (assembleMatrixWithGPDataKernel): " << cudaGetErrorString(err) << std::endl;
-        
-        assembleRHSWithGPDataKernel<<<gridSize_assembleRHs, blockSize_assembleRHs>>>(m_numDerivatives, 0,
-            m_numElements, m_N_D, m_displacement.deviceView(), m_sparseSystem.deviceView(),
-            m_GPTable.matrixView(m_domainDim, m_totalGPs), 
-            geoJacobianInvs, weightForces, weightBodys, 
-            m_dispValuesAndDerss.matrixView(m_dispP1, m_totalGPs * (m_numDerivatives + 1) * m_domainDim), m_bodyForce.vectorView(), Fs, Ss);
-        err = cudaGetLastError();
-        if (err != cudaSuccess)
-            std::cerr << "Error after kernel assembleRHSWithGPDataKernel launch: " << cudaGetErrorString(err) << std::endl;
-        err = cudaDeviceSynchronize();
-        if (err != cudaSuccess)
-            std::cerr << "CUDA error during device synchronization (assembleRHSWithGPDataKernel): " << cudaGetErrorString(err) << std::endl;
+        m_numElements, m_N_D, 
+        m_displacement.deviceView(), m_sparseSystem.deviceView(), fixedDofs_assemble,
+        m_GPTable.matrixView(m_domainDim, m_totalGPs), geoJacobianInvs, measures, weightForces, weightBodys, m_dispValuesAndDerss.matrixView(m_dispP1, m_totalGPs * (m_numDerivatives + 1) * m_domainDim), 
+        Fs, Ss, Cs);
+    err = cudaGetLastError();
+    if (err != cudaSuccess)
+        std::cerr << "Error after kernel assembleMatrixWithGPDataKernel launch: " << cudaGetErrorString(err) << std::endl;
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+        std::cerr << "CUDA error during device synchronization (assembleMatrixWithGPDataKernel): " << cudaGetErrorString(err) << std::endl;
+    
+    assembleRHSWithGPDataKernel<<<gridSize_assembleRHs, blockSize_assembleRHs>>>(m_numDerivatives, 0,
+        m_numElements, m_N_D, m_displacement.deviceView(), m_sparseSystem.deviceView(),
+        m_GPTable.matrixView(m_domainDim, m_totalGPs), 
+        geoJacobianInvs, weightForces, weightBodys, 
+        m_dispValuesAndDerss.matrixView(m_dispP1, m_totalGPs * (m_numDerivatives + 1) * m_domainDim), m_bodyForce.vectorView(), Fs, Ss);
+    err = cudaGetLastError();
+    if (err != cudaSuccess)
+        std::cerr << "Error after kernel assembleRHSWithGPDataKernel launch: " << cudaGetErrorString(err) << std::endl;
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+        std::cerr << "CUDA error during device synchronization (assembleRHSWithGPDataKernel): " << cudaGetErrorString(err) << std::endl;
+
+    assembleNeumannBoundaryCondition();
+    assembleNeumannCornerPointLoads();
 
 #if 0
     DeviceArray<double> measuresCopy1(m_GPData, measuresStart, measures.size());
@@ -2691,6 +3044,147 @@ void GPUAssembler::refreshFixedDofs()
     for (int unk = 0; unk < m_targetDim; ++unk)
         computeDirichletDofs(unk, dofMappers_stdVec, ddof, m_multiBasisHost);
     m_ddof.setData(ddof);
+}
+
+void GPUAssembler::assembleNeumannBoundaryCondition()
+{
+    const BoundaryConditions::bcContainer& neumannSides = m_boundaryConditions.neumannSides();
+    const int numNeumannSides = static_cast<int>(neumannSides.size());
+    if (numNeumannSides == 0)
+        return;
+
+    const double neumannLoadScaling = options().getReal("neumann_load_scaling");
+    std::vector<int> bcOffsets;
+    std::vector<int> bcPatches;
+    std::vector<int> bcSideIndexes;
+    Eigen::MatrixXd bcValues(m_targetDim, numNeumannSides);
+    bcOffsets.reserve(numNeumannSides + 1);
+    bcPatches.reserve(numNeumannSides);
+    bcSideIndexes.reserve(numNeumannSides);
+    bcOffsets.push_back(0);
+    bcValues.setZero();
+
+    int totalNumBoundaryGPs = 0;
+    for (BoundaryConditions::bcContainer::const_iterator it = neumannSides.begin();
+         it != neumannSides.end(); ++it)
+    {
+        const int bcIdx = static_cast<int>(std::distance(neumannSides.begin(), it));
+        const int patchIdx = it->patchIndex();
+        const int fixedDir = it->side().direction();
+
+        int numBoundaryGPs = 1;
+        for (int d = 0; d < m_domainDim; ++d)
+            if (d != fixedDir)
+                numBoundaryGPs *= m_multiBasisHost.basis(patchIdx).getTotalNumGaussPoints(d);
+
+        totalNumBoundaryGPs += numBoundaryGPs;
+        bcOffsets.push_back(totalNumBoundaryGPs);
+        bcPatches.push_back(patchIdx);
+        bcSideIndexes.push_back(it->side().index());
+
+        const Eigen::VectorXd values = it->valuesVector();
+        const int numValues = static_cast<int>(values.size());
+        for (int i = 0; i < m_targetDim && i < numValues; ++i)
+            bcValues(i, bcIdx) = neumannLoadScaling * values[i];
+    }
+
+    if (totalNumBoundaryGPs == 0)
+        return;
+
+    DeviceArray<int> bcOffsetsDevice(bcOffsets);
+    DeviceArray<int> bcPatchesDevice(bcPatches);
+    DeviceArray<int> bcSideIndexesDevice(bcSideIndexes);
+    DeviceArray<double> bcValuesDevice(bcValues);
+
+    const int totalEntries = totalNumBoundaryGPs * m_N_D;
+    int blockSize = 0;
+    int minGrid = 0;
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+        assembleNeumannBoundaryConditionKernel, 0, totalEntries);
+    if (blockSize <= 0)
+        blockSize = 128;
+    const int gridSize = (totalEntries + blockSize - 1) / blockSize;
+
+    assembleNeumannBoundaryConditionKernel<<<gridSize, blockSize>>>(
+        totalNumBoundaryGPs,
+        m_N_D,
+        m_displacement.deviceView(),
+        m_multiPatch.deviceView(),
+        m_sparseSystem.deviceView(),
+        m_multiGaussPoints.view(),
+        bcOffsetsDevice.vectorView(),
+        bcPatchesDevice.vectorView(),
+        bcSideIndexesDevice.vectorView(),
+        bcValuesDevice.matrixView(m_targetDim, numNeumannSides));
+
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess)
+        std::cerr << "Error after assembleNeumannBoundaryConditionKernel launch: "
+                  << cudaGetErrorString(err) << std::endl;
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+        std::cerr << "CUDA error during assembleNeumannBoundaryConditionKernel: "
+                  << cudaGetErrorString(err) << std::endl;
+}
+
+void GPUAssembler::assembleNeumannCornerPointLoads()
+{
+    const int numCornerLoads = static_cast<int>(
+        std::distance(m_boundaryConditions.neumannCornerBegin(),
+                      m_boundaryConditions.neumannCornerEnd()));
+    if (numCornerLoads == 0)
+        return;
+
+    const double neumannLoadScaling = options().getReal("neumann_load_scaling");
+    std::vector<int> cornerPatches;
+    std::vector<int> cornerDofs;
+    Eigen::MatrixXd loadValues(m_targetDim, numCornerLoads);
+    cornerPatches.reserve(numCornerLoads);
+    cornerDofs.reserve(numCornerLoads);
+    loadValues.setZero();
+
+    int loadIdx = 0;
+    for (BoundaryConditions::const_corner_iterator it = m_boundaryConditions.neumannCornerBegin();
+         it != m_boundaryConditions.neumannCornerEnd(); ++it, ++loadIdx)
+    {
+        const int patchIdx = it->patchIndex();
+        cornerPatches.push_back(patchIdx);
+        cornerDofs.push_back(m_multiBasisHost.basis(patchIdx).corner(it->corner()));
+
+        const Eigen::VectorXd values = it->valuesVector();
+        const int numValues = static_cast<int>(values.size());
+        for (int i = 0; i < m_targetDim && i < numValues; ++i)
+            loadValues(i, loadIdx) = neumannLoadScaling * values[i];
+    }
+
+    DeviceArray<int> cornerPatchesDevice(cornerPatches);
+    DeviceArray<int> cornerDofsDevice(cornerDofs);
+    DeviceArray<double> loadValuesDevice(loadValues);
+
+    const int totalEntries = numCornerLoads * m_targetDim;
+    int blockSize = 0;
+    int minGrid = 0;
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+        assembleNeumannCornerPointLoadKernel, 0, totalEntries);
+    if (blockSize <= 0)
+        blockSize = 128;
+    const int gridSize = (totalEntries + blockSize - 1) / blockSize;
+
+    assembleNeumannCornerPointLoadKernel<<<gridSize, blockSize>>>(
+        numCornerLoads,
+        m_sparseSystem.deviceView(),
+        cornerPatchesDevice.vectorView(),
+        cornerDofsDevice.vectorView(),
+        loadValuesDevice.matrixView(m_targetDim, numCornerLoads));
+
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess)
+        std::cerr << "Error after assembleNeumannCornerPointLoadKernel launch: "
+                  << cudaGetErrorString(err) << std::endl;
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+        std::cerr << "CUDA error during assembleNeumannCornerPointLoadKernel: "
+                  << cudaGetErrorString(err) << std::endl;
 }
 
 void GPUAssembler::assembleMatrix(

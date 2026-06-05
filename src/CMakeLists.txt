@@ -1,6 +1,6 @@
 # Automatically find all source and header files in the src directory
-file(GLOB_RECURSE SRC_FILES_CPP "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
-file(GLOB_RECURSE SRC_FILES_CU "${CMAKE_CURRENT_SOURCE_DIR}/*.cu" "${CMAKE_CURRENT_SOURCE_DIR}/*.cuh")
+file(GLOB_RECURSE SRC_FILES_CPP CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
+file(GLOB_RECURSE SRC_FILES_CU CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cu" "${CMAKE_CURRENT_SOURCE_DIR}/*.cuh")
 
 # Create an object library for all source files
 add_library(SIGA STATIC ${SRC_FILES_CPP} ${SRC_FILES_CU})
@@ -16,6 +16,7 @@ target_include_directories(SIGA PUBLIC
 # Macro for your #if ENABLE_AMGX in code:
 target_compile_definitions(SIGA PUBLIC
   ENABLE_AMGX=$<BOOL:${ENABLE_AMGX}>
+  ENABLE_PARDISO=$<BOOL:${ENABLE_PARDISO}>
   ENABLE_SPECTRA=$<BOOL:${ENABLE_SPECTRA}>
 )
 
@@ -38,7 +39,7 @@ target_link_libraries(SIGA
     #CUDA::cudadevrt
 )
 
-if (EIGEN_USE_MKL_ALL)
+if (EIGEN_USE_MKL_ALL OR ENABLE_PARDISO)
   target_link_libraries(SIGA PUBLIC MKL::MKL)
 endif()
 

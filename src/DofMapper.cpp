@@ -63,13 +63,37 @@ void DofMapper::init(const std::vector<TensorBsplineBasis> &basis,
         if (unk == -1 || it->unknown() == unk)
         {
             int patchIndex = it->patchIndex();
-            if (patchIndex < numPatches())
+            if (patchIndex >= numPatches())
             {
                 std::cerr << "Problem: a boundary condition is set on a patch id which does not exist." << std::endl;
                 return;
             }
 
             eliminateDof(basis[patchIndex].corner(it->corner()), patchIndex);
+        }
+    }
+
+    for (BoundaryConditions::const_coupling_iterator
+         it = bc.couplingBegin(); it != bc.couplingEnd(); ++it)
+    {
+        if (it->unknown() == -1 || it->unknown() == unk)
+        {
+            int patchIndex = it->patchIndex();
+            if (patchIndex >= numPatches())
+            {
+                std::cerr << "Problem: a boundary coupling is set on a patch id which does not exist." << std::endl;
+                return;
+            }
+
+            if (it->offset() <= 0)
+            {
+                std::cerr << "Problem: a boundary coupling offset must be positive." << std::endl;
+                return;
+            }
+
+            Eigen::MatrixXi boundaryDofs = basis[patchIndex].boundaryOffset(it->side(), 0);
+            Eigen::MatrixXi offsetDofs = basis[patchIndex].boundaryOffset(it->side(), it->offset());
+            matchDofs(patchIndex, boundaryDofs, patchIndex, offsetDofs);
         }
     }
 }
@@ -311,10 +335,10 @@ void DofMapper::replaceDofGlobally(int oldIdx, int newIdx)
 
 void DofMapper::replaceDofGlobally(int oldIdx, int newIdx, int comp)
 {
-    if (comp > -1)
+    if (comp < 0 || comp >= componentsSize())
     {
         std::cerr << "Component is invalid" << std::endl;
-        return; 
+        return;
     }
 
     std::vector<int> & dofs = m_dofs[comp];
