@@ -38,6 +38,22 @@ int main(int argc, char* argv[])
     const int materialLaw = argc > 16 ? std::stoi(argv[16]) : 1;
     const bool adaptiveLoadStep = argc > 17 ? std::stoi(argv[17]) != 0 : true;
     const int includeHbarFlexoCorrection = argc > 18 ? std::stoi(argv[18]) : 0;
+    const bool useSchurSolve = argc > 19 ? std::stoi(argv[19]) != 0 : false;
+    const double schurGammaMax = argc > 20 ? std::stod(argv[20]) : 1.0;
+    const double schurDisplacementScale = argc > 21 ? std::stod(argv[21]) : 1.0;
+    const double schurPotentialScale = argc > 22 ? std::stod(argv[22]) : 1.0;
+    const bool useExactSchurReduction =
+        argc > 23 ? std::stoi(argv[23]) != 0 : false;
+    const bool useCondensedEigenPerturbation =
+        argc > 24 ? std::stoi(argv[24]) != 0 : false;
+    const double condensedEigenPerturbationAmplitude =
+        argc > 25 ? std::stod(argv[25]) : 0.0;
+    const double condensedEigenPerturbationTrigger =
+        argc > 26 ? std::stod(argv[26]) : 0.0;
+    const int condensedEigenPerturbationSign =
+        argc > 27 ? std::stoi(argv[27]) : 1;
+    const int condensedEigenMaxIterations =
+        argc > 28 ? std::stoi(argv[28]) : 60;
     const double meterToMicrometer = 1.0e-6;
     const double dielectricPermittivityModel = dielectricPermittivity * meterToMicrometer;
     const double muLModel = muL * meterToMicrometer;
@@ -48,14 +64,14 @@ int main(int argc, char* argv[])
     if (materialLaw != 0 && materialLaw != 1)
         throw std::invalid_argument("materialLaw must be 0 (StVK) or 1 (neo-Hookean).");
 
-    const std::string rootFolder = "./flexoelectricity_CodonyOpenCircuitCantilever";
+    const std::string rootFolder = "./flexoelectricity_OpenCircuitCantilever";
     std::string outputFolder = rootFolder + "/output";
     for (int i = 1; i < argc; ++i)
         outputFolder += "_" + std::string(argv[i]);
     std::filesystem::create_directories(outputFolder);
     TeeLogger log(outputFolder + "/log.txt");
 
-    std::cout << "Codony et al. Section 5.1 open-circuit flexoelectric cantilever\n";
+    std::cout << "Open-circuit flexoelectric cantilever\n";
     std::cout << "Beam: L = " << length << ", H = " << height << "\n";
     std::cout << "Elements: " << numEle_L << " x " << numEle_H
               << ", degree = " << numDegreeElevations + 1 << "\n";
@@ -79,6 +95,29 @@ int main(int argc, char* argv[])
     std::cout << "Adaptive load step: " << (adaptiveLoadStep ? "on" : "off") << "\n";
     std::cout << "hbar flexoelectric correction: "
               << (includeHbarFlexoCorrection ? "on" : "off") << "\n";
+    std::cout << "Schur modified-step solve: "
+              << (useSchurSolve ? "on" : "off");
+    if (useSchurSolve)
+        std::cout << " (gammaMax = " << schurGammaMax
+                  << ", displacement scale = " << schurDisplacementScale
+                  << ", potential scale = " << schurPotentialScale
+                  << ", "
+                  << (useExactSchurReduction
+                          ? "exact Schur reduction"
+                          : "fast coupled sparse solve")
+                  << ")";
+    std::cout << "\n";
+    std::cout << "Condensed eigen perturbation: "
+              << (useCondensedEigenPerturbation ? "on" : "off");
+    if (useCondensedEigenPerturbation)
+        std::cout << " (amplitude = "
+                  << condensedEigenPerturbationAmplitude
+                  << ", trigger lambda <= "
+                  << condensedEigenPerturbationTrigger
+                  << ", sign = " << condensedEigenPerturbationSign
+                  << ", max iterations = "
+                  << condensedEigenMaxIterations << ")";
+    std::cout << "\n";
     std::cout << "Electrical BC: free east end grounded, remaining boundaries open circuit\n";
 
     const int knot_u_order = 1;
@@ -143,6 +182,10 @@ int main(int argc, char* argv[])
     std::cout << "Initialized system with " << assembler.numDofs() << " dofs.\n";
 
     GPUSolver solver(assembler);
+    solver.setUseSchurSolve(useSchurSolve);
+    solver.setModifiedStep(schurGammaMax, schurDisplacementScale,
+                                 schurPotentialScale);
+    solver.setUseExactSchurReduction(useExactSchurReduction);
 
     MultiPatch displacementHost;
     basisDisplacement.giveBasis(displacementHost, 2);
@@ -161,7 +204,7 @@ int main(int argc, char* argv[])
     GPUFunction electricFieldFunction(electricFieldHost);
 
     const std::string filePrefix =
-        outputFolder + "/flexoelectricity_CodonyOpenCircuitCantilever_";
+        outputFolder + "/flexoelectricity_OpenCircuitCantilever_";
     ParaviewCollection collection(filePrefix);
 
     std::vector<int> numPointsPerPatch{10000};
@@ -248,6 +291,47 @@ int main(int argc, char* argv[])
             if (loadStep < minLoadStep)
                 throw std::runtime_error("Load step became too small before convergence.");
             continue;
+        }
+
+        if (useCondensedEigenPerturbation &&
+            condensedEigenPerturbationAmplitude > 0.0)
+        {
+            Eigen::VectorXd perturbationBaseSolution;
+            solver.solutionToHost(perturbationBaseSolution);
+
+            Eigen::VectorXd displacementEigenvector;
+            Eigen::VectorXd electricEigenvector;
+            const double condensedLambda =
+                solver.smallestCondensedMechanicalEigenpair(
+                    displacementEigenvector, &electricEigenvector,
+                    condensedEigenMaxIterations);
+            std::cout << "Condensed mechanical lambda_min at step "
+                      << step << ": " << condensedLambda << "\n";
+
+            if (std::isfinite(condensedLambda) &&
+                condensedLambda <= condensedEigenPerturbationTrigger)
+            {
+                const bool perturbed =
+                    solver.perturbWithCondensedEigenvectors(
+                        displacementEigenvector, electricEigenvector,
+                        condensedEigenPerturbationAmplitude,
+                        condensedEigenPerturbationSign);
+                if (!perturbed)
+                    throw std::runtime_error(
+                        "Failed to apply condensed eigenvector perturbation.");
+
+                std::cout << "Applied condensed eigenvector perturbation "
+                          << "with amplitude "
+                          << condensedEigenPerturbationAmplitude
+                          << ". Re-solving step " << step << ".\n";
+                solver.solve();
+                if (!solver.isConverged())
+                {
+                    solver.setSolutionFromHost(perturbationBaseSolution);
+                    throw std::runtime_error(
+                        "Perturbed solution did not converge.");
+                }
+            }
         }
 
 #ifdef FLEXO_NUMERIC_JACOBIAN_TEST

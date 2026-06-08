@@ -34,6 +34,11 @@ private:
     double m_absTol = 1e-10;
     double m_relTol = 1e-10;
     int m_maxIter = 100;
+    bool m_useSchurSolve = false;
+    bool m_useExactSchurReduction = false;
+    double m_schurGammaMax = 1.0;
+    double m_schurDisplacementScale = 1.0;
+    double m_schurPotentialScale = 1.0;
 
 #if ENABLE_PARDISO
     using PardisoSpMat = Eigen::SparseMatrix<double, Eigen::RowMajor, int>;
@@ -45,7 +50,37 @@ private:
     int m_pardisoCols = -1;
     int m_pardisoNonZeros = -1;
 
+    PardisoSolver m_schurPhiPardisoSolver;
+    bool m_schurPhiPatternAnalyzed = false;
+    int m_schurPhiRows = -1;
+    int m_schurPhiCols = -1;
+    int m_schurPhiNonZeros = -1;
+
+    PardisoSolver m_schurUPardisoSolver;
+    bool m_schurUPatternAnalyzed = false;
+    int m_schurURows = -1;
+    int m_schurUCols = -1;
+    int m_schurUNonZeros = -1;
+
+    bool factorWithPardiso(PardisoSolver& solver,
+                           bool& patternAnalyzed,
+                           int& rows,
+                           int& cols,
+                           int& nonZeros,
+                           const PardisoSpMat& A,
+                           const char* context);
+
     bool solveWithPardiso(const PardisoSpMat& A,
+                          const Eigen::VectorXd& b,
+                          Eigen::VectorXd& x,
+                          const char* context);
+
+    bool solveWithPardiso(PardisoSolver& solver,
+                          bool& patternAnalyzed,
+                          int& rows,
+                          int& cols,
+                          int& nonZeros,
+                          const PardisoSpMat& A,
                           const Eigen::VectorXd& b,
                           Eigen::VectorXd& x,
                           const char* context);
@@ -96,12 +131,27 @@ public:
 
     //bool solveSingleIteration();
     bool solveSingleIteration_Eigen();
+    bool solveSingleIteration_Schur();
 #if ENABLE_AMGX
     bool solveSingleIteration_AMGX();
 #endif
     void solve();
     double smallestEigenValue();
     double smallestEigenValue(Eigen::VectorXd& eigenvector);
+    double smallestCondensedMechanicalEigenpair(Eigen::VectorXd& displacementEigenvector,
+                                                Eigen::VectorXd* electricEigenvector = nullptr,
+                                                int maxIterations = 60,
+                                                double tolerance = 1e-8);
+    double condensedMechanicalStabilityLDLT();
+    bool perturbWithCondensedEigenvectors(const Eigen::VectorXd& displacementEigenvector,
+                                          const Eigen::VectorXd& electricEigenvector,
+                                          double amplitude,
+                                          int sign = 1);
+    bool perturbWithCondensedMechanicalEigenvector(double amplitude,
+                                                   int sign = 1,
+                                                   double* eigenvalue = nullptr,
+                                                   int maxIterations = 60,
+                                                   double tolerance = 1e-8);
     double stability();
     void eigenvalues_symm_dense(DeviceMatrixView<double> matrix, 
                                 DeviceVectorView<double> eigenvalues,
@@ -147,4 +197,23 @@ public:
     }
 
     void setMaxIterations(int maxIter) { m_maxIter = maxIter; }
+
+    void setUseSchurSolve(bool useSchurSolve)
+    {
+        m_useSchurSolve = useSchurSolve;
+    }
+
+    void setModifiedStep(double gammaMax,
+                               double displacementScale = 1.0,
+                               double potentialScale = 1.0)
+    {
+        m_schurGammaMax = gammaMax;
+        m_schurDisplacementScale = displacementScale;
+        m_schurPotentialScale = potentialScale;
+    }
+
+    void setUseExactSchurReduction(bool useExactSchurReduction)
+    {
+        m_useExactSchurReduction = useExactSchurReduction;
+    }
 };

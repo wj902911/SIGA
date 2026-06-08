@@ -832,6 +832,14 @@ void assembleMatrixWithGPDataKernel(int numDerivatives, int EleStartId,
     }
 }
 
+__device__
+void computeMaterialResponse(int materialLaw,
+                                   double youngsModulus,
+                                   double poissonsRatio,
+                                   DeviceMatrixView<double> F,
+                                   DeviceMatrixView<double> S,
+                                   DeviceMatrixView<double> C);
+
 __global__
 void evaluateGPKernel_withoutComputingGPTableAndDers(
                     int numDerivatives, int totalNumGPs,
@@ -896,30 +904,11 @@ void evaluateGPKernel_withoutComputingGPTableAndDers(
         DeviceMatrixView<double> S(Ss.data() + idx * dim * dim, dim, dim);
         DeviceMatrixView<double> C(Cs.data() + idx * dimTensor * dimTensor, dimTensor, dimTensor);
         {
-            double YM = parameters[1];
-            double PR = parameters[0];
-            double lambda = YM * PR / ( ( 1. + PR ) * ( 1. - 2. * PR ) );
-            double mu = YM / ( 2. * ( 1. + PR ) );
-
-            double J = F.determinant();
-            double RCGData[3*3] = {0.0}; //max 3D
-            DeviceMatrixView<double> RCG(RCGData, dim, dim);
-            double F_transposeData[3*3] = {0.0}; //max 3D
-            DeviceMatrixView<double> F_transpose(F_transposeData, dim, dim);
-            F.transpose(F_transpose);
-            F_transpose.times(F, RCG);
-            double RCGinvData[3*3] = {0.0}; //max 3D
-            DeviceMatrixView<double> RCGinv(RCGinvData, dim, dim);
-            RCG.inverse(RCGinv);
-            RCGinv.times((lambda*(J*J-1)/2-mu), S);
-            S.tracePlus(mu);
-            matrixViewTraceTensor(C, RCGinv, RCGinv);
-            C.times(lambda*J*J);
-            double CtempData[6*6] = {0.0}; //max 3D
-            DeviceMatrixView<double> Ctemp(CtempData, dimTensor, dimTensor);
-            symmetricIdentityViewTensor(Ctemp, RCGinv);
-            Ctemp.times(mu-lambda*(J*J-1)/2);
-            C.plus(Ctemp);
+            const int parameterOffset = patch_idx * 3;
+            int materialLaw = static_cast<int>(parameters[parameterOffset + 2]);
+            double YM = parameters[parameterOffset + 1];
+            double PR = parameters[parameterOffset + 0];
+            computeMaterialResponse(materialLaw, YM, PR, F, S, C);
         }
     }
 }
@@ -949,16 +938,15 @@ void evaluateGPKernel(int numDerivatives, int GPStartId, int numGPBatched,
     {
         //printf("idx:%d\n", idx);
         int GPIdx = GPStartId + idx;
-        double YM = parameters[1];
-        double PR = parameters[0];
-        double lambda = YM * PR / ( ( 1. + PR ) * ( 1. - 2. * PR ) );
-        double mu = YM / ( 2. * ( 1. + PR ) );
-
         //int CPdim = multiPatch.targetDim();
         int dim = multiPatch.domainDim();
 
         int patch_idx(0);
         int point_idx = displacement.threadPatch(GPIdx, patch_idx);
+        const int parameterOffset = patch_idx * 3;
+        double YM = parameters[parameterOffset + 1];
+        double PR = parameters[parameterOffset + 0];
+        int materialLaw = static_cast<int>(parameters[parameterOffset + 2]);
         DeviceVectorView<double> pt(pts.data() + idx * dim, dim);
         //wts[idx] = displacement.gsPoint(point_idx, patch_idx, multiGaussPoints[patch_idx], pt);
         double wt = displacement.gsPoint(point_idx, patch_idx, multiGaussPoints[patch_idx], pt);
@@ -1003,25 +991,7 @@ void evaluateGPKernel(int numDerivatives, int GPStartId, int numGPBatched,
         int dimTensor = (dim * (dim + 1)) / 2;
         DeviceMatrixView<double> C(Cs.data() + idx * dimTensor * dimTensor, dimTensor, dimTensor);
         {
-            double J = F.determinant();
-            double RCGData[3*3] = {0.0}; //max 3D
-            DeviceMatrixView<double> RCG(RCGData, dim, dim);
-            double F_transposeData[3*3] = {0.0}; //max 3D
-            DeviceMatrixView<double> F_transpose(F_transposeData, dim, dim);
-            F.transpose(F_transpose);
-            F_transpose.times(F, RCG);
-            double RCGinvData[3*3] = {0.0}; //max 3D
-            DeviceMatrixView<double> RCGinv(RCGinvData, dim, dim);
-            RCG.inverse(RCGinv);
-            RCGinv.times((lambda*(J*J-1)/2-mu), S);
-            S.tracePlus(mu);
-            matrixViewTraceTensor(C, RCGinv, RCGinv);
-            C.times(lambda*J*J);
-            double CtempData[6*6] = {0.0}; //max 3D
-            DeviceMatrixView<double> Ctemp(CtempData, dimTensor, dimTensor);
-            symmetricIdentityViewTensor(Ctemp, RCGinv);
-            Ctemp.times(mu-lambda*(J*J-1)/2);
-            C.plus(Ctemp);
+            computeMaterialResponse(materialLaw, YM, PR, F, S, C);
         }
     }
 }
@@ -1062,8 +1032,9 @@ void assembleDomainKernel_perTileBlock_loopOverGps(int numDerivatives,
             dimTensor = (dim * (dim + 1)) / 2;
             ele_idx = displacement.threadPatch_element(idx, patch_idx);
             
-            double YM = parameters[1];
-            double PR = parameters[0];
+            const int parameterOffset = patch_idx * 3;
+            double YM = parameters[parameterOffset + 1];
+            double PR = parameters[parameterOffset + 0];
             lambda = YM * PR / ( ( 1. + PR ) * ( 1. - 2. * PR ) );
             mu = YM / ( 2. * ( 1. + PR ) );
             //printf("blockIdx.x=%d, patch_idx=%d, blockCoord=(%d, %d), wt=%f, pt=(%f, %f)\n", 
@@ -1369,8 +1340,9 @@ void assembleDomainKernel_perTileBlock(int numDerivatives,
             wt = displacement.gsPoint(point_idx, patch_idx, 
                                          multiGaussPoints[patch_idx], pt);
             
-            double YM = parameters[1];
-            double PR = parameters[0];
+            const int parameterOffset = patch_idx * 3;
+            double YM = parameters[parameterOffset + 1];
+            double PR = parameters[parameterOffset + 0];
             lambda = YM * PR / ( ( 1. + PR ) * ( 1. - 2. * PR ) );
             mu = YM / ( 2. * ( 1. + PR ) );
             //printf("blockIdx.x=%d, patch_idx=%d, blockCoord=(%d, %d), wt=%f, pt=(%f, %f)\n", 
@@ -1624,17 +1596,17 @@ void assembleDomainKernel(
     {
         //extern __shared__ double shmem[];
         
-        double YM = parameters[1];
-        double PR = parameters[0];
-        double lambda = YM * PR / ( ( 1. + PR ) * ( 1. - 2. * PR ) );
-        double mu = YM / ( 2. * ( 1. + PR ) );
-        
         int numDerivatives = 1;
         int CPdim = multiPatch.targetDim();
         int dim = multiPatch.domainDim();
         
         int patch_idx(0);
         int point_idx = displacement.threadPatch(idx, patch_idx);
+        const int parameterOffset = patch_idx * 3;
+        double YM = parameters[parameterOffset + 1];
+        double PR = parameters[parameterOffset + 0];
+        double lambda = YM * PR / ( ( 1. + PR ) * ( 1. - 2. * PR ) );
+        double mu = YM / ( 2. * ( 1. + PR ) );
         double ptData[3]; //max 3D
         DeviceVectorView<double> pt(ptData, multiGaussPoints.dim());
         double wt = displacement.gsPoint(point_idx, patch_idx, 
@@ -2368,11 +2340,130 @@ OptionList GPUAssembler::defaultOptions()
     opt.addReal("youngs_modulus", "Young's modulus", 1.0);
     opt.addReal("poissons_ratio", "Poisson's ratio", 0.3);
     opt.addReal("neumann_load_scaling", "Multiplier for Neumann boundary and corner loads", 1.0);
+    opt.addInt("material_law", "0: StVK, 1: neo-Hookean", 1);
     return opt;
+}
+
+__device__
+void computeMaterialResponse(int materialLaw,
+                                   double youngsModulus,
+                                   double poissonsRatio,
+                                   DeviceMatrixView<double> F,
+                                   DeviceMatrixView<double> S,
+                                   DeviceMatrixView<double> C)
+{
+    const int dim = F.rows();
+    const int dimTensor = (dim * (dim + 1)) / 2;
+    const double lambda = youngsModulus * poissonsRatio /
+        ((1.0 + poissonsRatio) * (1.0 - 2.0 * poissonsRatio));
+    const double mu = youngsModulus / (2.0 * (1.0 + poissonsRatio));
+
+    for (int i = 0; i < dim; ++i)
+        for (int j = 0; j < dim; ++j)
+            S(i, j) = 0.0;
+    for (int i = 0; i < dimTensor; ++i)
+        for (int j = 0; j < dimTensor; ++j)
+            C(i, j) = 0.0;
+
+    double FTransData[3 * 3] = {0.0};
+    double rightCauchyGreenData[3 * 3] = {0.0};
+    DeviceMatrixView<double> FTrans(FTransData, dim, dim);
+    DeviceMatrixView<double> rightCauchyGreen(rightCauchyGreenData, dim, dim);
+    F.transpose(FTrans);
+    FTrans.times(F, rightCauchyGreen);
+
+    if (materialLaw == 0)
+    {
+        double traceE = 0.0;
+        for (int A = 0; A < dim; ++A)
+            traceE += 0.5 * (rightCauchyGreen(A, A) - 1.0);
+
+        for (int A = 0; A < dim; ++A)
+            for (int B = 0; B < dim; ++B)
+            {
+                const double EAB =
+                    0.5 * (rightCauchyGreen(A, B) - (A == B ? 1.0 : 0.0));
+                S(A, B) = lambda * traceE * (A == B ? 1.0 : 0.0) +
+                          2.0 * mu * EAB;
+            }
+
+        for (int i = 0; i < dimTensor; ++i)
+        {
+            const int A = voigt(dim, i, 0);
+            const int B = voigt(dim, i, 1);
+            for (int j = 0; j < dimTensor; ++j)
+            {
+                const int Cidx = voigt(dim, j, 0);
+                const int D = voigt(dim, j, 1);
+                C(i, j) = lambda * (A == B ? 1.0 : 0.0) *
+                                  (Cidx == D ? 1.0 : 0.0) +
+                          mu * ((A == Cidx && B == D ? 1.0 : 0.0) +
+                                (A == D && B == Cidx ? 1.0 : 0.0));
+            }
+        }
+        return;
+    }
+
+    const double J = F.determinant();
+    double rightCauchyGreenInvData[3 * 3] = {0.0};
+    DeviceMatrixView<double> rightCauchyGreenInv(rightCauchyGreenInvData,
+                                                 dim, dim);
+    rightCauchyGreen.inverse(rightCauchyGreenInv);
+
+    rightCauchyGreenInv.times(lambda * (J * J - 1.0) / 2.0 - mu, S);
+    S.tracePlus(mu);
+
+    matrixViewTraceTensor(C, rightCauchyGreenInv, rightCauchyGreenInv);
+    C.times(lambda * J * J);
+    double CtempData[6 * 6] = {0.0};
+    DeviceMatrixView<double> Ctemp(CtempData, dimTensor, dimTensor);
+    symmetricIdentityViewTensor(Ctemp, rightCauchyGreenInv);
+    Ctemp.times(mu - lambda * (J * J - 1.0) / 2.0);
+    C.plus(Ctemp);
 }
 
 void GPUAssembler::setDefaultOptions(const OptionList &opt)
 { m_options = opt; }
+
+void GPUAssembler::setPatchRealOption(const std::string& label,
+                                      const std::vector<double>& values)
+{
+    if (static_cast<int>(values.size()) != numPatches())
+        throw std::invalid_argument("Patch real option '" + label +
+            "' must have one value per patch");
+    m_patchRealOptions[label] = values;
+}
+
+void GPUAssembler::setPatchIntOption(const std::string& label,
+                                     const std::vector<int>& values)
+{
+    if (static_cast<int>(values.size()) != numPatches())
+        throw std::invalid_argument("Patch int option '" + label +
+            "' must have one value per patch");
+    m_patchIntOptions[label] = values;
+}
+
+std::vector<double> GPUAssembler::patchRealOptionValues(
+    const std::string& label) const
+{
+    const auto it = m_patchRealOptions.find(label);
+    if (it != m_patchRealOptions.end())
+        return it->second;
+
+    return std::vector<double>(static_cast<std::size_t>(numPatches()),
+                               m_options.getReal(label));
+}
+
+std::vector<int> GPUAssembler::patchIntOptionValues(
+    const std::string& label) const
+{
+    const auto it = m_patchIntOptions.find(label);
+    if (it != m_patchIntOptions.end())
+        return it->second;
+
+    return std::vector<int>(static_cast<std::size_t>(numPatches()),
+                            m_options.getInt(label));
+}
 
 void GPUAssembler::
 computeDirichletDofs(int unk_, 
@@ -2534,10 +2625,21 @@ void GPUAssembler::constructCauchyStressFunctionFromDisplacement(MultiPatchDevic
     DeviceMatrixView<double> Cs(m_GPData.data() + offset, m_dimTensor, m_totalGPs * m_dimTensor);
     offset += Cs.size();
 
-    const std::vector<double> materialParameters{
-        options().getReal("poissons_ratio"),
-        options().getReal("youngs_modulus")
-    };
+    const std::vector<double> patchPoissonsRatios =
+        patchRealOptionValues("poissons_ratio");
+    const std::vector<double> patchYoungsModuli =
+        patchRealOptionValues("youngs_modulus");
+    const std::vector<int> patchMaterialLaws =
+        patchIntOptionValues("material_law");
+    std::vector<double> materialParameters;
+    materialParameters.reserve(static_cast<std::size_t>(3 * numPatches()));
+    for (int p = 0; p < numPatches(); ++p)
+    {
+        materialParameters.push_back(patchPoissonsRatios[static_cast<std::size_t>(p)]);
+        materialParameters.push_back(patchYoungsModuli[static_cast<std::size_t>(p)]);
+        materialParameters.push_back(static_cast<double>(
+            patchMaterialLaws[static_cast<std::size_t>(p)]));
+    }
     DeviceArray<double> parameterValues(materialParameters);
     cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
         evaluateGPKernel_withoutComputingGPTableAndDers, 0, m_totalGPs);
@@ -2685,10 +2787,21 @@ void GPUAssembler::assemble(const DeviceVectorView<double> &solVector,
     printf("RHS Vector:\n");
     m_sparseSystem.deviceView().rhs().print();
 #endif
-    const std::vector<double> materialParameters{
-        options().getReal("poissons_ratio"),
-        options().getReal("youngs_modulus")
-    };
+    const std::vector<double> patchPoissonsRatios =
+        patchRealOptionValues("poissons_ratio");
+    const std::vector<double> patchYoungsModuli =
+        patchRealOptionValues("youngs_modulus");
+    const std::vector<int> patchMaterialLaws =
+        patchIntOptionValues("material_law");
+    std::vector<double> materialParameters;
+    materialParameters.reserve(static_cast<std::size_t>(3 * numPatches()));
+    for (int p = 0; p < numPatches(); ++p)
+    {
+        materialParameters.push_back(patchPoissonsRatios[static_cast<std::size_t>(p)]);
+        materialParameters.push_back(patchYoungsModuli[static_cast<std::size_t>(p)]);
+        materialParameters.push_back(static_cast<double>(
+            patchMaterialLaws[static_cast<std::size_t>(p)]));
+    }
     DeviceArray<double> parameterValues(materialParameters);
     //int* entryCountDevicePtr;
     //err = cudaMalloc((void**)&entryCountDevicePtr, sizeof(int));

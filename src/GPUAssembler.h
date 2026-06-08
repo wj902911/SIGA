@@ -7,6 +7,10 @@
 #include <MultiGaussPointsDeviceData.h>
 #include <OptionList.h>
 #include <GPUFunction.h>
+#include <map>
+#include <string>
+#include <stdexcept>
+#include <vector>
 
 class GPUAssembler
 {
@@ -43,6 +47,8 @@ private:
     MultiGaussPointsDeviceData m_multiGaussPoints;
     bool m_initialAssemble = true;
     OptionList m_options;
+    std::map<std::string, std::vector<double>> m_patchRealOptions;
+    std::map<std::string, std::vector<int>> m_patchIntOptions;
 
     __host__
     void constructCauchyStressFunctionFromDisplacement(MultiPatchDeviceView displacementView,
@@ -162,6 +168,15 @@ public:
     __host__
     Eigen::VectorXd hostRHS() const { return m_sparseSystem.hostRHS(); }
 
+    __host__
+    int numFieldBlocks() const { return m_sparseSystem.numRowBlocks(); }
+
+    __host__
+    int fieldBlockOffset(int block) const { return m_sparseSystem.rowBlockOffset(block); }
+
+    __host__
+    int fieldBlockSize(int block) const { return m_sparseSystem.rowBlockSize(block); }
+
 #if 0
     __host__
     int numDofs() const
@@ -210,6 +225,20 @@ public:
     OptionList& options() { return m_options; }
 
     __host__
+    void setPatchRealOption(const std::string& label,
+                            const std::vector<double>& values);
+
+    __host__
+    void setPatchIntOption(const std::string& label,
+                           const std::vector<int>& values);
+
+    __host__
+    std::vector<double> patchRealOptionValues(const std::string& label) const;
+
+    __host__
+    std::vector<int> patchIntOptionValues(const std::string& label) const;
+
+    __host__
     const BoundaryConditions& boundaryConditions() const { return m_boundaryConditions; }
 
     __host__
@@ -229,15 +258,8 @@ public:
     __host__
     void setupSparseSystem(const SparseSystem& sparseSystem)
     {
-        m_sparseSystem.setMatrixRows(sparseSystem.matrixRows());
-        m_sparseSystem.setMatrixCols(sparseSystem.matrixCols());
-        std::vector<int> intDataOffsets;
-        std::vector<int> intData;
-        sparseSystem.getDataVector(intDataOffsets, intData);
-        m_sparseSystem.setIntDataOffsets(intDataOffsets);
-        m_sparseSystem.setIntData(intData);
+        m_sparseSystem = SparseSystemDeviceData(sparseSystem);
         m_sparseSystem.resizeRHS(sparseSystem.matrixRows());
-        m_sparseSystem.setPermVectors(sparseSystem.permOld2New(), sparseSystem.permNew2Old());
     }
 
     __host__

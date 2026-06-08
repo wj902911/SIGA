@@ -13,6 +13,7 @@ private:
     int m_elePotentialP1 = 1;
     DeviceArray<double> m_elecValuesAndDerss;
     DeviceArray<double> m_flexoGPData;
+    DeviceArray<double> m_flexoBasisData;
 
     __host__
     void constructElectricFieldFunctionFromPotential(

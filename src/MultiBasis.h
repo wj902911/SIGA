@@ -27,6 +27,9 @@ public:
     void uniformRefine(int patchIndex, int direction, int numKnots);
     void uniformRefine(int direction, int numKnots);
     void uniformRefine(int numKnots = 1);
+    void insertKnots(int patchIndex, int direction,
+                     const std::vector<double>& knots);
+    void insertKnots(int direction, const std::vector<double>& knots);
 
     void getMapper(bool conforming, const BoundaryConditions& bc,
                    int unk, DofMapper& dofMapper, bool finalize = true) const;

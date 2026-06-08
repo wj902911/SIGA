@@ -14,6 +14,7 @@
 #include <Eigen/Sparse>
 #include <Eigen/SparseCholesky>
 #include <Eigen/Eigenvalues>
+#include <Eigen/LU>
 #if ENABLE_PARDISO
 #include <Eigen/PardisoSupport>
 #endif
@@ -26,6 +27,7 @@
 #include <cmath>
 #include <filesystem>
 #include <limits>
+#include <vector>
 
 #define CUSOLVER_CHECK(stat) do { \
     cusolverStatus_t _s = (stat); \
@@ -89,50 +91,161 @@ const char* cpuDirectSolverName()
     return "Eigen SparseLU";
 #endif
 }
+
+void extractSchurBlocks(
+    const Eigen::SparseMatrix<double, Eigen::RowMajor, int>& A,
+    int uSize,
+    int phiStart,
+    int phiSize,
+    Eigen::SparseMatrix<double, Eigen::RowMajor, int>& Huu,
+    Eigen::SparseMatrix<double, Eigen::RowMajor, int>& Hup,
+    Eigen::SparseMatrix<double, Eigen::RowMajor, int>& Hpu,
+    Eigen::SparseMatrix<double, Eigen::RowMajor, int>& Hpp)
+{
+    using SpMat = Eigen::SparseMatrix<double, Eigen::RowMajor, int>;
+    using Triplet = Eigen::Triplet<double, int>;
+
+    std::vector<Triplet> uuTriplets;
+    std::vector<Triplet> upTriplets;
+    std::vector<Triplet> puTriplets;
+    std::vector<Triplet> ppTriplets;
+    uuTriplets.reserve(static_cast<std::size_t>(A.nonZeros()));
+    upTriplets.reserve(static_cast<std::size_t>(A.nonZeros() / 4));
+    puTriplets.reserve(static_cast<std::size_t>(A.nonZeros() / 4));
+    ppTriplets.reserve(static_cast<std::size_t>(A.nonZeros() / 4));
+
+    for (int r = 0; r < A.rows(); ++r)
+    {
+        const bool rowIsU = r < uSize;
+        const bool rowIsPhi = r >= phiStart && r < phiStart + phiSize;
+        if (!rowIsU && !rowIsPhi)
+            continue;
+
+        for (SpMat::InnerIterator it(A, r); it; ++it)
+        {
+            const int c = static_cast<int>(it.col());
+            const bool colIsU = c < uSize;
+            const bool colIsPhi = c >= phiStart && c < phiStart + phiSize;
+            if (rowIsU && colIsU)
+                uuTriplets.emplace_back(r, c, it.value());
+            else if (rowIsU && colIsPhi)
+                upTriplets.emplace_back(r, c - phiStart, it.value());
+            else if (rowIsPhi && colIsU)
+                puTriplets.emplace_back(r - phiStart, c, it.value());
+            else if (rowIsPhi && colIsPhi)
+                ppTriplets.emplace_back(r - phiStart, c - phiStart,
+                                        it.value());
+        }
+    }
+
+    Huu.resize(uSize, uSize);
+    Hup.resize(uSize, phiSize);
+    Hpu.resize(phiSize, uSize);
+    Hpp.resize(phiSize, phiSize);
+    Huu.setFromTriplets(uuTriplets.begin(), uuTriplets.end());
+    Hup.setFromTriplets(upTriplets.begin(), upTriplets.end());
+    Hpu.setFromTriplets(puTriplets.begin(), puTriplets.end());
+    Hpp.setFromTriplets(ppTriplets.begin(), ppTriplets.end());
+    Huu.makeCompressed();
+    Hup.makeCompressed();
+    Hpu.makeCompressed();
+    Hpp.makeCompressed();
+}
+
+Eigen::SparseMatrix<double, Eigen::RowMajor, int> sparseFromDense(
+    const Eigen::MatrixXd& A)
+{
+    using SpMat = Eigen::SparseMatrix<double, Eigen::RowMajor, int>;
+    using Triplet = Eigen::Triplet<double, int>;
+
+    const double threshold =
+        1.0e-14 * (std::max)(1.0, A.cwiseAbs().maxCoeff());
+    std::vector<Triplet> triplets;
+    triplets.reserve(static_cast<std::size_t>(A.rows() * A.cols()));
+    for (int r = 0; r < A.rows(); ++r)
+        for (int c = 0; c < A.cols(); ++c)
+            if (std::abs(A(r, c)) > threshold)
+                triplets.emplace_back(r, c, A(r, c));
+
+    SpMat sparse(A.rows(), A.cols());
+    sparse.setFromTriplets(triplets.begin(), triplets.end());
+    sparse.makeCompressed();
+    return sparse;
+}
 } // namespace
 
 #if ENABLE_PARDISO
-bool GPUSolver::solveWithPardiso(const PardisoSpMat& A,
-                                 const Eigen::VectorXd& b,
-                                 Eigen::VectorXd& x,
-                                 const char* context)
+bool GPUSolver::factorWithPardiso(PardisoSolver& solver,
+                                  bool& patternAnalyzed,
+                                  int& rows,
+                                  int& cols,
+                                  int& nonZeros,
+                                  const PardisoSpMat& A,
+                                  const char* context)
 {
     const bool matrixShapeChanged =
-        A.rows() != m_pardisoRows ||
-        A.cols() != m_pardisoCols ||
-        A.nonZeros() != m_pardisoNonZeros;
+        A.rows() != rows ||
+        A.cols() != cols ||
+        A.nonZeros() != nonZeros;
 
-    if (!m_pardisoPatternAnalyzed || matrixShapeChanged)
+    if (!patternAnalyzed || matrixShapeChanged)
     {
-        m_pardisoSolver.analyzePattern(A);
-        if (m_pardisoSolver.info() != Eigen::Success)
+        solver.analyzePattern(A);
+        if (solver.info() != Eigen::Success)
         {
             printf("Eigen PARDISO LDLT analyzePattern failed in %s\n", context);
-            m_pardisoPatternAnalyzed = false;
+            patternAnalyzed = false;
             return false;
         }
 
-        m_pardisoRows = static_cast<int>(A.rows());
-        m_pardisoCols = static_cast<int>(A.cols());
-        m_pardisoNonZeros = static_cast<int>(A.nonZeros());
-        m_pardisoPatternAnalyzed = true;
+        rows = static_cast<int>(A.rows());
+        cols = static_cast<int>(A.cols());
+        nonZeros = static_cast<int>(A.nonZeros());
+        patternAnalyzed = true;
     }
 
-    m_pardisoSolver.factorize(A);
-    if (m_pardisoSolver.info() != Eigen::Success)
+    solver.factorize(A);
+    if (solver.info() != Eigen::Success)
     {
         printf("Eigen PARDISO LDLT factorization failed in %s\n", context);
         return false;
     }
 
-    x = m_pardisoSolver.solve(b);
-    if (m_pardisoSolver.info() != Eigen::Success)
+    return true;
+}
+
+bool GPUSolver::solveWithPardiso(PardisoSolver& solver,
+                                 bool& patternAnalyzed,
+                                 int& rows,
+                                 int& cols,
+                                 int& nonZeros,
+                                 const PardisoSpMat& A,
+                                 const Eigen::VectorXd& b,
+                                 Eigen::VectorXd& x,
+                                 const char* context)
+{
+    if (!factorWithPardiso(solver, patternAnalyzed, rows, cols, nonZeros,
+                           A, context))
+        return false;
+
+    x = solver.solve(b);
+    if (solver.info() != Eigen::Success)
     {
         printf("Eigen PARDISO LDLT solve failed in %s\n", context);
         return false;
     }
 
     return true;
+}
+
+bool GPUSolver::solveWithPardiso(const PardisoSpMat& A,
+                                 const Eigen::VectorXd& b,
+                                 Eigen::VectorXd& x,
+                                 const char* context)
+{
+    return solveWithPardiso(m_pardisoSolver, m_pardisoPatternAnalyzed,
+                            m_pardisoRows, m_pardisoCols,
+                            m_pardisoNonZeros, A, b, x, context);
 }
 #endif
 
@@ -540,6 +653,276 @@ bool GPUSolver::solveSingleIteration_Eigen()
     return true;
 }
 
+bool GPUSolver::solveSingleIteration_Schur()
+{
+    m_assembler.assemble(m_solVector.vectorView(), m_numIterations, m_fixedDoFs.view());
+
+    DeviceVectorView<double> bdev = m_assembler.rhs();
+    using RowSpMat = Eigen::SparseMatrix<double, Eigen::RowMajor, int>;
+
+    const RowSpMat Arow = m_assembler.csrMatrix().toEigenCSR();
+    const Eigen::VectorXd b = m_assembler.hostRHS();
+    const int n = static_cast<int>(b.size());
+    if (Arow.rows() != n || Arow.cols() != n)
+    {
+        printf("Schur solve requires a square matrix matching RHS size\n");
+        return false;
+    }
+
+    const int dim = m_assembler.targetDim();
+    const int phiBlock = dim;
+    if (m_assembler.numFieldBlocks() <= phiBlock)
+    {
+        printf("Schur solve requires displacement blocks plus one electric-potential block\n");
+        return false;
+    }
+
+    int uSize = 0;
+    for (int block = 0; block < dim; ++block)
+    {
+        if (m_assembler.fieldBlockOffset(block) != uSize)
+        {
+            printf("Schur solve expected contiguous displacement blocks\n");
+            return false;
+        }
+        uSize += m_assembler.fieldBlockSize(block);
+    }
+
+    const int phiStart = m_assembler.fieldBlockOffset(phiBlock);
+    const int phiSize = m_assembler.fieldBlockSize(phiBlock);
+    if (phiStart != uSize || phiStart + phiSize != n || uSize <= 0 || phiSize <= 0)
+    {
+        printf("Schur solve expected [displacement][potential] block ordering\n");
+        return false;
+    }
+
+    if (!m_useExactSchurReduction)
+    {
+#if ENABLE_PARDISO
+        Eigen::VectorXd x;
+        if (!solveWithPardiso(Arow, b, x,
+                              "fast coupled modified-step solve"))
+            return false;
+#else
+        Eigen::SparseLU<RowSpMat> coupledSolver;
+        coupledSolver.compute(Arow);
+        if (coupledSolver.info() != Eigen::Success)
+        {
+            printf("Eigen SparseLU factorization failed in fast coupled modified-step solve\n");
+            return false;
+        }
+        Eigen::VectorXd x = coupledSolver.solve(b);
+        if (coupledSolver.info() != Eigen::Success)
+        {
+            printf("Eigen SparseLU solve failed in fast coupled modified-step solve\n");
+            return false;
+        }
+#endif
+
+        Eigen::VectorXd deltaU = x.segment(0, uSize);
+        Eigen::VectorXd deltaPhi = x.segment(phiStart, phiSize);
+        const Eigen::VectorXd bu = b.segment(0, uSize);
+        const Eigen::VectorXd bp = b.segment(phiStart, phiSize);
+        const double dotUWithResidual = -bu.dot(deltaU);
+        const double dotPhiWithResidual = -bp.dot(deltaPhi);
+        const double alphaU = dotUWithResidual > 0.0 ? -1.0 : 1.0;
+        const double alphaPhi = dotPhiWithResidual < 0.0 ? -1.0 : 1.0;
+
+        const double dispScale =
+            (std::abs(m_schurDisplacementScale) > 0.0)
+                ? std::abs(m_schurDisplacementScale)
+                : 1.0;
+        const double phiScale =
+            (std::abs(m_schurPotentialScale) > 0.0)
+                ? std::abs(m_schurPotentialScale)
+                : 1.0;
+        const double stepNorm = std::sqrt(
+            deltaU.squaredNorm() / (dispScale * dispScale) +
+            deltaPhi.squaredNorm() / (phiScale * phiScale));
+        const double gammaMax =
+            (m_schurGammaMax > 0.0) ? m_schurGammaMax : 1.0;
+        const double beta =
+            (stepNorm > 0.0) ? (std::min)(1.0, gammaMax / stepNorm) : 1.0;
+
+        x.setZero();
+        x.segment(0, uSize) = alphaU * beta * deltaU;
+        x.segment(phiStart, phiSize) = alphaPhi * beta * deltaPhi;
+
+        CHECK_CUDA(cudaMemcpy(m_deltaSolVector.data(), x.data(),
+                              n * sizeof(double), cudaMemcpyHostToDevice));
+
+        m_updateNorm = m_deltaSolVector.vectorView().norm();
+        m_residualNorm = bdev.norm();
+        m_solVector.vectorView() += m_deltaSolVector.vectorView();
+        CHECK_CUDA(cudaMemset(m_deltaSolVector.data(), 0,
+                              m_deltaSolVector.size() * sizeof(double)));
+
+        if (m_numIterations == 0)
+        {
+            m_initResidualNorm = m_residualNorm;
+            m_initUpdateNorm = m_updateNorm;
+        }
+
+        return true;
+    }
+
+    RowSpMat Huu;
+    RowSpMat Hup;
+    RowSpMat Hpu;
+    RowSpMat Hpp;
+    extractSchurBlocks(Arow, uSize, phiStart, phiSize,
+                             Huu, Hup, Hpu, Hpp);
+
+    const Eigen::VectorXd bu = b.segment(0, uSize);
+    const Eigen::VectorXd bp = b.segment(phiStart, phiSize);
+
+#if ENABLE_PARDISO
+    if (!factorWithPardiso(m_schurPhiPardisoSolver,
+                           m_schurPhiPatternAnalyzed,
+                           m_schurPhiRows,
+                           m_schurPhiCols,
+                           m_schurPhiNonZeros,
+                           Hpp, "Schur H_phi_phi"))
+    {
+        printf("Schur solve failed to factorize H_phi_phi\n");
+        return false;
+    }
+
+    Eigen::MatrixXd phiRHS(phiSize, uSize + 1);
+    phiRHS.leftCols(uSize) = Eigen::MatrixXd(Hpu);
+    phiRHS.col(uSize) = bp;
+    const Eigen::MatrixXd phiSolutions =
+        m_schurPhiPardisoSolver.solve(phiRHS);
+    if (m_schurPhiPardisoSolver.info() != Eigen::Success)
+    {
+        printf("Eigen PARDISO LDLT solve failed in Schur H_phi_phi inverse applications\n");
+        return false;
+    }
+    const Eigen::MatrixXd invHppHpu = phiSolutions.leftCols(uSize);
+    const Eigen::VectorXd invHppBp = phiSolutions.col(uSize);
+#else
+    Eigen::SparseLU<RowSpMat> phiSolver;
+    phiSolver.compute(Hpp);
+    if (phiSolver.info() != Eigen::Success)
+    {
+        printf("Eigen SparseLU factorization failed in Schur H_phi_phi\n");
+        return false;
+    }
+
+    const Eigen::MatrixXd invHppHpu = phiSolver.solve(Eigen::MatrixXd(Hpu));
+    if (phiSolver.info() != Eigen::Success)
+    {
+        printf("Eigen SparseLU solve failed in Schur H_phi_phi^{-1} H_phi_u\n");
+        return false;
+    }
+    const Eigen::VectorXd invHppBp = phiSolver.solve(bp);
+    if (phiSolver.info() != Eigen::Success)
+    {
+        printf("Eigen SparseLU solve failed in Schur H_phi_phi^{-1} b_phi\n");
+        return false;
+    }
+#endif
+
+    const Eigen::MatrixXd HhatDense =
+        Eigen::MatrixXd(Huu) - Hup * invHppHpu;
+    const RowSpMat Hhat = sparseFromDense(HhatDense);
+    const Eigen::VectorXd bhatU = bu - Hup * invHppBp;
+
+#if ENABLE_PARDISO
+    Eigen::VectorXd deltaU;
+    if (!solveWithPardiso(m_schurUPardisoSolver,
+                          m_schurUPatternAnalyzed,
+                          m_schurURows,
+                          m_schurUCols,
+                          m_schurUNonZeros,
+                          Hhat, bhatU, deltaU,
+                          "Schur reduced mechanical matrix"))
+    {
+        printf("Schur solve failed in reduced mechanical solve\n");
+        return false;
+    }
+#else
+    Eigen::SparseLU<RowSpMat> uSolver;
+    uSolver.compute(Hhat);
+    if (uSolver.info() != Eigen::Success)
+    {
+        printf("Eigen SparseLU factorization failed in Schur reduced mechanical matrix\n");
+        return false;
+    }
+    Eigen::VectorXd deltaU = uSolver.solve(bhatU);
+    if (uSolver.info() != Eigen::Success)
+    {
+        printf("Eigen SparseLU solve failed in Schur reduced mechanical matrix\n");
+        return false;
+    }
+#endif
+    if ((Hhat * deltaU - bhatU).norm() >
+        1.0e-8 * (std::max)(1.0, bhatU.norm()))
+    {
+        printf("Schur reduced mechanical solve residual is large\n");
+        return false;
+    }
+
+    const Eigen::VectorXd bhatPhi = bp - Hpu * deltaU;
+#if ENABLE_PARDISO
+    Eigen::VectorXd deltaPhi = m_schurPhiPardisoSolver.solve(bhatPhi);
+    if (m_schurPhiPardisoSolver.info() != Eigen::Success)
+    {
+        printf("Eigen PARDISO LDLT solve failed while recovering Schur delta_phi\n");
+        return false;
+    }
+#else
+    Eigen::VectorXd deltaPhi = phiSolver.solve(bhatPhi);
+    if (phiSolver.info() != Eigen::Success)
+    {
+        printf("Eigen SparseLU solve failed while recovering Schur delta_phi\n");
+        return false;
+    }
+#endif
+
+    const double dotUWithResidual = -bhatU.dot(deltaU);
+    const double dotPhiWithResidual = -bhatPhi.dot(deltaPhi);
+    const double alphaU = dotUWithResidual > 0.0 ? -1.0 : 1.0;
+    const double alphaPhi = dotPhiWithResidual < 0.0 ? -1.0 : 1.0;
+
+    const double dispScale =
+        (std::abs(m_schurDisplacementScale) > 0.0)
+            ? std::abs(m_schurDisplacementScale)
+            : 1.0;
+    const double phiScale =
+        (std::abs(m_schurPotentialScale) > 0.0)
+            ? std::abs(m_schurPotentialScale)
+            : 1.0;
+    const double stepNorm = std::sqrt(
+        deltaU.squaredNorm() / (dispScale * dispScale) +
+        deltaPhi.squaredNorm() / (phiScale * phiScale));
+    const double gammaMax =
+        (m_schurGammaMax > 0.0) ? m_schurGammaMax : 1.0;
+    const double beta =
+        (stepNorm > 0.0) ? (std::min)(1.0, gammaMax / stepNorm) : 1.0;
+
+    Eigen::VectorXd x = Eigen::VectorXd::Zero(n);
+    x.segment(0, uSize) = alphaU * beta * deltaU;
+    x.segment(phiStart, phiSize) = alphaPhi * beta * deltaPhi;
+
+    CHECK_CUDA(cudaMemcpy(m_deltaSolVector.data(), x.data(),
+                          n * sizeof(double), cudaMemcpyHostToDevice));
+
+    m_updateNorm = m_deltaSolVector.vectorView().norm();
+    m_residualNorm = bdev.norm();
+    m_solVector.vectorView() += m_deltaSolVector.vectorView();
+    CHECK_CUDA(cudaMemset(m_deltaSolVector.data(), 0,
+                          m_deltaSolVector.size() * sizeof(double)));
+
+    if (m_numIterations == 0)
+    {
+        m_initResidualNorm = m_residualNorm;
+        m_initUpdateNorm = m_updateNorm;
+    }
+
+    return true;
+}
+
 #if ENABLE_AMGX
 bool GPUSolver::solveSingleIteration_AMGX()
 {
@@ -787,16 +1170,27 @@ void GPUSolver::solve()
     //std::cout << std::scientific;
     while (m_status == working)
     {
-#if ENABLE_AMGX
-        if(!solveSingleIteration_AMGX())
-        //if(!solveSingleIteration_Eigen())
-#else
-        if(!solveSingleIteration_Eigen())
-        //if(!solveSingleIteration())
-#endif
+        if (m_useSchurSolve)
         {
-            m_status = bad_solution;
-            break;
+            if (!solveSingleIteration_Schur())
+            {
+                m_status = bad_solution;
+                break;
+            }
+        }
+        else
+        {
+#if ENABLE_AMGX
+            if(!solveSingleIteration_AMGX())
+            //if(!solveSingleIteration_Eigen())
+#else
+            if(!solveSingleIteration_Eigen())
+            //if(!solveSingleIteration())
+#endif
+            {
+                m_status = bad_solution;
+                break;
+            }
         }
         std::cout << status() << std::endl;
         if (m_residualNorm < m_absTol || 
@@ -831,7 +1225,8 @@ double GPUSolver::smallestEigenValue()
 
 double GPUSolver::smallestEigenValue(Eigen::VectorXd& eigenvector)
 {
-    //m_assembler.assemble(m_solVector.vectorView(), m_numIterations, m_fixedDoFs.view());
+    m_assembler.assemble(m_solVector.vectorView(), m_numIterations,
+                         m_fixedDoFs.view());
 
     double smallestEigenvalue = 0.0;
     eigenvector.resize(0);
@@ -1045,9 +1440,327 @@ double GPUSolver::smallestEigenValue(Eigen::VectorXd& eigenvector)
     return smallestEigenvalue;
 }
 
+double GPUSolver::smallestCondensedMechanicalEigenpair(
+    Eigen::VectorXd& displacementEigenvector,
+    Eigen::VectorXd* electricEigenvector,
+    int maxIterations,
+    double tolerance)
+{
+    displacementEigenvector.resize(0);
+    if (electricEigenvector)
+        electricEigenvector->resize(0);
+
+    m_assembler.assemble(m_solVector.vectorView(), m_numIterations,
+                         m_fixedDoFs.view());
+
+    using RowSpMat = Eigen::SparseMatrix<double, Eigen::RowMajor, int>;
+    const RowSpMat Arow = m_assembler.csrMatrix().toEigenCSR();
+    const int n = static_cast<int>(Arow.rows());
+    if (n <= 0 || Arow.cols() != n)
+        return std::numeric_limits<double>::quiet_NaN();
+
+    const int dim = m_assembler.targetDim();
+    const int phiBlock = dim;
+    if (m_assembler.numFieldBlocks() <= phiBlock)
+    {
+        printf("Condensed eigenpair requires displacement blocks plus one electric-potential block\n");
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+
+    int uSize = 0;
+    for (int block = 0; block < dim; ++block)
+    {
+        if (m_assembler.fieldBlockOffset(block) != uSize)
+        {
+            printf("Condensed eigenpair expected contiguous displacement blocks\n");
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+        uSize += m_assembler.fieldBlockSize(block);
+    }
+
+    const int phiStart = m_assembler.fieldBlockOffset(phiBlock);
+    const int phiSize = m_assembler.fieldBlockSize(phiBlock);
+    if (phiStart != uSize || phiStart + phiSize != n || uSize <= 0 || phiSize <= 0)
+    {
+        printf("Condensed eigenpair expected [displacement][potential] block ordering\n");
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+
+    RowSpMat Huu;
+    RowSpMat Hup;
+    RowSpMat Hpu;
+    RowSpMat Hpp;
+    extractSchurBlocks(Arow, uSize, phiStart, phiSize,
+                             Huu, Hup, Hpu, Hpp);
+
+#if ENABLE_PARDISO
+    if (!factorWithPardiso(m_pardisoSolver,
+                           m_pardisoPatternAnalyzed,
+                           m_pardisoRows,
+                           m_pardisoCols,
+                           m_pardisoNonZeros,
+                           Arow, "condensed mechanical inverse iteration"))
+        return std::numeric_limits<double>::quiet_NaN();
+    if (!factorWithPardiso(m_schurPhiPardisoSolver,
+                           m_schurPhiPatternAnalyzed,
+                           m_schurPhiRows,
+                           m_schurPhiCols,
+                           m_schurPhiNonZeros,
+                           Hpp, "condensed mechanical eigenvector H_phi_phi"))
+        return std::numeric_limits<double>::quiet_NaN();
+#else
+    Eigen::SparseLU<RowSpMat> coupledSolver;
+    coupledSolver.compute(Arow);
+    if (coupledSolver.info() != Eigen::Success)
+    {
+        printf("Eigen SparseLU factorization failed in condensed mechanical inverse iteration\n");
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    Eigen::SparseLU<RowSpMat> phiSolver;
+    phiSolver.compute(Hpp);
+    if (phiSolver.info() != Eigen::Success)
+    {
+        printf("Eigen SparseLU factorization failed in condensed mechanical eigenvector H_phi_phi\n");
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+#endif
+
+    Eigen::VectorXd x(uSize);
+    for (int i = 0; i < uSize; ++i)
+        x[i] = std::sin(0.29 * static_cast<double>(i + 1)) +
+               0.5 * std::cos(0.17 * static_cast<double>(i + 1));
+    double xNorm = x.norm();
+    if (xNorm <= 0.0 || !std::isfinite(xNorm))
+        return std::numeric_limits<double>::quiet_NaN();
+    x /= xNorm;
+
+    const int maxOuterIterations = std::max(1, maxIterations);
+    double smallestEigenvalue = std::numeric_limits<double>::quiet_NaN();
+    double previousEigenvalue = std::numeric_limits<double>::infinity();
+
+    for (int outer = 0; outer < maxOuterIterations; ++outer)
+    {
+        Eigen::VectorXd rhs = Eigen::VectorXd::Zero(n);
+        rhs.segment(0, uSize) = x;
+
+#if ENABLE_PARDISO
+        Eigen::VectorXd fullY = m_pardisoSolver.solve(rhs);
+        if (m_pardisoSolver.info() != Eigen::Success)
+        {
+            printf("Eigen PARDISO LDLT solve failed in condensed mechanical inverse iteration\n");
+            break;
+        }
+#else
+        Eigen::VectorXd fullY = coupledSolver.solve(rhs);
+        if (coupledSolver.info() != Eigen::Success)
+        {
+            printf("Eigen SparseLU solve failed in condensed mechanical inverse iteration\n");
+            break;
+        }
+#endif
+
+        Eigen::VectorXd y = fullY.segment(0, uSize);
+        const double yNorm = y.norm();
+        if (yNorm <= 0.0 || !std::isfinite(yNorm))
+            break;
+
+        const double inverseEigenvalue = x.dot(y);
+        if (std::abs(inverseEigenvalue) > 0.0)
+            smallestEigenvalue = 1.0 / inverseEigenvalue;
+
+        x = y / yNorm;
+
+        const double eigenvalueDelta =
+            std::abs(smallestEigenvalue - previousEigenvalue);
+        if (eigenvalueDelta <
+            tolerance * (std::max)(1.0, std::abs(smallestEigenvalue)))
+            break;
+
+        previousEigenvalue = smallestEigenvalue;
+    }
+
+    const Eigen::VectorXd hpuX = Hpu * x;
+    const Eigen::VectorXd invHppHpuX =
+#if ENABLE_PARDISO
+        m_schurPhiPardisoSolver.solve(hpuX);
+#else
+        phiSolver.solve(hpuX);
+#endif
+
+    if (
+#if ENABLE_PARDISO
+        m_schurPhiPardisoSolver.info()
+#else
+        phiSolver.info()
+#endif
+        != Eigen::Success)
+    {
+        printf("Failed to recover condensed mechanical electric eigenvector\n");
+        return smallestEigenvalue;
+    }
+
+    const Eigen::VectorXd hhatX = Huu * x - Hup * invHppHpuX;
+    smallestEigenvalue = x.dot(hhatX);
+    displacementEigenvector = x;
+    if (electricEigenvector)
+        *electricEigenvector = -invHppHpuX;
+
+    return smallestEigenvalue;
+}
+
+double GPUSolver::condensedMechanicalStabilityLDLT()
+{
+    m_assembler.assemble(m_solVector.vectorView(), m_numIterations,
+                         m_fixedDoFs.view());
+
+    using RowSpMat = Eigen::SparseMatrix<double, Eigen::RowMajor, int>;
+    using ColSpMat = Eigen::SparseMatrix<double, Eigen::ColMajor, int>;
+    const RowSpMat Arow = m_assembler.csrMatrix().toEigenCSR();
+    const int n = static_cast<int>(Arow.rows());
+    if (n <= 0 || Arow.cols() != n)
+        return -std::numeric_limits<double>::infinity();
+
+    const int dim = m_assembler.targetDim();
+    const int phiBlock = dim;
+    if (m_assembler.numFieldBlocks() <= phiBlock)
+    {
+        printf("Condensed stability requires displacement blocks plus one electric-potential block\n");
+        return -std::numeric_limits<double>::infinity();
+    }
+
+    int uSize = 0;
+    for (int block = 0; block < dim; ++block)
+    {
+        if (m_assembler.fieldBlockOffset(block) != uSize)
+        {
+            printf("Condensed stability expected contiguous displacement blocks\n");
+            return -std::numeric_limits<double>::infinity();
+        }
+        uSize += m_assembler.fieldBlockSize(block);
+    }
+
+    const int phiStart = m_assembler.fieldBlockOffset(phiBlock);
+    const int phiSize = m_assembler.fieldBlockSize(phiBlock);
+    if (phiStart != uSize || phiStart + phiSize != n || uSize <= 0 || phiSize <= 0)
+    {
+        printf("Condensed stability expected [displacement][potential] block ordering\n");
+        return -std::numeric_limits<double>::infinity();
+    }
+
+    RowSpMat Huu;
+    RowSpMat Hup;
+    RowSpMat Hpu;
+    RowSpMat Hpp;
+    extractSchurBlocks(Arow, uSize, phiStart, phiSize,
+                       Huu, Hup, Hpu, Hpp);
+
+#if ENABLE_PARDISO
+    if (!factorWithPardiso(m_schurPhiPardisoSolver,
+                           m_schurPhiPatternAnalyzed,
+                           m_schurPhiRows,
+                           m_schurPhiCols,
+                           m_schurPhiNonZeros,
+                           Hpp, "condensed stability H_phi_phi"))
+        return -std::numeric_limits<double>::infinity();
+
+    const Eigen::MatrixXd invHppHpu =
+        m_schurPhiPardisoSolver.solve(Eigen::MatrixXd(Hpu));
+    if (m_schurPhiPardisoSolver.info() != Eigen::Success)
+    {
+        printf("Eigen PARDISO LDLT solve failed in condensed stability H_phi_phi^{-1} H_phi_u\n");
+        return -std::numeric_limits<double>::infinity();
+    }
+#else
+    Eigen::SparseLU<RowSpMat> phiSolver;
+    phiSolver.compute(Hpp);
+    if (phiSolver.info() != Eigen::Success)
+    {
+        printf("Eigen SparseLU factorization failed in condensed stability H_phi_phi\n");
+        return -std::numeric_limits<double>::infinity();
+    }
+
+    const Eigen::MatrixXd invHppHpu = phiSolver.solve(Eigen::MatrixXd(Hpu));
+    if (phiSolver.info() != Eigen::Success)
+    {
+        printf("Eigen SparseLU solve failed in condensed stability H_phi_phi^{-1} H_phi_u\n");
+        return -std::numeric_limits<double>::infinity();
+    }
+#endif
+
+    const Eigen::MatrixXd HhatDense =
+        Eigen::MatrixXd(Huu) - Hup * invHppHpu;
+    const RowSpMat HhatRow = sparseFromDense(0.5 * (HhatDense + HhatDense.transpose()));
+    const ColSpMat HhatCol = HhatRow;
+
+    Eigen::SimplicialLDLT<ColSpMat> solver;
+    solver.compute(HhatCol);
+    if (solver.info() != Eigen::Success)
+    {
+        printf("Eigen SimplicialLDLT failed while computing condensed stability\n");
+        return -std::numeric_limits<double>::infinity();
+    }
+
+    return solver.vectorD().minCoeff();
+}
+
+bool GPUSolver::perturbWithCondensedEigenvectors(
+    const Eigen::VectorXd& displacementEigenvector,
+    const Eigen::VectorXd& electricEigenvector,
+    double amplitude,
+    int sign)
+{
+    if (displacementEigenvector.size() == 0 ||
+        electricEigenvector.size() == 0)
+        return false;
+
+    const double maxDisp =
+        displacementEigenvector.cwiseAbs().maxCoeff();
+    if (maxDisp <= 0.0 || !std::isfinite(maxDisp))
+        return false;
+
+    const double signedAmplitude =
+        (sign < 0 ? -std::abs(amplitude) : std::abs(amplitude));
+
+    Eigen::VectorXd solution;
+    solutionToHost(solution);
+    const int uSize = static_cast<int>(displacementEigenvector.size());
+    const int phiStart = uSize;
+    const int phiSize = static_cast<int>(electricEigenvector.size());
+    if (solution.size() < phiStart + phiSize)
+        return false;
+
+    solution.segment(0, uSize) +=
+        (signedAmplitude / maxDisp) * displacementEigenvector;
+    solution.segment(phiStart, phiSize) +=
+        (signedAmplitude / maxDisp) * electricEigenvector;
+    setSolutionFromHost(solution);
+    return true;
+}
+
+bool GPUSolver::perturbWithCondensedMechanicalEigenvector(
+    double amplitude,
+    int sign,
+    double* eigenvalue,
+    int maxIterations,
+    double tolerance)
+{
+    Eigen::VectorXd displacementEigenvector;
+    Eigen::VectorXd electricEigenvector;
+    const double lambda = smallestCondensedMechanicalEigenpair(
+        displacementEigenvector, &electricEigenvector, maxIterations, tolerance);
+    if (eigenvalue)
+        *eigenvalue = lambda;
+    if (!std::isfinite(lambda))
+        return false;
+    return perturbWithCondensedEigenvectors(displacementEigenvector,
+                                            electricEigenvector,
+                                            amplitude, sign);
+}
+
 double GPUSolver::stability()
 {
-    //m_assembler.assemble(m_solVector.vectorView(), m_numIterations, m_fixedDoFs.view());
+    m_assembler.assemble(m_solVector.vectorView(), m_numIterations,
+                         m_fixedDoFs.view());
 
     using RowMajorSpMat = Eigen::SparseMatrix<double, Eigen::RowMajor, int>;
     using ColMajorSpMat = Eigen::SparseMatrix<double, Eigen::ColMajor, int>;

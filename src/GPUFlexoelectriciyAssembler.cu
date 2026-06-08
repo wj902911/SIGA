@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -11,6 +12,15 @@
 
 namespace
 {
+
+bool flexoEnvFlag(const char* name, bool defaultValue)
+{
+    const char* value = std::getenv(name);
+    if (!value || value[0] == '\0')
+        return defaultValue;
+    return value[0] != '0' && value[0] != 'f' && value[0] != 'F' &&
+           value[0] != 'n' && value[0] != 'N';
+}
 
 struct FlexoGPOffsets
 {
@@ -70,6 +80,33 @@ __host__ __device__
 int flexoDoublesPerGP(int dim)
 {
     return flexoMakeGPOffsets(dim).total;
+}
+
+struct FlexoBasisOffsets
+{
+    int dispGradOffset = 0;
+    int dispHessOffset = 0;
+    int elecGradOffset = 0;
+    int total = 0;
+};
+
+__host__ __device__
+FlexoBasisOffsets flexoMakeBasisOffsets(int dim)
+{
+    const int dim2 = dim * dim;
+    FlexoBasisOffsets offsets;
+    int offset = 0;
+    offsets.dispGradOffset = offset; offset += dim;
+    offsets.dispHessOffset = offset; offset += dim2;
+    offsets.elecGradOffset = offset; offset += dim;
+    offsets.total = offset;
+    return offsets;
+}
+
+__host__ __device__
+int flexoDoublesPerGPBasis(int dim)
+{
+    return flexoMakeBasisOffsets(dim).total;
 }
 
 __device__
@@ -600,7 +637,7 @@ void flexoMaterialResponse(int materialLaw, double youngsModulus,
 
     // Strain-gradient stress in Green-strain-gradient variables:
     // S_ABC = hbar_ABCDEF E_DEF - E_A (J C^{-1})_AB mu_BCDE.
-    // hbar contains Codony's length-scale elasticity and the eliminated
+    // hbar contains the length-scale elasticity and the eliminated
     // polarization correction mu J C^{-1} mu / (epsilon - epsilon0).
     const double dielectricContrast = dielectricPermittivity - vacuumPermittivity;
     const bool hasHbarCorrection = fabs(dielectricContrast) > 1.0e-14;
@@ -646,7 +683,7 @@ void flexoMaterialResponse(int materialLaw, double youngsModulus,
                             flexoMuContract(muL, muT, muS, B, I, Jidx, K);
             }
 
-    // Derivative with respect to M = J C^{-1}. Codony's stress split keeps the
+    // Derivative with respect to M = J C^{-1}. The stress split keeps the
     // hbar correction in the double stress only, so the local stress includes
     // only the dielectric and explicit flexoelectric M-dependence here.
     Scalar dPsi_dM[9] = {0.0};
@@ -1663,12 +1700,7 @@ void normalizeRecoveredFlexoFunctionKernel(MultiPatchDeviceView result,
 
 __global__
 void evaluateFlexoGPKernel(int numDerivatives, int totalNumGPs, int stride,
-                           int materialLaw, double youngsModulus,
-                           double poissonsRatio, double lengthScale,
-                           double dielectricPermittivity,
-                           double vacuumPermittivity, double muL,
-                           double muT, double muS,
-                           int includeHbarFlexoCorrection,
+                           DeviceVectorView<double> materialParameters,
                            double localStiffening,
                            MultiPatchDeviceView displacement,
                            MultiPatchDeviceView electricPotential,
@@ -1697,6 +1729,19 @@ void evaluateFlexoGPKernel(int numDerivatives, int totalNumGPs, int stride,
         PatchDeviceView elecPatch = electricPotential.patch(patchIdx);
         TensorBsplineBasisDeviceView dispBasis = displacement.basis(patchIdx);
         TensorBsplineBasisDeviceView elecBasis = electricPotential.basis(patchIdx);
+        const int parameterOffset = patchIdx * 10;
+        const int materialLaw =
+            static_cast<int>(materialParameters[parameterOffset + 0]);
+        const double youngsModulus = materialParameters[parameterOffset + 1];
+        const double poissonsRatio = materialParameters[parameterOffset + 2];
+        const double lengthScale = materialParameters[parameterOffset + 3];
+        const double dielectricPermittivity = materialParameters[parameterOffset + 4];
+        const double vacuumPermittivity = materialParameters[parameterOffset + 5];
+        const double muL = materialParameters[parameterOffset + 6];
+        const double muT = materialParameters[parameterOffset + 7];
+        const double muS = materialParameters[parameterOffset + 8];
+        const int includeHbarFlexoCorrection =
+            static_cast<int>(materialParameters[parameterOffset + 9]);
 
         const int geoP1 = geoPatch.basis().knotsOrder(0) + 1;
         const int dispP1 = dispBasis.knotsOrder(0) + 1;
@@ -1767,8 +1812,61 @@ void evaluateFlexoGPKernel(int numDerivatives, int totalNumGPs, int stride,
 }
 
 __global__
+void evaluateFlexoBasisDataKernel(int numDerivatives, int totalNumGPs, int N_D,
+                                  int gpStride, int basisStride,
+                                  MultiPatchDeviceView displacement,
+                                  MultiPatchDeviceView electricPotential,
+                                  DeviceMatrixView<double> dispValuesAndDerss,
+                                  DeviceMatrixView<double> elecValuesAndDerss,
+                                  DeviceVectorView<double> flexoGPData,
+                                  DeviceVectorView<double> flexoBasisData)
+{
+    const int totalEntries = totalNumGPs * N_D;
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; idx < totalEntries;
+         idx += blockDim.x * gridDim.x)
+    {
+        const int basisIndex = idx % N_D;
+        const int GPIdx = idx / N_D;
+        const int dim = displacement.domainDim();
+
+        int patchIdx = 0;
+        displacement.threadPatch(GPIdx, patchIdx);
+        TensorBsplineBasisDeviceView dispBasis = displacement.basis(patchIdx);
+        TensorBsplineBasisDeviceView elecBasis = electricPotential.basis(patchIdx);
+        const int dispP1 = dispBasis.knotsOrder(0) + 1;
+        const int elecP1 = elecBasis.knotsOrder(0) + 1;
+
+        DeviceMatrixView<double> dispValuesAndDers(
+            dispValuesAndDerss.data() + GPIdx * dispP1 * (numDerivatives + 1) * dim,
+            dispP1, (numDerivatives + 1) * dim);
+        DeviceMatrixView<double> elecValuesAndDers(
+            elecValuesAndDerss.data() + GPIdx * elecP1 * (numDerivatives + 1) * dim,
+            elecP1, (numDerivatives + 1) * dim);
+
+        const FlexoGPOffsets gpOffsets = flexoMakeGPOffsets(dim);
+        double* gp = flexoGPData.data() + GPIdx * gpStride;
+        DeviceMatrixView<double> geoJacobianInv(
+            gp + gpOffsets.geoInvOffset, dim, dim);
+        double* geoHessians = gp + gpOffsets.geoHessOffset;
+
+        const FlexoBasisOffsets basisOffsets = flexoMakeBasisOffsets(dim);
+        double* basisData =
+            flexoBasisData.data() + (GPIdx * N_D + basisIndex) * basisStride;
+
+        buildPhysicalGradientAndHessianFlexo(
+            basisIndex, dispP1, dim, numDerivatives, dispValuesAndDers,
+            geoHessians, geoJacobianInv,
+            basisData + basisOffsets.dispGradOffset,
+            basisData + basisOffsets.dispHessOffset);
+        buildPhysicalGradientFlexo(
+            basisIndex, elecP1, dim, numDerivatives, elecValuesAndDers,
+            geoJacobianInv, basisData + basisOffsets.elecGradOffset);
+    }
+}
+
+__global__
 void assembleFlexoMatrixKernel(int numDerivatives, int numElements, int N_D,
-                               int stride, int materialLaw,
+                               int stride, int basisStride, int materialLaw,
                                double youngsModulus, double poissonsRatio,
                                double lengthScale,
                                double dielectricPermittivity,
@@ -1781,7 +1879,8 @@ void assembleFlexoMatrixKernel(int numDerivatives, int numElements, int N_D,
                                DeviceMatrixView<double> pts,
                                DeviceMatrixView<double> dispValuesAndDerss,
                                DeviceMatrixView<double> elecValuesAndDerss,
-                               DeviceVectorView<double> flexoGPData)
+                               DeviceVectorView<double> flexoGPData,
+                               DeviceVectorView<double> flexoBasisData)
 {
     extern __shared__ double localMatrix[];
 
@@ -1808,17 +1907,14 @@ void assembleFlexoMatrixKernel(int numDerivatives, int numElements, int N_D,
     TensorBsplineBasisDeviceView dispBasis = displacement.basis(patchIdx);
     TensorBsplineBasisDeviceView elecBasis = electricPotential.basis(patchIdx);
     const int numGPsInElement = dispBasis.numGPsInElement();
-    const int dispP1 = dispBasis.knotsOrder(0) + 1;
-    const int elecP1 = elecBasis.knotsOrder(0) + 1;
 
     const FlexoGPOffsets offsets = flexoMakeGPOffsets(dim);
+    const FlexoBasisOffsets basisOffsets = flexoMakeBasisOffsets(dim);
 
     for (int q = threadId; q < numGPsInElement; q += blockDim.x)
     {
         const int GPIdx = elementGlobal * numGPsInElement + q;
         double* gp = flexoGPData.data() + GPIdx * stride;
-        DeviceMatrixView<double> geoJacobianInv(gp + offsets.geoInvOffset, dim, dim);
-        double* geoHessians = gp + offsets.geoHessOffset;
         double* F = gp + offsets.FOffset;
         double* gradF = gp + offsets.gradFOffset;
         double* S = gp + offsets.SOffset;
@@ -1832,75 +1928,56 @@ void assembleFlexoMatrixKernel(int numDerivatives, int numElements, int N_D,
         double* DEBlock = gp + offsets.DEOffset;
         double* DGradBlock = gp + offsets.DGradOffset;
         double* KBlock = gp + offsets.KOffset;
-        DeviceMatrixView<double> dispValuesAndDers(
-            dispValuesAndDerss.data() + GPIdx * dispP1 * (numDerivatives + 1) * dim,
-            dispP1, (numDerivatives + 1) * dim);
-        DeviceMatrixView<double> elecValuesAndDers(
-            elecValuesAndDerss.data() + GPIdx * elecP1 * (numDerivatives + 1) * dim,
-            elecP1, (numDerivatives + 1) * dim);
 
-        double grad_i[3] = {0.0};
-        double hess_i[9] = {0.0};
-        double grad_j[3] = {0.0};
-        double hess_j[9] = {0.0};
-        double gradP_i[3] = {0.0};
-        double gradP_j[3] = {0.0};
-        buildPhysicalGradientAndHessianFlexo(i, dispP1, dim, numDerivatives,
-                                             dispValuesAndDers, geoHessians,
-                                             geoJacobianInv, grad_i, hess_i);
-        buildPhysicalGradientAndHessianFlexo(j, dispP1, dim, numDerivatives,
-                                             dispValuesAndDers, geoHessians,
-                                             geoJacobianInv, grad_j, hess_j);
-        buildPhysicalGradientFlexo(i, elecP1, dim, numDerivatives,
-                                   elecValuesAndDers, geoJacobianInv, gradP_i);
-        buildPhysicalGradientFlexo(j, elecP1, dim, numDerivatives,
-                                   elecValuesAndDers, geoJacobianInv, gradP_j);
+        const double* basisI =
+            flexoBasisData.data() + (GPIdx * N_D + i) * basisStride;
+        const double* basisJ =
+            flexoBasisData.data() + (GPIdx * N_D + j) * basisStride;
+        const double* grad_i = basisI + basisOffsets.dispGradOffset;
+        const double* hess_i = basisI + basisOffsets.dispHessOffset;
+        const double* gradP_i = basisI + basisOffsets.elecGradOffset;
+        const double* grad_j = basisJ + basisOffsets.dispGradOffset;
+        const double* hess_j = basisJ + basisOffsets.dispHessOffset;
+        const double* gradP_j = basisJ + basisOffsets.elecGradOffset;
 
-        double testE[9] = {0.0};
-        double testEgrad[27] = {0.0};
-        double trialE[9] = {0.0};
-        double trialEgrad[27] = {0.0};
+        double testEByRow[27] = {0.0};
+        double testEgradByRow[81] = {0.0};
+        double trialEByCol[27] = {0.0};
+        double trialEgradByCol[81] = {0.0};
         double secondE[9] = {0.0};
         double secondEgrad[27] = {0.0};
         double deltaElectricField[3] = {0.0};
+
+        for (int row = 0; row < dim; ++row)
+            flexoGreenVariations(dim, row, grad_i, hess_i, F, gradF,
+                                 testEByRow + row * dim2,
+                                 testEgradByRow + row * dim3);
+        for (int col = 0; col < dim; ++col)
+            flexoGreenVariations(dim, col, grad_j, hess_j, F, gradF,
+                                 trialEByCol + col * dim2,
+                                 trialEgradByCol + col * dim3);
+        for (int A = 0; A < dim; ++A)
+            deltaElectricField[A] = -gradP_j[A];
+
         for (int col = 0; col < numFields; ++col)
         {
-            for (int a = 0; a < dim2; ++a)
-                trialE[a] = 0.0;
-            for (int a = 0; a < dim3; ++a)
-                trialEgrad[a] = 0.0;
-            for (int a = 0; a < dim; ++a)
-                deltaElectricField[a] = 0.0;
-
-            if (col < dim)
-            {
-                flexoGreenVariations(dim, col, grad_j, hess_j, F, gradF,
-                                     trialE, trialEgrad);
-            }
-            else
-            {
-                for (int A = 0; A < dim; ++A)
-                    deltaElectricField[A] = -gradP_j[A];
-            }
+            const double* trialE =
+                col < dim ? trialEByCol + col * dim2 : nullptr;
+            const double* trialEgrad =
+                col < dim ? trialEgradByCol + col * dim3 : nullptr;
 
             for (int row = 0; row < numFields; ++row)
             {
                 double tangent = 0.0;
                 if (row < dim)
                 {
-                    flexoGreenVariations(dim, row, grad_i, hess_i, F, gradF,
-                                         testE, testEgrad);
-                    if (col < dim)
+                    const double* testE = testEByRow + row * dim2;
+                    const double* testEgrad = testEgradByRow + row * dim3;
+                    const bool hasSecondVariation = col < dim && row == col;
+                    if (hasSecondVariation)
                         flexoGreenSecondVariation(dim, row, col, grad_i, hess_i,
                                                   grad_j, hess_j, secondE,
                                                   secondEgrad);
-                    else
-                    {
-                        for (int a = 0; a < dim2; ++a)
-                            secondE[a] = 0.0;
-                        for (int a = 0; a < dim3; ++a)
-                            secondEgrad[a] = 0.0;
-                    }
                     for (int A = 0; A < dim; ++A)
                         for (int B = 0; B < dim; ++B)
                         {
@@ -1933,7 +2010,8 @@ void assembleFlexoMatrixKernel(int numDerivatives, int numElements, int N_D,
                                         SElectricBlock[testIdx * dim + Cidx] *
                                         deltaElectricField[Cidx];
                             }
-                            tangent += S[testIdx] * secondE[testIdx];
+                            if (hasSecondVariation)
+                                tangent += S[testIdx] * secondE[testIdx];
                         }
                     for (int A = 0; A < dim; ++A)
                         for (int B = 0; B < dim; ++B)
@@ -1968,7 +2046,9 @@ void assembleFlexoMatrixKernel(int numDerivatives, int numElements, int N_D,
                                             SgradElectricBlock[testGradIdx * dim + Didx] *
                                             deltaElectricField[Didx];
                                 }
-                                tangent += Sgrad[testGradIdx] * secondEgrad[testGradIdx];
+                                if (hasSecondVariation)
+                                    tangent += Sgrad[testGradIdx] *
+                                               secondEgrad[testGradIdx];
                             }
                 }
                 else
@@ -2036,8 +2116,409 @@ void assembleFlexoMatrixKernel(int numDerivatives, int numElements, int N_D,
 }
 
 __global__
+void assembleFlexoMatrixUUKernel(int numElements, int N_D, int stride,
+                                 int basisStride,
+                                 MultiPatchDeviceView displacement,
+                                 MultiPatchDeviceView electricPotential,
+                                 SparseSystemDeviceView system,
+                                 DeviceNestedArrayView<double> eliminatedDofs,
+                                 DeviceMatrixView<double> pts,
+                                 DeviceVectorView<double> flexoGPData,
+                                 DeviceVectorView<double> flexoBasisData)
+{
+    extern __shared__ double localValue[];
+
+    const int dim = displacement.domainDim();
+    const int dim2 = dim * dim;
+    const int dim3 = dim2 * dim;
+    const int threadId = threadIdx.x;
+
+    int blockId = blockIdx.x;
+    const int col = blockId % dim; blockId /= dim;
+    const int row = blockId % dim; blockId /= dim;
+    const int j = blockId % N_D; blockId /= N_D;
+    const int i = blockId % N_D; blockId /= N_D;
+    const int elementGlobal = blockId;
+    if (elementGlobal >= numElements)
+        return;
+
+    if (threadId == 0)
+        localValue[0] = 0.0;
+    __syncthreads();
+
+    int patchIdx = 0;
+    displacement.threadPatch_element(elementGlobal, patchIdx);
+    TensorBsplineBasisDeviceView dispBasis = displacement.basis(patchIdx);
+    const int numGPsInElement = dispBasis.numGPsInElement();
+    const FlexoGPOffsets offsets = flexoMakeGPOffsets(dim);
+    const FlexoBasisOffsets basisOffsets = flexoMakeBasisOffsets(dim);
+
+    for (int q = threadId; q < numGPsInElement; q += blockDim.x)
+    {
+        const int GPIdx = elementGlobal * numGPsInElement + q;
+        double* gp = flexoGPData.data() + GPIdx * stride;
+        const double* basisI =
+            flexoBasisData.data() + (GPIdx * N_D + i) * basisStride;
+        const double* basisJ =
+            flexoBasisData.data() + (GPIdx * N_D + j) * basisStride;
+        const double* grad_i = basisI + basisOffsets.dispGradOffset;
+        const double* hess_i = basisI + basisOffsets.dispHessOffset;
+        const double* grad_j = basisJ + basisOffsets.dispGradOffset;
+        const double* hess_j = basisJ + basisOffsets.dispHessOffset;
+
+        double testE[9] = {0.0};
+        double testEgrad[27] = {0.0};
+        double trialE[9] = {0.0};
+        double trialEgrad[27] = {0.0};
+        double secondE[9] = {0.0};
+        double secondEgrad[27] = {0.0};
+        flexoGreenVariations(dim, row, grad_i, hess_i,
+                             gp + offsets.FOffset, gp + offsets.gradFOffset,
+                             testE, testEgrad);
+        flexoGreenVariations(dim, col, grad_j, hess_j,
+                             gp + offsets.FOffset, gp + offsets.gradFOffset,
+                             trialE, trialEgrad);
+        const bool hasSecondVariation = row == col;
+        if (hasSecondVariation)
+            flexoGreenSecondVariation(dim, row, col, grad_i, hess_i,
+                                      grad_j, hess_j, secondE, secondEgrad);
+
+        double tangent = 0.0;
+        double* S = gp + offsets.SOffset;
+        double* Sgrad = gp + offsets.SgradOffset;
+        double* ABlock = gp + offsets.AOffset;
+        double* SGradGradBlock = gp + offsets.SGradGradOffset;
+        double* SEgradBlock = gp + offsets.SEgradOffset;
+        double* SgradEBlock = gp + offsets.SgradEOffset;
+        for (int A = 0; A < dim; ++A)
+            for (int B = 0; B < dim; ++B)
+            {
+                const int testIdx = A * dim + B;
+                for (int Cidx = 0; Cidx < dim; ++Cidx)
+                    for (int Didx = 0; Didx < dim; ++Didx)
+                    {
+                        const int trialIdx = Cidx * dim + Didx;
+                        tangent += testE[testIdx] *
+                            ABlock[testIdx * dim2 + trialIdx] *
+                            trialE[trialIdx];
+                    }
+                for (int Cidx = 0; Cidx < dim; ++Cidx)
+                    for (int Didx = 0; Didx < dim; ++Didx)
+                        for (int Eidx = 0; Eidx < dim; ++Eidx)
+                        {
+                            const int trialGradIdx =
+                                (Cidx * dim + Didx) * dim + Eidx;
+                            tangent += testE[testIdx] *
+                                SEgradBlock[testIdx * dim3 + trialGradIdx] *
+                                trialEgrad[trialGradIdx];
+                        }
+                if (hasSecondVariation)
+                    tangent += S[testIdx] * secondE[testIdx];
+            }
+        for (int A = 0; A < dim; ++A)
+            for (int B = 0; B < dim; ++B)
+                for (int Cidx = 0; Cidx < dim; ++Cidx)
+                {
+                    const int testGradIdx = (A * dim + B) * dim + Cidx;
+                    for (int Didx = 0; Didx < dim; ++Didx)
+                        for (int Eidx = 0; Eidx < dim; ++Eidx)
+                        {
+                            const int trialIdx = Didx * dim + Eidx;
+                            tangent += testEgrad[testGradIdx] *
+                                SgradEBlock[testGradIdx * dim2 + trialIdx] *
+                                trialE[trialIdx];
+                        }
+                    for (int Didx = 0; Didx < dim; ++Didx)
+                        for (int Eidx = 0; Eidx < dim; ++Eidx)
+                            for (int Fidx = 0; Fidx < dim; ++Fidx)
+                            {
+                                const int trialGradIdx =
+                                    (Didx * dim + Eidx) * dim + Fidx;
+                                tangent += testEgrad[testGradIdx] *
+                                    SGradGradBlock[testGradIdx * dim3 + trialGradIdx] *
+                                    trialEgrad[trialGradIdx];
+                            }
+                    if (hasSecondVariation)
+                        tangent += Sgrad[testGradIdx] * secondEgrad[testGradIdx];
+                }
+        atomicAdd(&localValue[0], gp[offsets.weightBodyOffset] * tangent);
+    }
+    __syncthreads();
+
+    double ptForIndexData[3] = {0.0};
+    DeviceVectorView<double> ptForIndex(ptForIndexData, dim);
+    for (int a = 0; a < dim; ++a)
+        ptForIndex[a] = pts(a, elementGlobal * numGPsInElement);
+    const int activeIndexI = dispBasis.activeIndex(ptForIndex, i);
+    const int activeIndexJ = dispBasis.activeIndex(ptForIndex, j);
+    const int globalIndexI = system.mapColIndex(activeIndexI, patchIdx, row);
+    const int globalIndexJ = system.mapColIndex(activeIndexJ, patchIdx, col);
+    if (threadId == 0)
+        system.pushToMatrix(localValue[0], globalIndexI, globalIndexJ,
+                            eliminatedDofs, row, col);
+}
+
+__global__
+void assembleFlexoMatrixUPhiKernel(int numElements, int N_D, int stride,
+                                   int basisStride,
+                                   MultiPatchDeviceView displacement,
+                                   MultiPatchDeviceView electricPotential,
+                                   SparseSystemDeviceView system,
+                                   DeviceNestedArrayView<double> eliminatedDofs,
+                                   DeviceMatrixView<double> pts,
+                                   DeviceVectorView<double> flexoGPData,
+                                   DeviceVectorView<double> flexoBasisData)
+{
+    extern __shared__ double localValue[];
+
+    const int dim = displacement.domainDim();
+    const int dim2 = dim * dim;
+    const int dim3 = dim2 * dim;
+    const int threadId = threadIdx.x;
+
+    int blockId = blockIdx.x;
+    const int row = blockId % dim; blockId /= dim;
+    const int j = blockId % N_D; blockId /= N_D;
+    const int i = blockId % N_D; blockId /= N_D;
+    const int elementGlobal = blockId;
+    if (elementGlobal >= numElements)
+        return;
+
+    if (threadId == 0)
+        localValue[0] = 0.0;
+    __syncthreads();
+
+    int patchIdx = 0;
+    displacement.threadPatch_element(elementGlobal, patchIdx);
+    TensorBsplineBasisDeviceView dispBasis = displacement.basis(patchIdx);
+    TensorBsplineBasisDeviceView elecBasis = electricPotential.basis(patchIdx);
+    const int numGPsInElement = dispBasis.numGPsInElement();
+    const FlexoGPOffsets offsets = flexoMakeGPOffsets(dim);
+    const FlexoBasisOffsets basisOffsets = flexoMakeBasisOffsets(dim);
+
+    for (int q = threadId; q < numGPsInElement; q += blockDim.x)
+    {
+        const int GPIdx = elementGlobal * numGPsInElement + q;
+        double* gp = flexoGPData.data() + GPIdx * stride;
+        const double* basisI =
+            flexoBasisData.data() + (GPIdx * N_D + i) * basisStride;
+        const double* basisJ =
+            flexoBasisData.data() + (GPIdx * N_D + j) * basisStride;
+        const double* grad_i = basisI + basisOffsets.dispGradOffset;
+        const double* hess_i = basisI + basisOffsets.dispHessOffset;
+        const double* gradP_j = basisJ + basisOffsets.elecGradOffset;
+
+        double testE[9] = {0.0};
+        double testEgrad[27] = {0.0};
+        flexoGreenVariations(dim, row, grad_i, hess_i,
+                             gp + offsets.FOffset, gp + offsets.gradFOffset,
+                             testE, testEgrad);
+
+        double tangent = 0.0;
+        double* SElectricBlock = gp + offsets.SElectricOffset;
+        double* SgradElectricBlock = gp + offsets.SgradElectricOffset;
+        for (int A = 0; A < dim; ++A)
+            for (int B = 0; B < dim; ++B)
+            {
+                const int testIdx = A * dim + B;
+                for (int Cidx = 0; Cidx < dim; ++Cidx)
+                    tangent -= testE[testIdx] *
+                        SElectricBlock[testIdx * dim + Cidx] * gradP_j[Cidx];
+            }
+        for (int A = 0; A < dim; ++A)
+            for (int B = 0; B < dim; ++B)
+                for (int Cidx = 0; Cidx < dim; ++Cidx)
+                {
+                    const int testGradIdx = (A * dim + B) * dim + Cidx;
+                    for (int Didx = 0; Didx < dim; ++Didx)
+                        tangent -= testEgrad[testGradIdx] *
+                            SgradElectricBlock[testGradIdx * dim + Didx] *
+                            gradP_j[Didx];
+                }
+        atomicAdd(&localValue[0], gp[offsets.weightBodyOffset] * tangent);
+    }
+    __syncthreads();
+
+    double ptForIndexData[3] = {0.0};
+    DeviceVectorView<double> ptForIndex(ptForIndexData, dim);
+    for (int a = 0; a < dim; ++a)
+        ptForIndex[a] = pts(a, elementGlobal * numGPsInElement);
+    const int activeIndexI = dispBasis.activeIndex(ptForIndex, i);
+    const int activeIndexJ = elecBasis.activeIndex(ptForIndex, j);
+    const int globalIndexI = system.mapColIndex(activeIndexI, patchIdx, row);
+    const int globalIndexJ = system.mapColIndex(activeIndexJ, patchIdx, dim);
+    if (threadId == 0)
+        system.pushToMatrix(localValue[0], globalIndexI, globalIndexJ,
+                            eliminatedDofs, row, dim);
+}
+
+__global__
+void assembleFlexoMatrixPhiUKernel(int numElements, int N_D, int stride,
+                                   int basisStride,
+                                   MultiPatchDeviceView displacement,
+                                   MultiPatchDeviceView electricPotential,
+                                   SparseSystemDeviceView system,
+                                   DeviceNestedArrayView<double> eliminatedDofs,
+                                   DeviceMatrixView<double> pts,
+                                   DeviceVectorView<double> flexoGPData,
+                                   DeviceVectorView<double> flexoBasisData)
+{
+    extern __shared__ double localValue[];
+
+    const int dim = displacement.domainDim();
+    const int dim2 = dim * dim;
+    const int dim3 = dim2 * dim;
+    const int threadId = threadIdx.x;
+
+    int blockId = blockIdx.x;
+    const int col = blockId % dim; blockId /= dim;
+    const int j = blockId % N_D; blockId /= N_D;
+    const int i = blockId % N_D; blockId /= N_D;
+    const int elementGlobal = blockId;
+    if (elementGlobal >= numElements)
+        return;
+
+    if (threadId == 0)
+        localValue[0] = 0.0;
+    __syncthreads();
+
+    int patchIdx = 0;
+    displacement.threadPatch_element(elementGlobal, patchIdx);
+    TensorBsplineBasisDeviceView dispBasis = displacement.basis(patchIdx);
+    TensorBsplineBasisDeviceView elecBasis = electricPotential.basis(patchIdx);
+    const int numGPsInElement = dispBasis.numGPsInElement();
+    const FlexoGPOffsets offsets = flexoMakeGPOffsets(dim);
+    const FlexoBasisOffsets basisOffsets = flexoMakeBasisOffsets(dim);
+
+    for (int q = threadId; q < numGPsInElement; q += blockDim.x)
+    {
+        const int GPIdx = elementGlobal * numGPsInElement + q;
+        double* gp = flexoGPData.data() + GPIdx * stride;
+        const double* basisI =
+            flexoBasisData.data() + (GPIdx * N_D + i) * basisStride;
+        const double* basisJ =
+            flexoBasisData.data() + (GPIdx * N_D + j) * basisStride;
+        const double* gradP_i = basisI + basisOffsets.elecGradOffset;
+        const double* grad_j = basisJ + basisOffsets.dispGradOffset;
+        const double* hess_j = basisJ + basisOffsets.dispHessOffset;
+
+        double trialE[9] = {0.0};
+        double trialEgrad[27] = {0.0};
+        flexoGreenVariations(dim, col, grad_j, hess_j,
+                             gp + offsets.FOffset, gp + offsets.gradFOffset,
+                             trialE, trialEgrad);
+
+        double tangent = 0.0;
+        double* DEBlock = gp + offsets.DEOffset;
+        double* DGradBlock = gp + offsets.DGradOffset;
+        for (int A = 0; A < dim; ++A)
+        {
+            for (int B = 0; B < dim; ++B)
+                for (int Cidx = 0; Cidx < dim; ++Cidx)
+                {
+                    const int trialIdx = B * dim + Cidx;
+                    tangent += gradP_i[A] *
+                        DEBlock[A * dim2 + trialIdx] * trialE[trialIdx];
+                }
+            for (int B = 0; B < dim; ++B)
+                for (int Cidx = 0; Cidx < dim; ++Cidx)
+                    for (int Didx = 0; Didx < dim; ++Didx)
+                    {
+                        const int trialGradIdx =
+                            (B * dim + Cidx) * dim + Didx;
+                        tangent += gradP_i[A] *
+                            DGradBlock[A * dim3 + trialGradIdx] *
+                            trialEgrad[trialGradIdx];
+                    }
+        }
+        atomicAdd(&localValue[0], gp[offsets.weightBodyOffset] * tangent);
+    }
+    __syncthreads();
+
+    double ptForIndexData[3] = {0.0};
+    DeviceVectorView<double> ptForIndex(ptForIndexData, dim);
+    for (int a = 0; a < dim; ++a)
+        ptForIndex[a] = pts(a, elementGlobal * numGPsInElement);
+    const int activeIndexI = elecBasis.activeIndex(ptForIndex, i);
+    const int activeIndexJ = dispBasis.activeIndex(ptForIndex, j);
+    const int globalIndexI = system.mapColIndex(activeIndexI, patchIdx, dim);
+    const int globalIndexJ = system.mapColIndex(activeIndexJ, patchIdx, col);
+    if (threadId == 0)
+        system.pushToMatrix(localValue[0], globalIndexI, globalIndexJ,
+                            eliminatedDofs, dim, col);
+}
+
+__global__
+void assembleFlexoMatrixPhiPhiKernel(int numElements, int N_D, int stride,
+                                     int basisStride,
+                                     MultiPatchDeviceView displacement,
+                                     MultiPatchDeviceView electricPotential,
+                                     SparseSystemDeviceView system,
+                                     DeviceNestedArrayView<double> eliminatedDofs,
+                                     DeviceMatrixView<double> pts,
+                                     DeviceVectorView<double> flexoGPData,
+                                     DeviceVectorView<double> flexoBasisData)
+{
+    extern __shared__ double localValue[];
+
+    const int dim = displacement.domainDim();
+    const int threadId = threadIdx.x;
+
+    int blockId = blockIdx.x;
+    const int j = blockId % N_D; blockId /= N_D;
+    const int i = blockId % N_D; blockId /= N_D;
+    const int elementGlobal = blockId;
+    if (elementGlobal >= numElements)
+        return;
+
+    if (threadId == 0)
+        localValue[0] = 0.0;
+    __syncthreads();
+
+    int patchIdx = 0;
+    displacement.threadPatch_element(elementGlobal, patchIdx);
+    TensorBsplineBasisDeviceView dispBasis = displacement.basis(patchIdx);
+    TensorBsplineBasisDeviceView elecBasis = electricPotential.basis(patchIdx);
+    const int numGPsInElement = dispBasis.numGPsInElement();
+    const FlexoGPOffsets offsets = flexoMakeGPOffsets(dim);
+    const FlexoBasisOffsets basisOffsets = flexoMakeBasisOffsets(dim);
+
+    for (int q = threadId; q < numGPsInElement; q += blockDim.x)
+    {
+        const int GPIdx = elementGlobal * numGPsInElement + q;
+        double* gp = flexoGPData.data() + GPIdx * stride;
+        const double* basisI =
+            flexoBasisData.data() + (GPIdx * N_D + i) * basisStride;
+        const double* basisJ =
+            flexoBasisData.data() + (GPIdx * N_D + j) * basisStride;
+        const double* gradP_i = basisI + basisOffsets.elecGradOffset;
+        const double* gradP_j = basisJ + basisOffsets.elecGradOffset;
+        double* KBlock = gp + offsets.KOffset;
+
+        double tangent = 0.0;
+        for (int A = 0; A < dim; ++A)
+            for (int B = 0; B < dim; ++B)
+                tangent -= gradP_i[A] * KBlock[A * dim + B] * gradP_j[B];
+        atomicAdd(&localValue[0], gp[offsets.weightBodyOffset] * tangent);
+    }
+    __syncthreads();
+
+    double ptForIndexData[3] = {0.0};
+    DeviceVectorView<double> ptForIndex(ptForIndexData, dim);
+    for (int a = 0; a < dim; ++a)
+        ptForIndex[a] = pts(a, elementGlobal * numGPsInElement);
+    const int activeIndexI = elecBasis.activeIndex(ptForIndex, i);
+    const int activeIndexJ = elecBasis.activeIndex(ptForIndex, j);
+    const int globalIndexI = system.mapColIndex(activeIndexI, patchIdx, dim);
+    const int globalIndexJ = system.mapColIndex(activeIndexJ, patchIdx, dim);
+    if (threadId == 0)
+        system.pushToMatrix(localValue[0], globalIndexI, globalIndexJ,
+                            eliminatedDofs, dim, dim);
+}
+
+__global__
 void assembleFlexoRHSKernel(int numDerivatives, int numElements, int N_D,
-                            int stride, int materialLaw, double youngsModulus,
+                            int stride, int basisStride, int materialLaw, double youngsModulus,
                             double poissonsRatio, double lengthScale,
                             double dielectricPermittivity,
                             double vacuumPermittivity,
@@ -2050,7 +2531,8 @@ void assembleFlexoRHSKernel(int numDerivatives, int numElements, int N_D,
                             DeviceMatrixView<double> dispValuesAndDerss,
                             DeviceMatrixView<double> elecValuesAndDerss,
                             DeviceVectorView<double> bodyForce,
-                            DeviceVectorView<double> flexoGPData)
+                            DeviceVectorView<double> flexoGPData,
+                            DeviceVectorView<double> flexoBasisData)
 {
     extern __shared__ double localRHS[];
 
@@ -2078,28 +2560,21 @@ void assembleFlexoRHSKernel(int numDerivatives, int numElements, int N_D,
     const int elecP1 = elecBasis.knotsOrder(0) + 1;
 
     const FlexoGPOffsets offsets = flexoMakeGPOffsets(dim);
+    const FlexoBasisOffsets basisOffsets = flexoMakeBasisOffsets(dim);
 
     for (int q = threadId; q < numGPsInElement; q += blockDim.x)
     {
         const int GPIdx = elementGlobal * numGPsInElement + q;
         double* gp = flexoGPData.data() + GPIdx * stride;
-        DeviceMatrixView<double> geoJacobianInv(gp + offsets.geoInvOffset, dim, dim);
-        double* geoHessians = gp + offsets.geoHessOffset;
         DeviceMatrixView<double> dispValuesAndDers(
             dispValuesAndDerss.data() + GPIdx * dispP1 * (numDerivatives + 1) * dim,
             dispP1, (numDerivatives + 1) * dim);
-        DeviceMatrixView<double> elecValuesAndDers(
-            elecValuesAndDerss.data() + GPIdx * elecP1 * (numDerivatives + 1) * dim,
-            elecP1, (numDerivatives + 1) * dim);
 
-        double grad_i[3] = {0.0};
-        double hess_i[9] = {0.0};
-        double gradP_i[3] = {0.0};
-        buildPhysicalGradientAndHessianFlexo(i, dispP1, dim, numDerivatives,
-                                             dispValuesAndDers, geoHessians,
-                                             geoJacobianInv, grad_i, hess_i);
-        buildPhysicalGradientFlexo(i, elecP1, dim, numDerivatives,
-                                   elecValuesAndDers, geoJacobianInv, gradP_i);
+        const double* basisI =
+            flexoBasisData.data() + (GPIdx * N_D + i) * basisStride;
+        const double* grad_i = basisI + basisOffsets.dispGradOffset;
+        const double* hess_i = basisI + basisOffsets.dispHessOffset;
+        const double* gradP_i = basisI + basisOffsets.elecGradOffset;
 
         double* S = gp + offsets.SOffset;
         double* Sgrad = gp + offsets.SgradOffset;
@@ -2648,6 +3123,11 @@ void GPUFlexoelectriciyAssembler::assemble(
     else
         m_flexoGPData.setZero();
 
+    const int basisStride = flexoDoublesPerGPBasis(domainDim());
+    const int basisDataSize = basisStride * numGPs() * N_D();
+    if (m_flexoBasisData.size() != basisDataSize)
+        m_flexoBasisData.resize(basisDataSize);
+
     const double localStiffening = options().getReal("local_stiffening");
     const int materialLaw = options().getInt("material_law");
     const double youngsModulus = options().getReal("youngs_modulus");
@@ -2662,15 +3142,56 @@ void GPUFlexoelectriciyAssembler::assemble(
         options().getInt("include_hbar_flexo_correction");
     const double forceScaling = options().getReal("force_scaling");
 
+    const std::vector<int> patchMaterialLaws =
+        patchIntOptionValues("material_law");
+    const std::vector<double> patchYoungsModuli =
+        patchRealOptionValues("youngs_modulus");
+    const std::vector<double> patchPoissonsRatios =
+        patchRealOptionValues("poissons_ratio");
+    const std::vector<double> patchLengthScales =
+        patchRealOptionValues("length_scale");
+    const std::vector<double> patchDielectricPermittivities =
+        patchRealOptionValues("dielectric_permittivity");
+    const std::vector<double> patchVacuumPermittivities =
+        patchRealOptionValues("vacuum_permittivity");
+    const std::vector<double> patchMuL =
+        patchRealOptionValues("flexoelectric_mu_L");
+    const std::vector<double> patchMuT =
+        patchRealOptionValues("flexoelectric_mu_T");
+    const std::vector<double> patchMuS =
+        patchRealOptionValues("flexoelectric_mu_S");
+    const std::vector<int> patchHbarFlexoCorrections =
+        patchIntOptionValues("include_hbar_flexo_correction");
+
+    std::vector<double> flexoMaterialParameters;
+    flexoMaterialParameters.reserve(static_cast<std::size_t>(10 * numPatches()));
+    for (int p = 0; p < numPatches(); ++p)
+    {
+        const std::size_t patch = static_cast<std::size_t>(p);
+        flexoMaterialParameters.push_back(
+            static_cast<double>(patchMaterialLaws[patch]));
+        flexoMaterialParameters.push_back(patchYoungsModuli[patch]);
+        flexoMaterialParameters.push_back(patchPoissonsRatios[patch]);
+        flexoMaterialParameters.push_back(patchLengthScales[patch]);
+        flexoMaterialParameters.push_back(
+            patchDielectricPermittivities[patch]);
+        flexoMaterialParameters.push_back(patchVacuumPermittivities[patch]);
+        flexoMaterialParameters.push_back(patchMuL[patch]);
+        flexoMaterialParameters.push_back(patchMuT[patch]);
+        flexoMaterialParameters.push_back(patchMuS[patch]);
+        flexoMaterialParameters.push_back(
+            static_cast<double>(patchHbarFlexoCorrections[patch]));
+    }
+    DeviceArray<double> materialParameterValues(flexoMaterialParameters);
+
     int minGrid = 0;
     int blockSize = 0;
     cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
         evaluateFlexoGPKernel, 0, numGPs());
     int gridSize = (numGPs() + blockSize - 1) / blockSize;
     evaluateFlexoGPKernel<<<gridSize, blockSize>>>(
-        numDerivatives(), numGPs(), stride, materialLaw, youngsModulus,
-        poissonsRatio, lengthScale, dielectricPermittivity, vacuumPermittivity,
-        muL, muT, muS, includeHbarFlexoCorrection, localStiffening, displacementView(),
+        numDerivatives(), numGPs(), stride, materialParameterValues.vectorView(),
+        localStiffening, displacementView(),
         m_electricPotentialPatch.deviceView(), geometryView(), gpTable(),
         wts().vectorView(), geoValuesAndDerssView(), dispValuesAndDerssView(),
         m_elecValuesAndDerss.matrixView(m_elePotentialP1,
@@ -2680,35 +3201,106 @@ void GPUFlexoelectriciyAssembler::assemble(
     if (err != cudaSuccess)
         throw std::runtime_error("CUDA synchronize failed in evaluateFlexoGPKernel");
 
-    blockSize = N_D();
-    gridSize = N_D() * N_D() * numElements();
-    const size_t matrixSharedBytes = (domainDim() + 1) * (domainDim() + 1) *
-                                     sizeof(double);
-    assembleFlexoMatrixKernel<<<gridSize, blockSize, matrixSharedBytes>>>(
-        numDerivatives(), numElements(), N_D(), stride, materialLaw,
-        youngsModulus, poissonsRatio, lengthScale, dielectricPermittivity,
-        vacuumPermittivity, muL, muT, muS, displacementView(),
-        m_electricPotentialPatch.deviceView(),
-        sparseSystemDeviceView(), fixedDofsAssemble, gpTable(),
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+        evaluateFlexoBasisDataKernel, 0, numGPs() * N_D());
+    gridSize = (numGPs() * N_D() + blockSize - 1) / blockSize;
+    evaluateFlexoBasisDataKernel<<<gridSize, blockSize>>>(
+        numDerivatives(), numGPs(), N_D(), stride, basisStride,
+        displacementView(), m_electricPotentialPatch.deviceView(),
         dispValuesAndDerssView(),
         m_elecValuesAndDerss.matrixView(m_elePotentialP1,
             numGPs() * (numDerivatives() + 1) * domainDim()),
-        m_flexoGPData.vectorView());
+        m_flexoGPData.vectorView(), m_flexoBasisData.vectorView());
     err = cudaDeviceSynchronize();
     if (err != cudaSuccess)
-        throw std::runtime_error("CUDA synchronize failed in assembleFlexoMatrixKernel");
+        throw std::runtime_error("CUDA synchronize failed in evaluateFlexoBasisDataKernel");
+
+    const bool useSplitMatrixKernels =
+        flexoEnvFlag("SIGA_FLEXO_SPLIT_MATRIX_KERNELS", false);
+    const bool printMatrixTiming =
+        flexoEnvFlag("SIGA_FLEXO_MATRIX_TIMING", false);
+    cudaEvent_t matrixStart = nullptr;
+    cudaEvent_t matrixStop = nullptr;
+    if (printMatrixTiming)
+    {
+        cudaEventCreate(&matrixStart);
+        cudaEventCreate(&matrixStop);
+        cudaEventRecord(matrixStart);
+    }
+
+    blockSize = N_D();
+    if (useSplitMatrixKernels)
+    {
+        const size_t matrixSharedBytes = sizeof(double);
+        gridSize = N_D() * N_D() * numElements() * domainDim() * domainDim();
+        assembleFlexoMatrixUUKernel<<<gridSize, blockSize, matrixSharedBytes>>>(
+            numElements(), N_D(), stride, basisStride, displacementView(),
+            m_electricPotentialPatch.deviceView(), sparseSystemDeviceView(),
+            fixedDofsAssemble, gpTable(), m_flexoGPData.vectorView(),
+            m_flexoBasisData.vectorView());
+        gridSize = N_D() * N_D() * numElements() * domainDim();
+        assembleFlexoMatrixUPhiKernel<<<gridSize, blockSize, matrixSharedBytes>>>(
+            numElements(), N_D(), stride, basisStride, displacementView(),
+            m_electricPotentialPatch.deviceView(), sparseSystemDeviceView(),
+            fixedDofsAssemble, gpTable(), m_flexoGPData.vectorView(),
+            m_flexoBasisData.vectorView());
+        assembleFlexoMatrixPhiUKernel<<<gridSize, blockSize, matrixSharedBytes>>>(
+            numElements(), N_D(), stride, basisStride, displacementView(),
+            m_electricPotentialPatch.deviceView(), sparseSystemDeviceView(),
+            fixedDofsAssemble, gpTable(), m_flexoGPData.vectorView(),
+            m_flexoBasisData.vectorView());
+        gridSize = N_D() * N_D() * numElements();
+        assembleFlexoMatrixPhiPhiKernel<<<gridSize, blockSize, matrixSharedBytes>>>(
+            numElements(), N_D(), stride, basisStride, displacementView(),
+            m_electricPotentialPatch.deviceView(), sparseSystemDeviceView(),
+            fixedDofsAssemble, gpTable(), m_flexoGPData.vectorView(),
+            m_flexoBasisData.vectorView());
+    }
+    else
+    {
+        gridSize = N_D() * N_D() * numElements();
+        const size_t matrixSharedBytes =
+            (domainDim() + 1) * (domainDim() + 1) * sizeof(double);
+        assembleFlexoMatrixKernel<<<gridSize, blockSize, matrixSharedBytes>>>(
+            numDerivatives(), numElements(), N_D(), stride, basisStride,
+            materialLaw, youngsModulus, poissonsRatio, lengthScale,
+            dielectricPermittivity, vacuumPermittivity, muL, muT, muS,
+            displacementView(), m_electricPotentialPatch.deviceView(),
+            sparseSystemDeviceView(), fixedDofsAssemble, gpTable(),
+            dispValuesAndDerssView(),
+            m_elecValuesAndDerss.matrixView(m_elePotentialP1,
+                numGPs() * (numDerivatives() + 1) * domainDim()),
+            m_flexoGPData.vectorView(), m_flexoBasisData.vectorView());
+    }
+
+    if (printMatrixTiming)
+        cudaEventRecord(matrixStop);
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+        throw std::runtime_error("CUDA synchronize failed in flexoelectric matrix kernels");
+    if (printMatrixTiming)
+    {
+        float matrixMilliseconds = 0.0f;
+        cudaEventElapsedTime(&matrixMilliseconds, matrixStart, matrixStop);
+        cudaEventDestroy(matrixStart);
+        cudaEventDestroy(matrixStop);
+        std::cout << "Flexo matrix assembly path: "
+                  << (useSplitMatrixKernels ? "split4" : "single")
+                  << ", CUDA time: " << matrixMilliseconds << " ms\n";
+    }
 
     gridSize = N_D() * numElements();
     const size_t rhsSharedBytes = (domainDim() + 1) * sizeof(double);
     assembleFlexoRHSKernel<<<gridSize, blockSize, rhsSharedBytes>>>(
-        numDerivatives(), numElements(), N_D(), stride, materialLaw,
+        numDerivatives(), numElements(), N_D(), stride, basisStride, materialLaw,
         youngsModulus, poissonsRatio, lengthScale, dielectricPermittivity,
         vacuumPermittivity, muL, muT, muS, forceScaling, displacementView(),
         m_electricPotentialPatch.deviceView(), sparseSystemDeviceView(), gpTable(),
         dispValuesAndDerssView(),
         m_elecValuesAndDerss.matrixView(m_elePotentialP1,
             numGPs() * (numDerivatives() + 1) * domainDim()),
-        bodyForce().vectorView(), m_flexoGPData.vectorView());
+        bodyForce().vectorView(), m_flexoGPData.vectorView(),
+        m_flexoBasisData.vectorView());
     err = cudaDeviceSynchronize();
     if (err != cudaSuccess)
         throw std::runtime_error("CUDA synchronize failed in assembleFlexoRHSKernel");

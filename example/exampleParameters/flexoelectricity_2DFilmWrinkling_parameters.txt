@@ -1,0 +1,42 @@
+# Geometry and mesh
+lengthScale: 0.0
+substrateLengthScale: 0.0
+L: 60
+Hf: 0.4
+Hs: 20
+numEle_L: 100
+numEle_Hf: 4
+numEle_Hs: 20
+numDegElev: 2
+numPointsFilm: 1000
+numPointsSubstrate: 10000
+outputPostfix: l0.0_muT0_order3
+
+# Loading and continuation
+initialDeltaDisp: -0.5
+maxStrain: -0.3
+numBisectionIterations: 20
+targetNumIterations: 6
+bucklingPerturbationAmplitude: 0.1
+postBisectionDeltaDisp: -1e-5
+resultOutputStrainInterval: 0.05
+detectSecondInstability: 0
+
+# Flexoelectric material parameters
+muL: 0
+substrateMuL: 0
+muT: 0
+substrateMuT: 0
+muS: 0
+substrateMuS: 0
+dielectricPermittivity: 0.092
+substrateDielectricPermittivity: 0.092
+YM: 1.0
+substrateYM: 0.01
+PR: 0.495
+substratePR: 0.495
+materialLaw: 1
+substrateMaterialLaw: 1
+includeHbarFlexoCorrection: 0
+substrateIncludeHbarFlexoCorrection: 0
+condensedEigenMaxIterations: 60

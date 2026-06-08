@@ -400,6 +400,12 @@ void TensorBsplineBasis::uniformRefine(int direction, int numKnots)
 	m_knotVectors[direction].uniformRefine(numKnots);
 }
 
+void TensorBsplineBasis::insertKnots(int direction, const std::vector<double>& knots)
+{
+	if (!knots.empty())
+		m_knotVectors[direction].insert(knots.begin(), knots.end());
+}
+
 void TensorBsplineBasis::uniformRefine(int numKnots)
 {
 	for (int d = 0; d < getDim(); ++d)

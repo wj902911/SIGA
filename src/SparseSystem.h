@@ -76,6 +76,10 @@ public:
     int numRowBlocks() const {return m_row.size();}
     
     const DofMapper& colMapper(int c) const { return m_mappers[m_col[c]]; }
+    int rowBlockOffset(int r) const { return m_rstr[r]; }
+    int colBlockOffset(int c) const { return m_cstr[c]; }
+    int rowBlockSize(int r) const { return m_mappers[m_row[r]].freeSize(); }
+    int colBlockSize(int c) const { return m_mappers[m_col[c]].freeSize(); }
 
     void buildInterleavingPermutation();
 

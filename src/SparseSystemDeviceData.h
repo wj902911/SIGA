@@ -25,6 +25,8 @@ private:
 
     DeviceArray<int> m_perm_old2new;
     DeviceArray<int> m_perm_new2old;
+    std::vector<int> m_rowBlockOffsets;
+    std::vector<int> m_rowBlockSizes;
 
 public:
 	__host__
@@ -78,13 +80,23 @@ public:
     __host__
     SparseSystemDeviceData(const SparseSystem& sparseSystem)
     : m_matrixRows(sparseSystem.matrixRows()),
-      m_matrixCols(sparseSystem.matrixCols())
+      m_matrixCols(sparseSystem.matrixCols()),
+      m_perm_old2new(sparseSystem.permOld2New()),
+      m_perm_new2old(sparseSystem.permNew2Old())
       //m_doubleData(sparseSystem.matrixRows()*
       //             sparseSystem.matrixCols()+
       //             sparseSystem.matrixRows())
     {
         sparseSystem.getDataVector(m_intDataOffsets,
                                    m_intData);
+        const int numBlocks = sparseSystem.numRowBlocks();
+        m_rowBlockOffsets.resize(numBlocks);
+        m_rowBlockSizes.resize(numBlocks);
+        for (int b = 0; b < numBlocks; ++b)
+        {
+            m_rowBlockOffsets[b] = sparseSystem.rowBlockOffset(b);
+            m_rowBlockSizes[b] = sparseSystem.rowBlockSize(b);
+        }
     }
 
     __host__
@@ -163,6 +175,12 @@ public:
 	{ return m_intDataOffsets; }
 	__host__
 	const DeviceArray<int> & intData() const { return m_intData; }
+    __host__
+    int numRowBlocks() const { return static_cast<int>(m_rowBlockSizes.size()); }
+    __host__
+    int rowBlockOffset(int block) const { return m_rowBlockOffsets[block]; }
+    __host__
+    int rowBlockSize(int block) const { return m_rowBlockSizes[block]; }
 	//__host__
 	//const DeviceArray<double> & doubleData() const { return m_doubleData; }
 

@@ -84,6 +84,7 @@ public:
 
 	void uniformRefine(int direction, int numKnots);
 	void uniformRefine(int numKnots = 1);
+	void insertKnots(int direction, const std::vector<double>& knots);
 
 	void eval_into(int dir, 
 		           const Eigen::MatrixXd& u, 

@@ -198,6 +198,8 @@ void KnotVector::insert(const_iterator ibeg, const_iterator iend)
 	std::merge(begin(), end(), ibeg, iend, temp.begin());
 	m_knots.swap(temp);
 	rebuildMultSum();
+	m_numElements = numElements();
+	m_numGaussPoints = m_order + 1;
 }
 
 void KnotVector::uniformRefine(int numKnots, int mult)

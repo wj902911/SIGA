@@ -14,11 +14,23 @@ MultiBasis::MultiBasis(const MultiPatch &multiPatch)
 void MultiBasis::uniformRefine(int patchIndex, int direction, int numKnots)
 { m_bases[patchIndex].uniformRefine(direction, numKnots); }
 
+void MultiBasis::insertKnots(int patchIndex, int direction,
+                             const std::vector<double>& knots)
+{ m_bases[patchIndex].insertKnots(direction, knots); }
+
 void MultiBasis::uniformRefine(int direction, int numKnots)
 {
     for (int i = 0; i < m_bases.size(); i++)
     {
         m_bases[i].uniformRefine(direction, numKnots);
+    }
+}
+
+void MultiBasis::insertKnots(int direction, const std::vector<double>& knots)
+{
+    for (int i = 0; i < m_bases.size(); i++)
+    {
+        m_bases[i].insertKnots(direction, knots);
     }
 }
 
