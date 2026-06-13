@@ -247,6 +247,36 @@ bool GPUSolver::solveWithPardiso(const PardisoSpMat& A,
                             m_pardisoRows, m_pardisoCols,
                             m_pardisoNonZeros, A, b, x, context);
 }
+
+bool GPUSolver::solveWithPardisoLU(const PardisoSpMat& A,
+                                   const Eigen::VectorXd& b,
+                                   Eigen::VectorXd& x,
+                                   const char* context)
+{
+    PardisoLUSolver solver;
+    solver.analyzePattern(A);
+    if (solver.info() != Eigen::Success)
+    {
+        printf("Eigen PARDISO LU analyzePattern failed in %s\n", context);
+        return false;
+    }
+
+    solver.factorize(A);
+    if (solver.info() != Eigen::Success)
+    {
+        printf("Eigen PARDISO LU factorization failed in %s\n", context);
+        return false;
+    }
+
+    x = solver.solve(b);
+    if (solver.info() != Eigen::Success)
+    {
+        printf("Eigen PARDISO LU solve failed in %s\n", context);
+        return false;
+    }
+
+    return true;
+}
 #endif
 
 struct BlockedToInterleavedND
@@ -603,8 +633,31 @@ bool GPUSolver::solveSingleIteration_Eigen()
     //std::cout << "RHS:\n" << b << std::endl;
 
     Eigen::VectorXd x;
+    const bool useNonsymmetricNewtonSolver =
+        m_assembler.options().isSwitch("use_nonsymmetric_newton_solver") &&
+        m_assembler.options().getSwitch("use_nonsymmetric_newton_solver");
 #if ENABLE_PARDISO
-    if (!solveWithPardiso(A, b, x, "Newton correction"))
+    if (useNonsymmetricNewtonSolver)
+    {
+        if (!solveWithPardisoLU(A, b, x, "nonsymmetric Newton correction"))
+        {
+            Eigen::SparseLU<SpMat> solver;
+            solver.compute(A);
+            if (solver.info() != Eigen::Success)
+            {
+                printf("Eigen SparseLU factorization failed in nonsymmetric Newton correction\n");
+                return false;
+            }
+
+            x = solver.solve(b);
+            if (solver.info() != Eigen::Success)
+            {
+                printf("Eigen SparseLU solve failed in nonsymmetric Newton correction\n");
+                return false;
+            }
+        }
+    }
+    else if (!solveWithPardiso(A, b, x, "Newton correction"))
         return false;
 #else
     Eigen::SparseLU<SpMat> solver;
@@ -1438,6 +1491,115 @@ double GPUSolver::smallestEigenValue(Eigen::VectorXd& eigenvector)
     eigenvector = x;
 #endif
     return smallestEigenvalue;
+}
+
+Eigen::VectorXd GPUSolver::smallestEigenValue(
+    int numEigenvalues,
+    Eigen::MatrixXd* eigenvectors,
+    int maxIterations,
+    double tolerance)
+{
+    if (eigenvectors)
+        eigenvectors->resize(0, 0);
+
+    if (numEigenvalues <= 0)
+        return Eigen::VectorXd();
+
+    m_assembler.assemble(m_solVector.vectorView(), m_numIterations,
+                         m_fixedDoFs.view());
+
+    using SpMat = Eigen::SparseMatrix<double, Eigen::RowMajor, int>;
+    const SpMat A = m_assembler.csrMatrix().toEigenCSR();
+    const int n = static_cast<int>(A.rows());
+    if (n <= 1 || A.cols() != n)
+        return Eigen::VectorXd();
+
+#if ENABLE_SPECTRA
+    return smallestEigenvalues_spectra(A, numEigenvalues, eigenvectors,
+                                       maxIterations, tolerance);
+#else
+    printf("smallestEigenValue(numEigenvalues) requires ENABLE_SPECTRA=ON\n");
+    return Eigen::VectorXd();
+#endif
+}
+
+Eigen::VectorXd GPUSolver::smallestEigenValuesDenseEigen(int numEigenvalues)
+{
+    if (numEigenvalues <= 0)
+        return Eigen::VectorXd();
+
+    m_assembler.assemble(m_solVector.vectorView(), m_numIterations,
+                         m_fixedDoFs.view());
+
+    using SpMat = Eigen::SparseMatrix<double, Eigen::RowMajor, int>;
+    const SpMat A = m_assembler.csrMatrix().toEigenCSR();
+    const int n = static_cast<int>(A.rows());
+    if (n <= 0 || A.cols() != n)
+        return Eigen::VectorXd();
+
+    Eigen::MatrixXd denseA = Eigen::MatrixXd(A);
+    denseA = 0.5 * (denseA + denseA.transpose());
+
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigensolver(
+        denseA, Eigen::EigenvaluesOnly);
+    if (eigensolver.info() != Eigen::Success)
+    {
+        std::cerr << "Eigen dense eigenvalue calculation failed.\n";
+        return Eigen::VectorXd();
+    }
+
+    const Eigen::VectorXd allEigenvalues = eigensolver.eigenvalues();
+    std::vector<int> order(static_cast<std::size_t>(allEigenvalues.size()));
+    for (int i = 0; i < allEigenvalues.size(); ++i)
+        order[static_cast<std::size_t>(i)] = i;
+
+    std::sort(order.begin(), order.end(),
+              [&allEigenvalues](int lhs, int rhs)
+              {
+                  return std::abs(allEigenvalues[lhs]) <
+                         std::abs(allEigenvalues[rhs]);
+              });
+
+    const int count = (std::min)(numEigenvalues,
+                                 static_cast<int>(allEigenvalues.size()));
+    Eigen::VectorXd closestEigenvalues(count);
+    for (int i = 0; i < count; ++i)
+        closestEigenvalues[i] =
+            allEigenvalues[order[static_cast<std::size_t>(i)]];
+
+    return closestEigenvalues;
+}
+
+Eigen::VectorXd GPUSolver::eigenValuesNearShift(
+    int numEigenvalues,
+    double shift,
+    Eigen::MatrixXd* eigenvectors,
+    int maxIterations,
+    double tolerance)
+{
+    if (eigenvectors)
+        eigenvectors->resize(0, 0);
+
+    if (numEigenvalues <= 0)
+        return Eigen::VectorXd();
+
+    m_assembler.assemble(m_solVector.vectorView(), m_numIterations,
+                         m_fixedDoFs.view());
+
+    using SpMat = Eigen::SparseMatrix<double, Eigen::RowMajor, int>;
+    const SpMat A = m_assembler.csrMatrix().toEigenCSR();
+    const int n = static_cast<int>(A.rows());
+    if (n <= 1 || A.cols() != n)
+        return Eigen::VectorXd();
+
+#if ENABLE_SPECTRA
+    return eigenvaluesNearShift_spectra(A, numEigenvalues, shift,
+                                        eigenvectors, maxIterations,
+                                        tolerance);
+#else
+    printf("eigenValuesNearShift requires ENABLE_SPECTRA=ON\n");
+    return Eigen::VectorXd();
+#endif
 }
 
 double GPUSolver::smallestCondensedMechanicalEigenpair(

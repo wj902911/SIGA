@@ -59,3 +59,12 @@ MultiPatchDeviceView MultiPatchDeviceData::deviceView() const
                                 m_multSumsOffsets.view(),
                                 m_multSums.view());                                
 }
+
+__host__
+void MultiPatchDeviceData::copyControlPointsToHost(
+    std::vector<double>& controlPointsPools,
+    std::vector<int>& patchControlPointsPoolOffsets) const
+{
+    m_controlPointsPools.copyToHost(controlPointsPools);
+    m_patchControlPointsPoolOffsets.copyToHost(patchControlPointsPoolOffsets);
+}

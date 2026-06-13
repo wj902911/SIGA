@@ -1,5 +1,189 @@
 #include "MultiPatch.h"
+#include <algorithm>
+#include <cmath>
 #include <set>
+#include <stdexcept>
+
+namespace
+{
+int tensorIndex(const std::vector<int>& coords, const std::vector<int>& sizes)
+{
+    const int dim = static_cast<int>(sizes.size());
+    int index = coords[dim - 1];
+    for (int d = dim - 2; d >= 0; --d)
+        index = index * sizes[d] + coords[d];
+    return index;
+}
+
+int tensorSize(const std::vector<int>& sizes)
+{
+    int size = 1;
+    for (const int s : sizes)
+        size *= s;
+    return size;
+}
+
+int knotMultiplicity(const std::vector<double>& knots, double knot)
+{
+    const double tol = 1e-12;
+    return static_cast<int>(std::count_if(
+        knots.begin(), knots.end(),
+        [=](double value) { return std::abs(value - knot) <= tol; }));
+}
+
+int findKnotSpan(const std::vector<double>& knots,
+                 int degree,
+                 int numControlPoints,
+                 double knot)
+{
+    const int n = numControlPoints - 1;
+    if (knot >= knots[n + 1])
+        return n;
+
+    const auto it = std::upper_bound(knots.begin(), knots.end(), knot);
+    int span = static_cast<int>(std::distance(knots.begin(), it)) - 1;
+    span = std::max(degree, span);
+    span = std::min(n, span);
+    return span;
+}
+
+Eigen::MatrixXd insertKnotInCurve(const std::vector<double>& knots,
+                                  int degree,
+                                  double knot,
+                                  const Eigen::MatrixXd& controlPoints)
+{
+    const int numControlPoints = static_cast<int>(controlPoints.rows());
+    const int n = numControlPoints - 1;
+    const int span = findKnotSpan(knots, degree, numControlPoints, knot);
+    const int multiplicity = knotMultiplicity(knots, knot);
+    if (multiplicity > degree)
+        throw std::runtime_error("Cannot insert a knot whose multiplicity is already greater than the degree.");
+
+    Eigen::MatrixXd refined =
+        Eigen::MatrixXd::Zero(numControlPoints + 1, controlPoints.cols());
+
+    for (int i = 0; i <= span - degree; ++i)
+        refined.row(i) = controlPoints.row(i);
+
+    for (int i = span - multiplicity; i <= n; ++i)
+        refined.row(i + 1) = controlPoints.row(i);
+
+    for (int i = span - degree + 1; i <= span - multiplicity; ++i)
+    {
+        const double denominator = knots[i + degree] - knots[i];
+        if (std::abs(denominator) <= 1e-14)
+            throw std::runtime_error("Encountered zero knot span during knot insertion.");
+
+        const double alpha = (knot - knots[i]) / denominator;
+        refined.row(i) =
+            alpha * controlPoints.row(i) +
+            (1.0 - alpha) * controlPoints.row(i - 1);
+    }
+
+    return refined;
+}
+
+Eigen::MatrixXd insertKnotInTensorDirection(
+    const Eigen::MatrixXd& controlPoints,
+    const std::vector<int>& sizes,
+    int direction,
+    const std::vector<double>& knots,
+    int degree,
+    double knot)
+{
+    std::vector<int> refinedSizes = sizes;
+    refinedSizes[direction] += 1;
+
+    Eigen::MatrixXd refined(tensorSize(refinedSizes), controlPoints.cols());
+    const int dim = static_cast<int>(sizes.size());
+    const int numLines = tensorSize(sizes) / sizes[direction];
+    const int oldDirectionSize = sizes[direction];
+
+    std::vector<int> coords(dim, 0);
+    for (int line = 0; line < numLines; ++line)
+    {
+        int remainder = line;
+        for (int d = 0; d < dim; ++d)
+        {
+            if (d == direction)
+                continue;
+            coords[d] = remainder % sizes[d];
+            remainder /= sizes[d];
+        }
+
+        Eigen::MatrixXd curve(oldDirectionSize, controlPoints.cols());
+        for (int i = 0; i < oldDirectionSize; ++i)
+        {
+            coords[direction] = i;
+            curve.row(i) = controlPoints.row(tensorIndex(coords, sizes));
+        }
+
+        const Eigen::MatrixXd refinedCurve =
+            insertKnotInCurve(knots, degree, knot, curve);
+
+        for (int i = 0; i < oldDirectionSize + 1; ++i)
+        {
+            coords[direction] = i;
+            refined.row(tensorIndex(coords, refinedSizes)) = refinedCurve.row(i);
+        }
+    }
+
+    return refined;
+}
+
+Patch insertKnotsIntoPatch(const Patch& patch,
+                           int direction,
+                           std::vector<double> knotsToInsert)
+{
+    if (knotsToInsert.empty())
+        return patch;
+
+    TensorBsplineBasis refinedBasis = patch.getBasis();
+    const int dim = refinedBasis.getDim();
+    if (direction < 0 || direction >= dim)
+        throw std::out_of_range("Refinement direction is outside the patch dimension.");
+
+    std::sort(knotsToInsert.begin(), knotsToInsert.end());
+
+    std::vector<int> sizes(dim);
+    for (int d = 0; d < dim; ++d)
+        sizes[d] = refinedBasis.size(d);
+
+    std::vector<double> currentKnots = refinedBasis.getKnots(direction);
+    const int degree = refinedBasis.getOrder(direction);
+    Eigen::MatrixXd refinedControlPoints = patch.getControlPoints();
+
+    for (const double knot : knotsToInsert)
+    {
+        refinedControlPoints =
+            insertKnotInTensorDirection(refinedControlPoints, sizes, direction,
+                                        currentKnots, degree, knot);
+        currentKnots.insert(std::upper_bound(currentKnots.begin(),
+                                             currentKnots.end(), knot),
+                            knot);
+        sizes[direction] += 1;
+    }
+
+    refinedBasis.insertKnots(direction, knotsToInsert);
+    if (refinedControlPoints.rows() != refinedBasis.getNumControlPoints())
+        throw std::runtime_error("Refined control-point count does not match the refined basis.");
+
+    return Patch(refinedBasis, refinedControlPoints);
+}
+
+void uniformRefinePatch(Patch& patch, int direction, int numKnots)
+{
+    if (numKnots < 0)
+        throw std::invalid_argument("numKnots must be nonnegative.");
+    if (numKnots == 0)
+        return;
+
+    std::vector<double> knotsToInsert;
+    patch.getKnotVector(direction).getUniformRefinementKnots(numKnots,
+                                                             knotsToInsert);
+    patch = insertKnotsIntoPatch(patch, direction, knotsToInsert);
+}
+}
 
 #if 0
 template <typename T>
@@ -536,26 +720,26 @@ void MultiPatch::uniformRefineWithoutUpdate(int patchIndex, int direction, int n
 
 void MultiPatch::uniformRefine(int patchIndex, int direction, int numKnots)
 {
-    m_bases[patchIndex].uniformRefine(direction, numKnots);
-    //update();
+    uniformRefinePatch(m_patches[patchIndex], direction, numKnots);
+    m_bases[patchIndex] = m_patches[patchIndex].getBasis();
 }
 
 void MultiPatch::uniformRefine(int direction, int numKnots)
 {
     for (int i = 0; i < m_bases.size(); i++)
     {
-        m_bases[i].uniformRefine(direction, numKnots);
+        uniformRefine(i, direction, numKnots);
     }
-    //update();
 }
 
 void MultiPatch::uniformRefine(int numKnots)
 {
     for (int i = 0; i < m_bases.size(); i++)
     {
-        m_bases[i].uniformRefine(numKnots);
+        const int dim = m_patches[i].getBasisDim();
+        for (int direction = 0; direction < dim; ++direction)
+            uniformRefine(i, direction, numKnots);
     }
-    //update();
 }
 
 const TensorBsplineBasis &MultiPatch::basis(int patchIndex) const

@@ -4,3 +4,7 @@ build_spectra_vs17/
 .vscode/
 .vs/
 CMakeSettings.json
+pyscript/__pycache__/
+*.aux
+*.log
+*.out

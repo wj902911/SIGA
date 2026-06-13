@@ -175,7 +175,7 @@ const Eigen::MatrixXd &Patch::getControlPoints() const
 
 int Patch::getNumControlPoints() const
 {
-    return m_controlPoints.size() / m_basis.getDim();
+    return static_cast<int>(m_controlPoints.rows());
 }
 
 const KnotVector& Patch::getKnotVector(int direction) const

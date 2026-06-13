@@ -82,6 +82,11 @@ public:
     MultiPatchDeviceView deviceView() const;
 
     __host__
+    void copyControlPointsToHost(
+        std::vector<double>& controlPointsPools,
+        std::vector<int>& patchControlPointsPoolOffsets) const;
+
+    __host__
     int numPatches() const { return m_numPatches; }
 
     __host__

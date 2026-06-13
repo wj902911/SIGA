@@ -43,6 +43,7 @@ private:
 #if ENABLE_PARDISO
     using PardisoSpMat = Eigen::SparseMatrix<double, Eigen::RowMajor, int>;
     using PardisoSolver = Eigen::PardisoLDLT<PardisoSpMat, Eigen::Upper>;
+    using PardisoLUSolver = Eigen::PardisoLU<PardisoSpMat>;
 
     PardisoSolver m_pardisoSolver;
     bool m_pardisoPatternAnalyzed = false;
@@ -84,6 +85,11 @@ private:
                           const Eigen::VectorXd& b,
                           Eigen::VectorXd& x,
                           const char* context);
+
+    bool solveWithPardisoLU(const PardisoSpMat& A,
+                            const Eigen::VectorXd& b,
+                            Eigen::VectorXd& x,
+                            const char* context);
 #endif
 
 #if ENABLE_AMGX
@@ -138,6 +144,16 @@ public:
     void solve();
     double smallestEigenValue();
     double smallestEigenValue(Eigen::VectorXd& eigenvector);
+    Eigen::VectorXd smallestEigenValue(int numEigenvalues,
+                                       Eigen::MatrixXd* eigenvectors = nullptr,
+                                       int maxIterations = 5000,
+                                       double tolerance = 1e-8);
+    Eigen::VectorXd smallestEigenValuesDenseEigen(int numEigenvalues);
+    Eigen::VectorXd eigenValuesNearShift(int numEigenvalues,
+                                         double shift,
+                                         Eigen::MatrixXd* eigenvectors = nullptr,
+                                         int maxIterations = 5000,
+                                         double tolerance = 1e-8);
     double smallestCondensedMechanicalEigenpair(Eigen::VectorXd& displacementEigenvector,
                                                 Eigen::VectorXd* electricEigenvector = nullptr,
                                                 int maxIterations = 60,

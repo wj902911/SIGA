@@ -10,7 +10,7 @@ numEle_Hs: 20
 numDegElev: 2
 numPointsFilm: 1000
 numPointsSubstrate: 10000
-outputPostfix: l0.0_muT0_order3
+outputPostfix: l0.0_muT10_order3_5eigenTest
 
 # Loading and continuation
 initialDeltaDisp: -0.5
@@ -21,12 +21,13 @@ bucklingPerturbationAmplitude: 0.1
 postBisectionDeltaDisp: -1e-5
 resultOutputStrainInterval: 0.05
 detectSecondInstability: 0
+numNearZeroEigenvalues: 5
 
 # Flexoelectric material parameters
 muL: 0
 substrateMuL: 0
-muT: 0
-substrateMuT: 0
+muT: 10
+substrateMuT: 10
 muS: 0
 substrateMuS: 0
 dielectricPermittivity: 0.092

@@ -1,0 +1,19 @@
+# Geometry and mesh
+L: 10
+H: 1
+numEle_L: 16
+numEle_H: 10
+numRefinements: 0
+numDegElev: 2
+numPointsPerPatch: 2000
+outputPostfix: L10_H1_Mminus1
+
+# Loading
+followerMoment: -1
+numLoadSteps: 20
+maxNewtonIterations: 300
+
+# Material parameters
+YM: 100
+PR: 0.3
+materialLaw: 1

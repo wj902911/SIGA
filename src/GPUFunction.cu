@@ -1,5 +1,6 @@
 #include "GPUFunction.h"
 
+#include <algorithm>
 #include <cassert>
 #include <vector>
 
@@ -33,6 +34,29 @@ Eigen::MatrixXd GPUFunction::eval(int patch, const Eigen::MatrixXd &u) const
     Eigen::MatrixXd values(targetDim(), numPoints);
     valuesDeviceData.copyToHost(values.data());
     return values;
+}
+
+Eigen::MatrixXd GPUFunction::controlPoints(int patch) const
+{
+    assert(patch >= 0 && patch < numPatches() && "Patch index out of bounds");
+
+    std::vector<double> controlPointsPool;
+    std::vector<int> patchControlPointOffsets;
+    m_multiPatchDeviceData.copyControlPointsToHost(controlPointsPool,
+                                                   patchControlPointOffsets);
+
+    const int start = patchControlPointOffsets[patch];
+    const int end = patchControlPointOffsets[patch + 1];
+    const int numEntries = end - start;
+    assert(numEntries % targetDim() == 0 &&
+           "Control-point pool size is not divisible by target dimension");
+
+    const int numControlPoints = numEntries / targetDim();
+    Eigen::MatrixXd result(numControlPoints, targetDim());
+    std::copy(controlPointsPool.begin() + start,
+              controlPointsPool.begin() + end,
+              result.data());
+    return result;
 }
 
 __global__

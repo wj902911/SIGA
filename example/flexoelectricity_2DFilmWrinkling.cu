@@ -157,6 +157,7 @@ std::vector<double> gradedSubstrateInternalKnots(int numElements,
     }
     return knots;
 }
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -185,7 +186,8 @@ int main(int argc, char* argv[])
             << " [substrateIncludeHbarFlexoCorrection]"
             << " [condensedEigenMaxIterations]"
             << " [numPointsPerPatch] [numPointsFilm] [numPointsSubstrate]"
-            << " [outputPostfix] [detectSecondInstability]\n"
+            << " [outputPostfix] [detectSecondInstability]"
+            << " [numNearZeroEigenvalues]\n"
             << "Use condensedEigenMaxIterations <= 0 for exact reduced-matrix LDLT stability.\n"
             << "Each omitted substrate material value defaults to the corresponding film value.\n"
             << "Example: " << argv[0]
@@ -234,6 +236,7 @@ int main(int argc, char* argv[])
     int numPointsFilm = numPointsPerPatchValue;
     int numPointsSubstrate = numPointsPerPatchValue;
     int detectSecondInstability = 1;
+    int numNearZeroEigenvalues = 1;
     std::string outputSuffix;
 
     if (useParameterFile)
@@ -296,6 +299,8 @@ int main(int argc, char* argv[])
                                            numPointsPerPatchValue);
         detectSecondInstability = parameterInt(parameters,
             "detectSecondInstability", detectSecondInstability);
+        numNearZeroEigenvalues = parameterInt(parameters,
+            "numNearZeroEigenvalues", numNearZeroEigenvalues);
         const std::string outputPostfix = parameterString(
             parameters, "outputPostfix",
             std::filesystem::path(argv[1]).stem().string());
@@ -381,6 +386,8 @@ int main(int argc, char* argv[])
         const std::string outputPostfix = argc > 37 ? std::string(argv[37]) : "";
         if (argc > 38)
             detectSecondInstability = std::stoi(argv[38]);
+        if (argc > 39)
+            numNearZeroEigenvalues = std::stoi(argv[39]);
         if (!outputPostfix.empty())
         {
             outputSuffix = "_" + outputPostfix;
@@ -404,6 +411,9 @@ int main(int argc, char* argv[])
     if (numPointsFilm < 2 || numPointsSubstrate < 2)
         throw std::invalid_argument(
             "numPointsFilm and numPointsSubstrate must be at least 2 for Paraview output.");
+    if (numNearZeroEigenvalues < 1)
+        throw std::invalid_argument(
+            "numNearZeroEigenvalues must be at least 1.");
     const bool useExactCondensedStability = condensedEigenMaxIterations <= 0;
     const int eigenvectorMaxIterations =
         condensedEigenMaxIterations > 0 ? condensedEigenMaxIterations : 60;
@@ -441,6 +451,10 @@ int main(int argc, char* argv[])
     const std::string onsetFile = outputFolder + "/instability_onset.txt";
     const std::string eigenvalueFile = outputFolder + "/instability_smallest_eigenvalue.txt";
     const std::string eigenvectorFile = outputFolder + "/instability_smallest_eigenvector.txt";
+    const std::string nearZeroEigenvaluesFile =
+        outputFolder + "/instability_near_zero_eigenvalues.txt";
+    const std::string nearZeroEigenvaluesStepFile =
+        outputFolder + "/near_zero_eigenvalues_steps.txt";
 
     double maxDisp = maxStrain * L;
     constexpr int filmPatchIndex = 0;
@@ -765,6 +779,67 @@ int main(int argc, char* argv[])
             electricFieldOut << topElectricField(1, i) << "\n";
     };
 
+    bool nearZeroEigenvaluesStepHeaderWritten = false;
+    auto outputNearZeroEigenvaluesForStep =
+        [&](int stepIndex)
+    {
+        if (numNearZeroEigenvalues <= 1)
+            return;
+
+        std::vector<double> rowEigenvalues;
+        std::vector<std::string> rowLabels;
+
+        std::cout << "Computing " << numNearZeroEigenvalues
+                  << " full-system eigenvalues closest to zero for step "
+                  << stepIndex << " using Spectra.\n";
+
+        const Eigen::VectorXd nearZeroEigenvalues =
+            solver.smallestEigenValue(numNearZeroEigenvalues);
+        if (nearZeroEigenvalues.size() == 0)
+        {
+            std::cout << "No near-zero eigenvalues were returned. "
+                      << "Make sure ENABLE_SPECTRA=ON for this calculation.\n";
+            return;
+        }
+
+        for (int i = 0; i < numNearZeroEigenvalues; ++i)
+        {
+            rowLabels.push_back("eigenvalue_" + std::to_string(i + 1));
+            rowEigenvalues.push_back(
+                i < nearZeroEigenvalues.size()
+                ? nearZeroEigenvalues[i]
+                : std::numeric_limits<double>::quiet_NaN());
+        }
+
+        std::ofstream nearZeroOut(
+            nearZeroEigenvaluesStepFile,
+            nearZeroEigenvaluesStepHeaderWritten
+                ? std::ios::app
+                : std::ios::out);
+        nearZeroOut << std::setprecision(16);
+        if (!nearZeroEigenvaluesStepHeaderWritten)
+        {
+            nearZeroOut << "# step";
+            for (const std::string& label : rowLabels)
+                nearZeroOut << " " << label;
+            nearZeroOut << "\n";
+            nearZeroEigenvaluesStepHeaderWritten = true;
+        }
+
+        nearZeroOut << stepIndex;
+        for (double value : rowEigenvalues)
+            nearZeroOut << " " << value;
+        nearZeroOut << "\n";
+
+        std::cout << "Near-zero eigenvalues at step " << stepIndex
+                  << ":\n";
+        for (std::size_t i = 0; i < rowEigenvalues.size(); ++i)
+        {
+            std::cout << "  " << rowLabels[i] << ": "
+                      << rowEigenvalues[i] << "\n";
+        }
+    };
+
     updateOutputFunctions();
 	postProcessor.outputToParaview(fileNameWithPath, outputStep++, collection);
     outputSectionData(outputStep - 1);
@@ -898,6 +973,7 @@ int main(int argc, char* argv[])
 
         double currentStability = condensedStability();
         std::cout << "Stability: " << currentStability << "\n";
+        outputNearZeroEigenvaluesForStep(step);
 
         const bool reachedStoredCriticalDisp =
             hasStoredCriticalData && !bucklingPerturbationApplied &&
@@ -1056,6 +1132,11 @@ int main(int argc, char* argv[])
                     ? eigenvectorFile
                     : outputFolder + "/instability_smallest_eigenvector" +
                           recordSuffix + ".txt";
+                const std::string currentNearZeroEigenvaluesFile =
+                    currentInstabilityRecord == 1
+                    ? nearZeroEigenvaluesFile
+                    : outputFolder + "/instability_near_zero_eigenvalues" +
+                          recordSuffix + ".txt";
 
                 std::ofstream onsetOut(currentOnsetFile);
                 onsetOut << std::setprecision(16)
@@ -1086,6 +1167,42 @@ int main(int argc, char* argv[])
                      i < criticalEigenvector.size();
                      ++i)
                     eigenvectorOut << criticalEigenvector[i] << "\n";
+
+                if (numNearZeroEigenvalues > 1)
+                {
+                    std::cout << "Computing " << numNearZeroEigenvalues
+                              << " full-system eigenvalues closest to zero "
+                              << "using Spectra.\n";
+                    const Eigen::VectorXd nearZeroEigenvalues =
+                        solver.smallestEigenValue(numNearZeroEigenvalues);
+                    if (nearZeroEigenvalues.size() == 0)
+                    {
+                        std::cout << "No near-zero eigenvalues were returned. "
+                                  << "Make sure ENABLE_SPECTRA=ON for this "
+                                  << "calculation.\n";
+                    }
+                    else
+                    {
+                        std::ofstream nearZeroOut(
+                            currentNearZeroEigenvaluesFile);
+                        nearZeroOut << std::setprecision(16);
+                        std::cout << "Near-zero eigenvalues:\n";
+                        for (Eigen::Index i = 0;
+                             i < nearZeroEigenvalues.size();
+                             ++i)
+                        {
+                            nearZeroOut << nearZeroEigenvalues[i] << "\n";
+                            std::cout << "  " << i + 1 << ": "
+                                      << nearZeroEigenvalues[i] << "\n";
+                        }
+
+                        std::cout << "Stored "
+                                  << nearZeroEigenvalues.size()
+                                  << " near-zero eigenvalues in "
+                                  << currentNearZeroEigenvaluesFile
+                                  << ".\n";
+                    }
+                }
 
                 std::cout << "Stored instability onset record "
                           << currentInstabilityRecord

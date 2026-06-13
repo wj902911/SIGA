@@ -1,0 +1,23 @@
+# Geometry and mesh
+lengthScale: 0
+L: 1000
+H: 100
+numEle_L: 10
+numEle_H: 1
+numRefinements: 5
+numDegElev: 3
+numPointsPerPatch: 10000
+outputPostfix: l0_L1000_H100
+
+# Loading and continuation
+initialDeltaDisp: -5.0
+maxStrain: -0.5
+numBisectionIterations: 20
+targetNumIterations: 6
+bucklingPerturbationAmplitude: 3.0
+postBisectionDeltaDisp: -1e-5
+resultOutputStrainInterval: 0.05
+
+# Material parameters
+YM: 1.0
+PR: 0.495

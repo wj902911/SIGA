@@ -9,13 +9,122 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <map>
+#include <stdexcept>
+
+namespace
+{
+std::string trim(const std::string& value)
+{
+    const std::size_t first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos)
+        return "";
+    const std::size_t last = value.find_last_not_of(" \t\r\n");
+    return value.substr(first, last - first + 1);
+}
+
+std::map<std::string, std::string> readParameterFile(const std::string& path)
+{
+    std::ifstream in(path);
+    if (!in)
+        throw std::runtime_error("Cannot open parameter file: " + path);
+
+    std::map<std::string, std::string> parameters;
+    std::string line;
+    int lineNumber = 0;
+    while (std::getline(in, line))
+    {
+        ++lineNumber;
+        const std::size_t comment = line.find('#');
+        if (comment != std::string::npos)
+            line = line.substr(0, comment);
+
+        line = trim(line);
+        if (line.empty())
+            continue;
+
+        const std::size_t separator = line.find(':');
+        if (separator == std::string::npos)
+            throw std::runtime_error("Expected key: value in " + path +
+                                     " at line " + std::to_string(lineNumber));
+
+        const std::string key = trim(line.substr(0, separator));
+        const std::string value = trim(line.substr(separator + 1));
+        if (key.empty() || value.empty())
+            throw std::runtime_error("Empty key or value in " + path +
+                                     " at line " + std::to_string(lineNumber));
+        parameters[key] = value;
+    }
+
+    return parameters;
+}
+
+bool hasParameter(const std::map<std::string, std::string>& parameters,
+                  const std::string& key)
+{
+    return parameters.find(key) != parameters.end();
+}
+
+double parameterDouble(const std::map<std::string, std::string>& parameters,
+                       const std::string& key)
+{
+    const auto it = parameters.find(key);
+    if (it == parameters.end())
+        throw std::runtime_error("Missing required parameter: " + key);
+    return std::stod(it->second);
+}
+
+double parameterDouble(const std::map<std::string, std::string>& parameters,
+                       const std::string& key,
+                       double defaultValue)
+{
+    const auto it = parameters.find(key);
+    if (it == parameters.end())
+        return defaultValue;
+    return std::stod(it->second);
+}
+
+int parameterInt(const std::map<std::string, std::string>& parameters,
+                 const std::string& key)
+{
+    const auto it = parameters.find(key);
+    if (it == parameters.end())
+        throw std::runtime_error("Missing required parameter: " + key);
+    return std::stoi(it->second);
+}
+
+int parameterInt(const std::map<std::string, std::string>& parameters,
+                 const std::string& key,
+                 int defaultValue)
+{
+    const auto it = parameters.find(key);
+    if (it == parameters.end())
+        return defaultValue;
+    return std::stoi(it->second);
+}
+
+std::string parameterString(
+    const std::map<std::string, std::string>& parameters,
+    const std::string& key,
+    const std::string& defaultValue)
+{
+    const auto it = parameters.find(key);
+    if (it == parameters.end())
+        return defaultValue;
+    return it->second;
+}
+} // namespace
 
 int main(int argc, char* argv[])
 {
-    if (argc < 10)
+    const bool useParameterFile = argc == 2 &&
+        std::filesystem::path(argv[1]).extension() == ".txt";
+    if (!useParameterFile && argc < 10)
     {
         std::cerr
             << "Usage: " << argv[0]
+            << " <parameterFile.txt>\n"
+            << "   or: " << argv[0]
             << " <lengthScale> <A> <R> <numEle_L> <numEle_H>"
             << " <numRefinements> <numDegElev> <initialDeltaDisp> <maxStrain>"
             << " [numBisectionIterations] [targetNumIterations]"
@@ -28,44 +137,106 @@ int main(int argc, char* argv[])
 
     double YM = 1.0;
 	double PR = 0.495;
-    double lengthScale = std::stod(argv[1]);
-
-    double A = std::stod(argv[2]), R = std::stod(argv[3]);
-
-    int numEle_L = std::stoi(argv[4]);
-    int numEle_H = std::stoi(argv[5]);
-
-    int numRefinements = std::stoi(argv[6]);
-    int numDegElev = std::stoi(argv[7]);
-
-    double initialDeltaDisp = std::stod(argv[8]);
-    double maxStrain = std::stod(argv[9]);
+    double lengthScale = 0.0;
+    double L = 0.0;
+    double H = 0.0;
+    int numEle_L = 0;
+    int numEle_H = 0;
+    int numRefinements = 0;
+    int numDegElev = 0;
+    double initialDeltaDisp = 0.0;
+    double maxStrain = 0.0;
     int numBisectionIterations = 20;
-    if (argc > 10)
-        numBisectionIterations = std::stoi(argv[10]);
     int targetNumIterations = 5;
-    if (argc > 11)
-        targetNumIterations = std::stoi(argv[11]);
-    double bucklingPerturbationAmplitude = 1e-3 * abs(initialDeltaDisp);
-    if (argc > 12)
-        bucklingPerturbationAmplitude = std::stod(argv[12]);
-    double postBisectionDeltaDisp = 0.1 * initialDeltaDisp;
-    if (argc > 13)
-        postBisectionDeltaDisp = std::stod(argv[13]);
+    double bucklingPerturbationAmplitude = 0.0;
+    double postBisectionDeltaDisp = 0.0;
     double resultOutputStrainInterval = 0.0;
-    if (argc > 14)
-        resultOutputStrainInterval = std::stod(argv[14]);
-    std::vector<int> numPointsPerPatch{ 1000 };
+    int numPointsPerPatchValue = 1000;
+    std::string outputSuffix;
+
+    if (useParameterFile)
+    {
+        const std::map<std::string, std::string> parameters =
+            readParameterFile(argv[1]);
+        lengthScale = parameterDouble(parameters, "lengthScale");
+        if (hasParameter(parameters, "L") && hasParameter(parameters, "H"))
+        {
+            L = parameterDouble(parameters, "L");
+            H = parameterDouble(parameters, "H");
+        }
+        else
+        {
+            const double A = parameterDouble(parameters, "A");
+            const double R = parameterDouble(parameters, "R");
+            H = sqrt(A / R);
+            L = sqrt(A * R);
+        }
+        numEle_L = parameterInt(parameters, "numEle_L");
+        numEle_H = parameterInt(parameters, "numEle_H");
+        numRefinements = parameterInt(parameters, "numRefinements", 0);
+        numDegElev = parameterInt(parameters, "numDegElev");
+        initialDeltaDisp = parameterDouble(parameters, "initialDeltaDisp");
+        maxStrain = parameterDouble(parameters, "maxStrain");
+        numBisectionIterations = parameterInt(parameters, "numBisectionIterations",
+                                             numBisectionIterations);
+        targetNumIterations = parameterInt(parameters, "targetNumIterations",
+                                          targetNumIterations);
+        bucklingPerturbationAmplitude = parameterDouble(
+            parameters, "bucklingPerturbationAmplitude",
+            1e-3 * abs(initialDeltaDisp));
+        postBisectionDeltaDisp = parameterDouble(
+            parameters, "postBisectionDeltaDisp", 0.1 * initialDeltaDisp);
+        resultOutputStrainInterval = parameterDouble(
+            parameters, "resultOutputStrainInterval", resultOutputStrainInterval);
+        numPointsPerPatchValue = parameterInt(parameters, "numPointsPerPatch",
+                                             numPointsPerPatchValue);
+        YM = parameterDouble(parameters, "YM", YM);
+        PR = parameterDouble(parameters, "PR", PR);
+        const std::string outputPostfix = parameterString(
+            parameters, "outputPostfix",
+            std::filesystem::path(argv[1]).stem().string());
+        if (!outputPostfix.empty())
+            outputSuffix = "_" + outputPostfix;
+    }
+    else
+    {
+        lengthScale = std::stod(argv[1]);
+        const double A = std::stod(argv[2]);
+        const double R = std::stod(argv[3]);
+        H = sqrt(A / R);
+        L = sqrt(A * R);
+        numEle_L = std::stoi(argv[4]);
+        numEle_H = std::stoi(argv[5]);
+        numRefinements = std::stoi(argv[6]);
+        numDegElev = std::stoi(argv[7]);
+        initialDeltaDisp = std::stod(argv[8]);
+        maxStrain = std::stod(argv[9]);
+        if (argc > 10)
+            numBisectionIterations = std::stoi(argv[10]);
+        if (argc > 11)
+            targetNumIterations = std::stoi(argv[11]);
+        bucklingPerturbationAmplitude = 1e-3 * abs(initialDeltaDisp);
+        if (argc > 12)
+            bucklingPerturbationAmplitude = std::stod(argv[12]);
+        postBisectionDeltaDisp = 0.1 * initialDeltaDisp;
+        if (argc > 13)
+            postBisectionDeltaDisp = std::stod(argv[13]);
+        if (argc > 14)
+            resultOutputStrainInterval = std::stod(argv[14]);
+        if (argc > 15)
+            numPointsPerPatchValue = std::stoi(argv[15]);
+        for (int i = 1; i < argc; ++i)
+        {
+            if (i != 12 && i != 13)
+                outputSuffix += "_" + std::string(argv[i]);
+        }
+    }
+    std::vector<int> numPointsPerPatch{ numPointsPerPatchValue };
 
     if (!std::filesystem::exists("./strainGradient_2DBeamBuckling"))
 		std::filesystem::create_directory("./strainGradient_2DBeamBuckling");
 	std::string filenameParaview = "strainGradient_2DBeamBuckling_";
-	std::string outputFolder = "./strainGradient_2DBeamBuckling/" + filenameParaview + "output";
-    for (int i = 1; i < argc; ++i)
-    {
-        if (i != 12 && i != 13)
-            outputFolder += "_" + std::string(argv[i]);
-    }
+	std::string outputFolder = "./strainGradient_2DBeamBuckling/" + filenameParaview + "output" + outputSuffix;
     if (!std::filesystem::exists(outputFolder))
 		std::filesystem::create_directory(outputFolder);
     TeeLogger log(outputFolder + "/log.txt");
@@ -78,8 +249,6 @@ int main(int argc, char* argv[])
     const std::string eigenvalueFile = outputFolder + "/instability_smallest_eigenvalue.txt";
     const std::string eigenvectorFile = outputFolder + "/instability_smallest_eigenvector.txt";
 
-    double H = sqrt(A / R);
-    double L = sqrt(A * R);
     double maxDisp = maxStrain * L;
 
     int knot_u_order = 1;

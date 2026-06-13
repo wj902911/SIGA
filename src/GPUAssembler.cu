@@ -111,6 +111,61 @@ void recoverCauchyStressAtNodesKernel(int numDerivatives,
 }
 
 __global__
+void recoverDeformationGradientAtNodesKernel(int numDerivatives,
+                                             int totalNumGPs,
+                                             MultiPatchDeviceView displacement,
+                                             MultiPatchDeviceView deformationGradient,
+                                             DeviceMatrixView<double> pts,
+                                             DeviceVectorView<double> weightForces,
+                                             DeviceMatrixView<double> dispValuesAndDerss,
+                                             DeviceMatrixView<double> Fs,
+                                             DeviceVectorView<double> nodalWeights)
+{
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x;
+         idx < totalNumGPs; idx += blockDim.x * gridDim.x)
+    {
+        int dim = displacement.domainDim();
+        int dim2 = dim * dim;
+        int patch_idx(0);
+        displacement.threadPatch(idx, patch_idx);
+
+        TensorBsplineBasisDeviceView basis = displacement.basis(patch_idx);
+        int P1 = basis.knotsOrder(0) + 1;
+        int numActive = basis.numActiveControlPoints();
+        DeviceVectorView<double> pt(pts.data() + idx * dim, dim);
+        DeviceMatrixView<double> dispValuesAndDers(
+            dispValuesAndDerss.data() + idx * P1 * (numDerivatives + 1) * dim,
+            P1, (numDerivatives + 1) * dim);
+
+        DeviceMatrixView<double> F(Fs.data() + idx * dim * dim, dim, dim);
+
+        int patchControlPointOffset = 0;
+        for (int p = 0; p < patch_idx; ++p)
+            patchControlPointOffset += deformationGradient.numControlPoints(p);
+
+        DeviceMatrixView<double> deformationGradientControlPoints =
+            deformationGradient.controlPoints(patch_idx);
+        for (int r = 0; r < numActive; ++r)
+        {
+            int localControlPoint = basis.activeIndex(pt, r);
+            int globalControlPoint = patchControlPointOffset + localControlPoint;
+            double N = tensorBasisValue(r, P1, dim, numDerivatives, dispValuesAndDers);
+            double weight = N * weightForces[idx];
+
+            atomicAdd(&nodalWeights[globalControlPoint], weight);
+            for (int a = 0; a < dim; ++a)
+                for (int A = 0; A < dim; ++A)
+                {
+                    int c = a * dim + A;
+                    if (c < dim2)
+                        atomicAdd(&deformationGradientControlPoints(localControlPoint, c),
+                                  weight * F(a, A));
+                }
+        }
+    }
+}
+
+__global__
 void normalizeRecoveredStressKernel(MultiPatchDeviceView cauchyStress,
                                     DeviceVectorView<double> nodalWeights,
                                     int totalControlPoints)
@@ -410,6 +465,92 @@ void computeCOOKernel(int totalNumElements, int* counter,
 }
 #endif
 
+int followerMomentHostActiveIndex(const DofMapper& mapper, int dof,
+                                  int patchIndex)
+{
+    const std::vector<int>& dofs = mapper.getDofs(0);
+    const std::vector<int> offsets = mapper.getOffset();
+    return dofs[offsets[patchIndex] + dof] + mapper.getShift();
+}
+
+bool followerMomentHostIsFree(const DofMapper& mapper, int activeIndex)
+{
+    return activeIndex < mapper.getCurElimId() + mapper.getShift();
+}
+
+void appendFollowerMomentCOOPattern(
+    const BoundaryConditions& boundaryConditions,
+    const MultiBasis& multiBasis,
+    const SparseSystem& sparseSystem,
+    const std::vector<DofMapper>& dofMappers,
+    int domainDim,
+    int targetDim,
+    std::vector<int>& rows,
+    std::vector<int>& cols)
+{
+    const BoundaryConditions::bcContainer& followerMomentSides =
+        boundaryConditions.followerMomentSides();
+    if (followerMomentSides.empty())
+        return;
+
+    if (domainDim != 2 || targetDim != 2)
+        throw std::runtime_error(
+            "Follower moment boundary conditions currently support 2D displacement problems only.");
+
+    for (BoundaryConditions::bcContainer::const_iterator it =
+             followerMomentSides.begin();
+         it != followerMomentSides.end(); ++it)
+    {
+        const int patchIdx = it->patchIndex();
+        if (it->side().direction() != 0)
+            throw std::runtime_error(
+                "Follower moment boundary conditions currently support west/east beam-end sides only.");
+
+        const Eigen::VectorXi boundaryDofs =
+            multiBasis.basis(patchIdx).boundary(it->side());
+
+        for (int rowDofIdx = 0; rowDofIdx < boundaryDofs.size(); ++rowDofIdx)
+        {
+            const int rowDof = boundaryDofs[rowDofIdx];
+            for (int rowComp = 0; rowComp < targetDim; ++rowComp)
+            {
+                const DofMapper& rowMapper = dofMappers[rowComp];
+                const int rowActive =
+                    followerMomentHostActiveIndex(rowMapper, rowDof, patchIdx);
+                if (!followerMomentHostIsFree(rowMapper, rowActive))
+                    continue;
+
+                int row = sparseSystem.rowBlockOffset(rowComp) + rowActive;
+#if defined(USE_PERMUTATION)
+                row = sparseSystem.permOld2New()[row];
+#endif
+
+                for (int colDofIdx = 0; colDofIdx < boundaryDofs.size();
+                     ++colDofIdx)
+                {
+                    const int colDof = boundaryDofs[colDofIdx];
+                    for (int colComp = 0; colComp < targetDim; ++colComp)
+                    {
+                        const DofMapper& colMapper = dofMappers[colComp];
+                        const int colActive = followerMomentHostActiveIndex(
+                            colMapper, colDof, patchIdx);
+                        if (!followerMomentHostIsFree(colMapper, colActive))
+                            continue;
+
+                        int col =
+                            sparseSystem.colBlockOffset(colComp) + colActive;
+#if defined(USE_PERMUTATION)
+                        col = sparseSystem.permOld2New()[col];
+#endif
+                        rows.push_back(row);
+                        cols.push_back(col);
+                    }
+                }
+            }
+        }
+    }
+}
+
 __global__
 void evaluateBasisValuesAndDerivativesAtGPsKernel(int numDerivatives, 
                             int totalNumGPs, int dim,
@@ -646,7 +787,976 @@ void assembleNeumannBoundaryConditionKernel(int totalNumBoundaryGPs,
         const double weightedBasis = N * weight * measure;
 
         for (int di = 0; di < targetDim; ++di)
-            system.pushToRhs(weightedBasis * bcValues(di, bcIdx), activeIndex, di);
+        {
+            const int globalIndex = system.mapColIndex(activeIndex, patchIdx, di);
+            system.pushToRhs(weightedBasis * bcValues(di, bcIdx), globalIndex, di);
+        }
+    }
+}
+
+__global__
+void assembleDoubleStressBoundaryConditionKernel(int totalNumBoundaryGPs,
+                                                int numActive,
+                                                MultiPatchDeviceView displacement,
+                                                MultiPatchDeviceView geometry,
+                                                SparseSystemDeviceView system,
+                                                MultiGaussPointsDeviceView gaussPoints,
+                                                DeviceVectorView<int> bcOffsets,
+                                                DeviceVectorView<int> bcPatches,
+                                                DeviceVectorView<int> bcSideIndexes,
+                                                DeviceMatrixView<double> bcValues)
+{
+    const int dim = displacement.domainDim();
+    const int targetDim = displacement.targetDim();
+
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x;
+         idx < totalNumBoundaryGPs * numActive;
+         idx += blockDim.x * gridDim.x)
+    {
+        const int shapeFuncIdx = idx % numActive;
+        const int boundaryGPIdx = idx / numActive;
+
+        int bcIdx = 0;
+        while (bcIdx + 1 < bcOffsets.size() && boundaryGPIdx >= bcOffsets[bcIdx + 1])
+            ++bcIdx;
+
+        const int patchIdx = bcPatches[bcIdx];
+        BoxSide_d side(bcSideIndexes[bcIdx]);
+        const int fixedDir = side.direction();
+        const int localBoundaryGPIdx = boundaryGPIdx - bcOffsets[bcIdx];
+
+        TensorBsplineBasisDeviceView dispBasis = displacement.basis(patchIdx);
+        const int P1 = dispBasis.knotsOrder(0) + 1;
+
+        double fullPtData[3] = {0.0, 0.0, 0.0};
+        double boundaryPtData[2] = {0.0, 0.0};
+        DeviceVectorView<double> fullPt(fullPtData, dim);
+        DeviceVectorView<double> boundaryPt(boundaryPtData, dim - 1);
+
+        double weight = 1.0;
+        int gpRemainder = localBoundaryGPIdx;
+        for (int d = 0, bd = 0; d < dim; ++d)
+        {
+            if (d == fixedDir)
+            {
+                fullPt[d] = side.parameter()
+                    ? dispBasis.knotVector(d).domainEnd()
+                    : dispBasis.knotVector(d).domainBegin();
+                continue;
+            }
+
+            const int totalInDir = dispBasis.totalNumGPsInDir(d);
+            const int oneDimGPIdx = gpRemainder % totalInDir;
+            gpRemainder /= totalInDir;
+
+            double coordinate = 0.0;
+            weight *= dispBasis.gsPoint(oneDimGPIdx, d, gaussPoints[patchIdx], coordinate);
+            fullPt[d] = coordinate;
+            boundaryPt[bd++] = coordinate;
+        }
+
+        PatchDeviceView geoPatch = geometry.patch(patchIdx);
+        double geoValuesAndDersData[5 * 2 * 3] = {0.0};
+        DeviceMatrixView<double> geoValuesAndDers(geoValuesAndDersData, P1, 2 * dim);
+        geoPatch.basis().evalAllDers_into(fullPt, 1, geoValuesAndDers);
+
+        double geoJacobianData[3 * 3] = {0.0};
+        double geoJacobianInvTransData[3 * 3] = {0.0};
+        DeviceMatrixView<double> geoJacobian(geoJacobianData, dim, dim);
+        DeviceMatrixView<double> geoJacobianInvTrans(geoJacobianInvTransData, dim, dim);
+        geoPatch.jacobian(fullPt, geoValuesAndDers, 1, geoJacobian);
+        const double orientation = geoJacobian.determinant() >= 0.0 ? 1.0 : -1.0;
+
+        double boundaryJacobianData[3 * 2] = {0.0};
+        DeviceMatrixView<double> boundaryJacobian(boundaryJacobianData, targetDim, dim - 1);
+        geoPatch.boundaryJacobian(side, boundaryPt, boundaryJacobian);
+
+        double normalData[3] = {0.0, 0.0, 0.0};
+        DeviceVectorView<double> normal(normalData, targetDim);
+        double measure = 1.0;
+        if (dim == 2 && targetDim == 2)
+        {
+            const int sideIndex = side.index();
+            const double sideOrientation =
+                ((sideIndex + (sideIndex + 1) / 2) % 2) ? 1.0 : -1.0;
+            const double sgn = sideOrientation * orientation;
+            const int dir = side.direction();
+
+            double unormalData[2] = {0.0, 0.0};
+            if (dir == 0)
+            {
+                unormalData[0] = sgn * geoJacobian(1, 1);
+                unormalData[1] = -sgn * geoJacobian(0, 1);
+            }
+            else
+            {
+                unormalData[0] = sgn * geoJacobian(1, 0);
+                unormalData[1] = -sgn * geoJacobian(0, 0);
+            }
+
+            measure = sqrt(unormalData[0] * unormalData[0] +
+                           unormalData[1] * unormalData[1]);
+            if (measure <= 0.0)
+                continue;
+            normal[0] = unormalData[0] / measure;
+            normal[1] = unormalData[1] / measure;
+        }
+        else if (dim == 3 && targetDim == 3)
+        {
+            const double ax = boundaryJacobian(0, 0);
+            const double ay = boundaryJacobian(1, 0);
+            const double az = boundaryJacobian(2, 0);
+            const double bx = boundaryJacobian(0, 1);
+            const double by = boundaryJacobian(1, 1);
+            const double bz = boundaryJacobian(2, 1);
+            normal[0] = ay * bz - az * by;
+            normal[1] = az * bx - ax * bz;
+            normal[2] = ax * by - ay * bx;
+
+            const double outwardSign = orientation * (side.parameter() ? 1.0 : -1.0);
+            normal[0] *= outwardSign;
+            normal[1] *= outwardSign;
+            normal[2] *= outwardSign;
+
+            measure = normal.norm_device();
+            if (measure <= 0.0)
+                continue;
+
+            normal[0] /= measure;
+            normal[1] /= measure;
+            normal[2] /= measure;
+        }
+        else
+        {
+            continue;
+        }
+
+        double dispValuesAndDersData[5 * 2 * 3] = {0.0};
+        DeviceMatrixView<double> dispValuesAndDers(dispValuesAndDersData, P1, 2 * dim);
+        dispBasis.evalAllDers_into(fullPt, 1, dispValuesAndDers);
+
+        double dNData[3] = {0.0, 0.0, 0.0};
+        DeviceVectorView<double> dN(dNData, dim);
+        tensorBasisDerivative(shapeFuncIdx, P1, dim, 1, dispValuesAndDers, dN);
+
+        geoJacobian.inverse(geoJacobianInvTrans);
+        geoJacobianInvTrans.transpose();
+
+        double physGradData[3] = {0.0, 0.0, 0.0};
+        DeviceVectorView<double> physGrad(physGradData, dim);
+        geoJacobianInvTrans.times(dN, physGrad);
+
+        double normalDerivative = 0.0;
+        for (int d = 0; d < dim; ++d)
+            normalDerivative += physGrad[d] * normal[d];
+
+        const int activeIndex = dispBasis.activeIndex(fullPt, shapeFuncIdx);
+        const double weightedNormalDerivative = weight * measure * normalDerivative;
+        for (int di = 0; di < targetDim; ++di)
+        {
+            const int globalIndex = system.mapColIndex(activeIndex, patchIdx, di);
+            system.pushToRhs(weightedNormalDerivative * bcValues(di, bcIdx), globalIndex, di);
+        }
+    }
+}
+
+__device__
+void followerMomentBoundaryPoint(int localBoundaryGPIdx,
+                                 TensorBsplineBasisDeviceView dispBasis,
+                                 BoxSide_d side,
+                                 MultiGaussPointsDeviceView gaussPoints,
+                                 int patchIdx,
+                                 DeviceVectorView<double> fullPt,
+                                 DeviceVectorView<double> boundaryPt,
+                                 double& weight)
+{
+    const int dim = dispBasis.dim();
+    const int fixedDir = side.direction();
+    int gpRemainder = localBoundaryGPIdx;
+    weight = 1.0;
+
+    for (int d = 0, bd = 0; d < dim; ++d)
+    {
+        if (d == fixedDir)
+        {
+            fullPt[d] = side.parameter()
+                ? dispBasis.knotVector(d).domainEnd()
+                : dispBasis.knotVector(d).domainBegin();
+            continue;
+        }
+
+        const int totalInDir = dispBasis.totalNumGPsInDir(d);
+        const int oneDimGPIdx = gpRemainder % totalInDir;
+        gpRemainder /= totalInDir;
+
+        double coordinate = 0.0;
+        weight *= dispBasis.gsPoint(oneDimGPIdx, d, gaussPoints[patchIdx], coordinate);
+        fullPt[d] = coordinate;
+        boundaryPt[bd++] = coordinate;
+    }
+}
+
+static constexpr int FOLLOWER_MOMENT_STATS_STRIDE = 9;
+static constexpr int FOLLOWER_MOMENT_DERIVATIVE_STRIDE = 6;
+
+__device__
+int followerMomentBoundaryDerivativeDirection(BoxSide_d side)
+{
+    const int fixedDir = side.direction();
+    return fixedDir == 0 ? 1 : 0;
+}
+
+__device__
+void followerMomentCurrentBoundaryKinematics(MultiPatchDeviceView displacement,
+                                             MultiPatchDeviceView geometry,
+                                             int patchIdx,
+                                             BoxSide_d side,
+                                             DeviceVectorView<double> fullPt,
+                                             DeviceVectorView<double> boundaryPt,
+                                             DeviceVectorView<double> currentPoint,
+                                             DeviceVectorView<double> tangent,
+                                             DeviceVectorView<double> normal,
+                                             double& measure,
+                                             double& orientation)
+{
+    PatchDeviceView geoPatch = geometry.patch(patchIdx);
+    PatchDeviceView dispPatch = displacement.patch(patchIdx);
+
+    double geoPointData[2] = {0.0, 0.0};
+    double dispPointData[2] = {0.0, 0.0};
+    DeviceVectorView<double> geoPoint(geoPointData, 2);
+    DeviceVectorView<double> dispPoint(dispPointData, 2);
+    geoPatch.evaluate(fullPt, geoPoint);
+    dispPatch.evaluate(fullPt, dispPoint);
+    for (int i = 0; i < 2; ++i)
+        currentPoint[i] = geoPoint[i] + dispPoint[i];
+
+    double geoJacobianData[4] = {0.0, 0.0, 0.0, 0.0};
+    double dispJacobianData[4] = {0.0, 0.0, 0.0, 0.0};
+    DeviceMatrixView<double> geoJacobian(geoJacobianData, 2, 2);
+    DeviceMatrixView<double> dispJacobian(dispJacobianData, 2, 2);
+    geoPatch.jacobian(fullPt, 1, geoJacobian);
+    dispPatch.jacobian(fullPt, 1, dispJacobian);
+
+    const int tangentDirection = followerMomentBoundaryDerivativeDirection(side);
+    const double tx = geoJacobian(0, tangentDirection) +
+                      dispJacobian(0, tangentDirection);
+    const double ty = geoJacobian(1, tangentDirection) +
+                      dispJacobian(1, tangentDirection);
+    measure = sqrt(tx * tx + ty * ty);
+    if (measure <= 0.0)
+    {
+        tangent[0] = 1.0;
+        tangent[1] = 0.0;
+        normal[0] = 0.0;
+        normal[1] = 1.0;
+        orientation = 1.0;
+        return;
+    }
+
+    tangent[0] = tx / measure;
+    tangent[1] = ty / measure;
+
+    const bool clockwiseNormal = side.parameter() == (side.direction() == 0);
+    if (clockwiseNormal)
+    {
+        normal[0] = tangent[1];
+        normal[1] = -tangent[0];
+    }
+    else
+    {
+        normal[0] = -tangent[1];
+        normal[1] = tangent[0];
+    }
+    orientation = tangent[0] * normal[1] - tangent[1] * normal[0];
+}
+
+__device__
+void followerMomentSectionNormal(BoxSide_d side,
+                                 DeviceVectorView<double> tangent,
+                                 DeviceVectorView<double> normal,
+                                 double& orientation)
+{
+    const bool clockwiseNormal = side.parameter() == (side.direction() == 0);
+    if (clockwiseNormal)
+    {
+        normal[0] = tangent[1];
+        normal[1] = -tangent[0];
+    }
+    else
+    {
+        normal[0] = -tangent[1];
+        normal[1] = tangent[0];
+    }
+    orientation = tangent[0] * normal[1] - tangent[1] * normal[0];
+}
+
+__device__
+void followerMomentSectionNormalDerivative(BoxSide_d side,
+                                           DeviceVectorView<double> tangentDerivative,
+                                           DeviceVectorView<double> normalDerivative)
+{
+    const bool clockwiseNormal = side.parameter() == (side.direction() == 0);
+    if (clockwiseNormal)
+    {
+        normalDerivative[0] = tangentDerivative[1];
+        normalDerivative[1] = -tangentDerivative[0];
+    }
+    else
+    {
+        normalDerivative[0] = -tangentDerivative[1];
+        normalDerivative[1] = tangentDerivative[0];
+    }
+}
+
+__global__
+void computeFollowerMomentBoundaryCentroidKernel(int totalNumBoundaryGPs,
+                                                 MultiPatchDeviceView displacement,
+                                                 MultiPatchDeviceView geometry,
+                                                 MultiGaussPointsDeviceView gaussPoints,
+                                                 DeviceVectorView<int> bcOffsets,
+                                                 DeviceVectorView<int> bcPatches,
+                                                 DeviceVectorView<int> bcSideIndexes,
+                                                 DeviceVectorView<double> stats)
+{
+    for (int boundaryGPIdx = blockIdx.x * blockDim.x + threadIdx.x;
+         boundaryGPIdx < totalNumBoundaryGPs;
+         boundaryGPIdx += blockDim.x * gridDim.x)
+    {
+        int bcIdx = 0;
+        while (bcIdx + 1 < bcOffsets.size() && boundaryGPIdx >= bcOffsets[bcIdx + 1])
+            ++bcIdx;
+
+        const int patchIdx = bcPatches[bcIdx];
+        BoxSide_d side(bcSideIndexes[bcIdx]);
+        const int localBoundaryGPIdx = boundaryGPIdx - bcOffsets[bcIdx];
+        TensorBsplineBasisDeviceView dispBasis = displacement.basis(patchIdx);
+
+        double fullPtData[2] = {0.0, 0.0};
+        double boundaryPtData[1] = {0.0};
+        DeviceVectorView<double> fullPt(fullPtData, 2);
+        DeviceVectorView<double> boundaryPt(boundaryPtData, 1);
+
+        double weight = 1.0;
+        followerMomentBoundaryPoint(localBoundaryGPIdx, dispBasis, side,
+                                    gaussPoints, patchIdx, fullPt, boundaryPt,
+                                    weight);
+
+        double currentPointData[2] = {0.0, 0.0};
+        double tangentData[2] = {0.0, 0.0};
+        double normalData[2] = {0.0, 0.0};
+        DeviceVectorView<double> currentPoint(currentPointData, 2);
+        DeviceVectorView<double> tangent(tangentData, 2);
+        DeviceVectorView<double> normal(normalData, 2);
+        double measure = 0.0;
+        double orientation = 1.0;
+        followerMomentCurrentBoundaryKinematics(displacement, geometry, patchIdx,
+                                                side, fullPt, boundaryPt,
+                                                currentPoint, tangent, normal,
+                                                measure, orientation);
+        const double weightedMeasure = weight * measure;
+        const int statsBase = FOLLOWER_MOMENT_STATS_STRIDE * bcIdx;
+        atomicAdd(&stats[statsBase + 0], weightedMeasure);
+        atomicAdd(&stats[statsBase + 1], weightedMeasure * currentPoint[0]);
+        atomicAdd(&stats[statsBase + 2], weightedMeasure * currentPoint[1]);
+        atomicAdd(&stats[statsBase + 4], weightedMeasure * tangent[0]);
+        atomicAdd(&stats[statsBase + 5], weightedMeasure * tangent[1]);
+    }
+}
+
+__global__
+void normalizeFollowerMomentBoundaryCentroidKernel(int numFollowerMomentSides,
+                                                   DeviceVectorView<double> stats)
+{
+    for (int bcIdx = blockIdx.x * blockDim.x + threadIdx.x;
+         bcIdx < numFollowerMomentSides;
+         bcIdx += blockDim.x * gridDim.x)
+    {
+        const int statsBase = FOLLOWER_MOMENT_STATS_STRIDE * bcIdx;
+        const double measure = stats[statsBase + 0];
+        if (measure > 0.0)
+        {
+            stats[statsBase + 1] /= measure;
+            stats[statsBase + 2] /= measure;
+            const double tangentNorm = sqrt(
+                stats[statsBase + 4] * stats[statsBase + 4] +
+                stats[statsBase + 5] * stats[statsBase + 5]);
+            stats[statsBase + 6] = tangentNorm;
+            if (tangentNorm > 0.0)
+            {
+                stats[statsBase + 4] /= tangentNorm;
+                stats[statsBase + 5] /= tangentNorm;
+            }
+        }
+    }
+}
+
+__global__
+void computeFollowerMomentBoundaryInertiaKernel(int totalNumBoundaryGPs,
+                                                MultiPatchDeviceView displacement,
+                                                MultiPatchDeviceView geometry,
+                                                MultiGaussPointsDeviceView gaussPoints,
+                                                DeviceVectorView<int> bcOffsets,
+                                                DeviceVectorView<int> bcPatches,
+                                                DeviceVectorView<int> bcSideIndexes,
+                                                DeviceVectorView<double> stats)
+{
+    for (int boundaryGPIdx = blockIdx.x * blockDim.x + threadIdx.x;
+         boundaryGPIdx < totalNumBoundaryGPs;
+         boundaryGPIdx += blockDim.x * gridDim.x)
+    {
+        int bcIdx = 0;
+        while (bcIdx + 1 < bcOffsets.size() && boundaryGPIdx >= bcOffsets[bcIdx + 1])
+            ++bcIdx;
+
+        const int patchIdx = bcPatches[bcIdx];
+        BoxSide_d side(bcSideIndexes[bcIdx]);
+        const int localBoundaryGPIdx = boundaryGPIdx - bcOffsets[bcIdx];
+        TensorBsplineBasisDeviceView dispBasis = displacement.basis(patchIdx);
+
+        double fullPtData[2] = {0.0, 0.0};
+        double boundaryPtData[1] = {0.0};
+        DeviceVectorView<double> fullPt(fullPtData, 2);
+        DeviceVectorView<double> boundaryPt(boundaryPtData, 1);
+
+        double weight = 1.0;
+        followerMomentBoundaryPoint(localBoundaryGPIdx, dispBasis, side,
+                                    gaussPoints, patchIdx, fullPt, boundaryPt,
+                                    weight);
+
+        double currentPointData[2] = {0.0, 0.0};
+        double tangentData[2] = {0.0, 0.0};
+        double normalData[2] = {0.0, 0.0};
+        DeviceVectorView<double> currentPoint(currentPointData, 2);
+        DeviceVectorView<double> tangent(tangentData, 2);
+        DeviceVectorView<double> normal(normalData, 2);
+        double measure = 0.0;
+        double orientation = 1.0;
+        followerMomentCurrentBoundaryKinematics(displacement, geometry, patchIdx,
+                                                side, fullPt, boundaryPt,
+                                                currentPoint, tangent, normal,
+                                                measure, orientation);
+
+        const int statsBase = FOLLOWER_MOMENT_STATS_STRIDE * bcIdx;
+        const double dx = currentPoint[0] - stats[statsBase + 1];
+        const double dy = currentPoint[1] - stats[statsBase + 2];
+        const double q = dx * stats[statsBase + 4] + dy * stats[statsBase + 5];
+        atomicAdd(&stats[statsBase + 3], weight * measure * q * q);
+        atomicAdd(&stats[statsBase + 7], weight * measure * q * dx);
+        atomicAdd(&stats[statsBase + 8], weight * measure * q * dy);
+    }
+}
+
+__global__
+void computeFollowerMomentBoundaryDerivativeStatsKernel(
+    int totalNumBoundaryGPs,
+    int numActive,
+    MultiPatchDeviceView displacement,
+    MultiPatchDeviceView geometry,
+    MultiGaussPointsDeviceView gaussPoints,
+    DeviceVectorView<int> bcOffsets,
+    DeviceVectorView<int> bcPatches,
+    DeviceVectorView<int> bcSideIndexes,
+    DeviceVectorView<int> bcDofOffsets,
+    DeviceVectorView<double> derivativeStats)
+{
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x;
+         idx < totalNumBoundaryGPs * numActive * 2;
+         idx += blockDim.x * gridDim.x)
+    {
+        const int component = idx % 2;
+        const int shapeFuncIdx = (idx / 2) % numActive;
+        const int boundaryGPIdx = idx / (2 * numActive);
+
+        int bcIdx = 0;
+        while (bcIdx + 1 < bcOffsets.size() && boundaryGPIdx >= bcOffsets[bcIdx + 1])
+            ++bcIdx;
+
+        const int patchIdx = bcPatches[bcIdx];
+        BoxSide_d side(bcSideIndexes[bcIdx]);
+        const int localBoundaryGPIdx = boundaryGPIdx - bcOffsets[bcIdx];
+        TensorBsplineBasisDeviceView dispBasis = displacement.basis(patchIdx);
+        const int P1 = dispBasis.knotsOrder(0) + 1;
+
+        double fullPtData[2] = {0.0, 0.0};
+        double boundaryPtData[1] = {0.0};
+        DeviceVectorView<double> fullPt(fullPtData, 2);
+        DeviceVectorView<double> boundaryPt(boundaryPtData, 1);
+
+        double weight = 1.0;
+        followerMomentBoundaryPoint(localBoundaryGPIdx, dispBasis, side,
+                                    gaussPoints, patchIdx, fullPt, boundaryPt,
+                                    weight);
+
+        double currentPointData[2] = {0.0, 0.0};
+        double tangentData[2] = {0.0, 0.0};
+        double normalData[2] = {0.0, 0.0};
+        DeviceVectorView<double> currentPoint(currentPointData, 2);
+        DeviceVectorView<double> tangent(tangentData, 2);
+        DeviceVectorView<double> normal(normalData, 2);
+        double measure = 0.0;
+        double orientation = 1.0;
+        followerMomentCurrentBoundaryKinematics(displacement, geometry, patchIdx,
+                                                side, fullPt, boundaryPt,
+                                                currentPoint, tangent, normal,
+                                                measure, orientation);
+
+        double dispValuesAndDersData[5 * 4] = {0.0};
+        DeviceMatrixView<double> dispValuesAndDers(dispValuesAndDersData, P1, 4);
+        dispBasis.evalAllDers_into(fullPt, 1, dispValuesAndDers);
+
+        const double N = tensorBasisValue(shapeFuncIdx, P1, 2, 1, dispValuesAndDers);
+        double dNData[2] = {0.0, 0.0};
+        DeviceVectorView<double> dN(dNData, 2);
+        tensorBasisDerivative(shapeFuncIdx, P1, 2, 1, dispValuesAndDers, dN);
+        const double boundaryDerivative =
+            dN[followerMomentBoundaryDerivativeDirection(side)];
+
+        const double measureDerivative = tangent[component] * boundaryDerivative;
+        const double deltaX = component == 0 ? N : 0.0;
+        const double deltaY = component == 1 ? N : 0.0;
+
+        const int activeIndex = dispBasis.activeIndex(fullPt, shapeFuncIdx);
+        const int dofIndex = bcDofOffsets[bcIdx] + activeIndex * 2 + component;
+        const int derivativeBase = FOLLOWER_MOMENT_DERIVATIVE_STRIDE * dofIndex;
+
+        atomicAdd(&derivativeStats[derivativeBase + 0],
+                  weight * measureDerivative);
+        atomicAdd(&derivativeStats[derivativeBase + 1],
+                  weight * (measureDerivative * currentPoint[0] +
+                            measure * deltaX));
+        atomicAdd(&derivativeStats[derivativeBase + 2],
+                  weight * (measureDerivative * currentPoint[1] +
+                            measure * deltaY));
+        atomicAdd(&derivativeStats[derivativeBase + 4],
+                  weight * boundaryDerivative * (component == 0 ? 1.0 : 0.0));
+        atomicAdd(&derivativeStats[derivativeBase + 5],
+                  weight * boundaryDerivative * (component == 1 ? 1.0 : 0.0));
+    }
+}
+
+__global__
+void computeFollowerMomentBoundaryInertiaDerivativeKernel(
+    int totalNumBoundaryGPs,
+    int numActive,
+    MultiPatchDeviceView displacement,
+    MultiPatchDeviceView geometry,
+    MultiGaussPointsDeviceView gaussPoints,
+    DeviceVectorView<int> bcOffsets,
+    DeviceVectorView<int> bcPatches,
+    DeviceVectorView<int> bcSideIndexes,
+    DeviceVectorView<int> bcDofOffsets,
+    DeviceVectorView<double> stats,
+    DeviceVectorView<double> derivativeStats)
+{
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x;
+         idx < totalNumBoundaryGPs * numActive * 2;
+         idx += blockDim.x * gridDim.x)
+    {
+        const int component = idx % 2;
+        const int shapeFuncIdx = (idx / 2) % numActive;
+        const int boundaryGPIdx = idx / (2 * numActive);
+
+        int bcIdx = 0;
+        while (bcIdx + 1 < bcOffsets.size() && boundaryGPIdx >= bcOffsets[bcIdx + 1])
+            ++bcIdx;
+
+        const int patchIdx = bcPatches[bcIdx];
+        BoxSide_d side(bcSideIndexes[bcIdx]);
+        const int localBoundaryGPIdx = boundaryGPIdx - bcOffsets[bcIdx];
+        TensorBsplineBasisDeviceView dispBasis = displacement.basis(patchIdx);
+        const int P1 = dispBasis.knotsOrder(0) + 1;
+
+        double fullPtData[2] = {0.0, 0.0};
+        double boundaryPtData[1] = {0.0};
+        DeviceVectorView<double> fullPt(fullPtData, 2);
+        DeviceVectorView<double> boundaryPt(boundaryPtData, 1);
+
+        double weight = 1.0;
+        followerMomentBoundaryPoint(localBoundaryGPIdx, dispBasis, side,
+                                    gaussPoints, patchIdx, fullPt, boundaryPt,
+                                    weight);
+
+        double currentPointData[2] = {0.0, 0.0};
+        double tangentData[2] = {0.0, 0.0};
+        double normalData[2] = {0.0, 0.0};
+        DeviceVectorView<double> currentPoint(currentPointData, 2);
+        DeviceVectorView<double> tangent(tangentData, 2);
+        DeviceVectorView<double> normal(normalData, 2);
+        double measure = 0.0;
+        double orientation = 1.0;
+        followerMomentCurrentBoundaryKinematics(displacement, geometry, patchIdx,
+                                                side, fullPt, boundaryPt,
+                                                currentPoint, tangent, normal,
+                                                measure, orientation);
+
+        double dispValuesAndDersData[5 * 4] = {0.0};
+        DeviceMatrixView<double> dispValuesAndDers(dispValuesAndDersData, P1, 4);
+        dispBasis.evalAllDers_into(fullPt, 1, dispValuesAndDers);
+
+        const double N = tensorBasisValue(shapeFuncIdx, P1, 2, 1, dispValuesAndDers);
+        double dNData[2] = {0.0, 0.0};
+        DeviceVectorView<double> dN(dNData, 2);
+        tensorBasisDerivative(shapeFuncIdx, P1, 2, 1, dispValuesAndDers, dN);
+        const double boundaryDerivative =
+            dN[followerMomentBoundaryDerivativeDirection(side)];
+        const double measureDerivative = tangent[component] * boundaryDerivative;
+
+        const int activeIndex = dispBasis.activeIndex(fullPt, shapeFuncIdx);
+        const int dofIndex = bcDofOffsets[bcIdx] + activeIndex * 2 + component;
+        const int derivativeBase = FOLLOWER_MOMENT_DERIVATIVE_STRIDE * dofIndex;
+        const int statsBase = FOLLOWER_MOMENT_STATS_STRIDE * bcIdx;
+
+        const double totalMeasure = stats[statsBase + 0];
+        const double centroidX = stats[statsBase + 1];
+        const double centroidY = stats[statsBase + 2];
+        const double tangentX = stats[statsBase + 4];
+        const double tangentY = stats[statsBase + 5];
+        const double tangentNorm = stats[statsBase + 6];
+
+        const double dx = currentPoint[0] - centroidX;
+        const double dy = currentPoint[1] - centroidY;
+        const double q = dx * tangentX + dy * tangentY;
+        const double deltaDotT = N * (component == 0 ? tangentX : tangentY);
+
+        atomicAdd(&derivativeStats[derivativeBase + 3],
+                  weight * (measureDerivative * q * q +
+                            2.0 * measure * q * deltaDotT));
+    }
+}
+
+__global__
+void addFollowerMomentBoundaryGlobalInertiaDerivativeKernel(
+    int numFollowerMomentSides,
+    DeviceVectorView<int> bcDofOffsets,
+    DeviceVectorView<double> stats,
+    DeviceVectorView<double> derivativeStats)
+{
+    const int totalDofs = bcDofOffsets[numFollowerMomentSides];
+    for (int dofIndex = blockIdx.x * blockDim.x + threadIdx.x;
+         dofIndex < totalDofs;
+         dofIndex += blockDim.x * gridDim.x)
+    {
+        int bcIdx = 0;
+        while (bcIdx + 1 < bcDofOffsets.size() &&
+               dofIndex >= bcDofOffsets[bcIdx + 1])
+            ++bcIdx;
+
+        const int statsBase = FOLLOWER_MOMENT_STATS_STRIDE * bcIdx;
+        const int derivativeBase =
+            FOLLOWER_MOMENT_DERIVATIVE_STRIDE * dofIndex;
+        const double tangentNorm = stats[statsBase + 6];
+        if (tangentNorm <= 0.0)
+            continue;
+
+        const double tangentX = stats[statsBase + 4];
+        const double tangentY = stats[statsBase + 5];
+        const double rawTangentDerivativeX =
+            derivativeStats[derivativeBase + 4];
+        const double rawTangentDerivativeY =
+            derivativeStats[derivativeBase + 5];
+        const double projection =
+            tangentX * rawTangentDerivativeX +
+            tangentY * rawTangentDerivativeY;
+        const double tangentDerivativeX =
+            (rawTangentDerivativeX - tangentX * projection) / tangentNorm;
+        const double tangentDerivativeY =
+            (rawTangentDerivativeY - tangentY * projection) / tangentNorm;
+
+        const double qMomentX = stats[statsBase + 7];
+        const double qMomentY = stats[statsBase + 8];
+        derivativeStats[derivativeBase + 3] +=
+            2.0 * (qMomentX * tangentDerivativeX +
+                   qMomentY * tangentDerivativeY);
+    }
+}
+
+__global__
+void assembleFollowerMomentBoundaryConditionKernel(int totalNumBoundaryGPs,
+                                                   int numActive,
+                                                   MultiPatchDeviceView displacement,
+                                                   MultiPatchDeviceView geometry,
+                                                   SparseSystemDeviceView system,
+                                                   DeviceNestedArrayView<double> eliminatedDofs,
+                                                   MultiGaussPointsDeviceView gaussPoints,
+                                                   DeviceVectorView<int> bcOffsets,
+                                                   DeviceVectorView<int> bcPatches,
+                                                   DeviceVectorView<int> bcSideIndexes,
+                                                   DeviceVectorView<int> bcDofOffsets,
+                                                   DeviceVectorView<double> momentValues,
+                                                   DeviceVectorView<double> stats,
+                                                   DeviceVectorView<double> derivativeStats)
+{
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x;
+         idx < totalNumBoundaryGPs * numActive;
+         idx += blockDim.x * gridDim.x)
+    {
+        const int shapeFuncIdx = idx % numActive;
+        const int boundaryGPIdx = idx / numActive;
+
+        int bcIdx = 0;
+        while (bcIdx + 1 < bcOffsets.size() && boundaryGPIdx >= bcOffsets[bcIdx + 1])
+            ++bcIdx;
+
+        const int patchIdx = bcPatches[bcIdx];
+        BoxSide_d side(bcSideIndexes[bcIdx]);
+        const int localBoundaryGPIdx = boundaryGPIdx - bcOffsets[bcIdx];
+        TensorBsplineBasisDeviceView dispBasis = displacement.basis(patchIdx);
+        const int P1 = dispBasis.knotsOrder(0) + 1;
+
+        double fullPtData[2] = {0.0, 0.0};
+        double boundaryPtData[1] = {0.0};
+        DeviceVectorView<double> fullPt(fullPtData, 2);
+        DeviceVectorView<double> boundaryPt(boundaryPtData, 1);
+
+        double weight = 1.0;
+        followerMomentBoundaryPoint(localBoundaryGPIdx, dispBasis, side,
+                                    gaussPoints, patchIdx, fullPt, boundaryPt,
+                                    weight);
+
+        double currentPointData[2] = {0.0, 0.0};
+        double tangentData[2] = {0.0, 0.0};
+        double normalData[2] = {0.0, 0.0};
+        DeviceVectorView<double> currentPoint(currentPointData, 2);
+        DeviceVectorView<double> tangent(tangentData, 2);
+        DeviceVectorView<double> normal(normalData, 2);
+        double measure = 0.0;
+        double orientation = 1.0;
+        followerMomentCurrentBoundaryKinematics(displacement, geometry, patchIdx,
+                                                side, fullPt, boundaryPt,
+                                                currentPoint, tangent, normal,
+                                                measure, orientation);
+        const double localTangentX = tangent[0];
+        const double localTangentY = tangent[1];
+        const int statsBase = FOLLOWER_MOMENT_STATS_STRIDE * bcIdx;
+        tangent[0] = stats[statsBase + 4];
+        tangent[1] = stats[statsBase + 5];
+        followerMomentSectionNormal(side, tangent, normal, orientation);
+
+        const double inertia = stats[statsBase + 3];
+        if (inertia <= 0.0 || fabs(orientation) <= 0.0)
+            continue;
+
+        double dispValuesAndDersData[5 * 4] = {0.0};
+        DeviceMatrixView<double> dispValuesAndDers(dispValuesAndDersData, P1, 4);
+        dispBasis.evalAllDers_into(fullPt, 1, dispValuesAndDers);
+
+        const double N = tensorBasisValue(shapeFuncIdx, P1, 2, 1, dispValuesAndDers);
+        const int activeIndex = dispBasis.activeIndex(fullPt, shapeFuncIdx);
+        const double dx = currentPoint[0] - stats[statsBase + 1];
+        const double dy = currentPoint[1] - stats[statsBase + 2];
+        const double q = dx * tangent[0] + dy * tangent[1];
+        const double alpha = momentValues[bcIdx] / (orientation * inertia);
+        const double weightedBasis = N * weight * measure;
+
+        const int globalIndex0 = system.mapColIndex(activeIndex, patchIdx, 0);
+        const int globalIndex1 = system.mapColIndex(activeIndex, patchIdx, 1);
+        system.pushToRhs(weightedBasis * alpha * q * normal[0], globalIndex0, 0);
+        system.pushToRhs(weightedBasis * alpha * q * normal[1], globalIndex1, 1);
+
+        for (int colShapeFuncIdx = 0; colShapeFuncIdx < numActive; ++colShapeFuncIdx)
+        {
+            const double N_col = tensorBasisValue(colShapeFuncIdx, P1, 2, 1, dispValuesAndDers);
+            double dNColData[2] = {0.0, 0.0};
+            DeviceVectorView<double> dNCol(dNColData, 2);
+            tensorBasisDerivative(colShapeFuncIdx, P1, 2, 1,
+                                  dispValuesAndDers, dNCol);
+            const double boundaryDerivative =
+                dNCol[followerMomentBoundaryDerivativeDirection(side)];
+            const int activeIndexCol = dispBasis.activeIndex(fullPt, colShapeFuncIdx);
+            for (int rowComp = 0; rowComp < 2; ++rowComp)
+            {
+                const int activeIndexRow = activeIndex;
+                for (int colComp = 0; colComp < 2; ++colComp)
+                {
+                    const double localMeasureDerivative =
+                        (colComp == 0 ? localTangentX : localTangentY) *
+                        boundaryDerivative;
+                    const double deltaDotT = N_col * tangent[colComp];
+
+                    const double dFext =
+                        N * weight *
+                        (localMeasureDerivative * alpha * q * normal[rowComp] +
+                         measure * alpha * deltaDotT * normal[rowComp]);
+                    const int globalIndexRow =
+                        system.mapColIndex(activeIndexRow, patchIdx, rowComp);
+                    const int globalIndexCol =
+                        system.mapColIndex(activeIndexCol, patchIdx, colComp);
+                    system.pushToMatrix(-dFext, globalIndexRow, globalIndexCol,
+                                        eliminatedDofs, rowComp, colComp);
+                }
+            }
+        }
+    }
+}
+
+__global__
+void assembleFollowerMomentBoundaryGlobalTangentKernel(
+    int totalNumBoundaryGPs,
+    int numActive,
+    MultiPatchDeviceView displacement,
+    MultiPatchDeviceView geometry,
+    SparseSystemDeviceView system,
+    DeviceNestedArrayView<double> eliminatedDofs,
+    MultiGaussPointsDeviceView gaussPoints,
+    DeviceVectorView<int> bcOffsets,
+    DeviceVectorView<int> bcPatches,
+    DeviceVectorView<int> bcSideIndexes,
+    DeviceVectorView<int> bcDofOffsets,
+    DeviceVectorView<int> bcBoundaryDofOffsets,
+    DeviceVectorView<int> bcBoundaryDofs,
+    DeviceVectorView<double> momentValues,
+    DeviceVectorView<double> stats,
+    DeviceVectorView<double> derivativeStats)
+{
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x;
+         idx < totalNumBoundaryGPs * numActive;
+         idx += blockDim.x * gridDim.x)
+    {
+        const int shapeFuncIdx = idx % numActive;
+        const int boundaryGPIdx = idx / numActive;
+
+        int bcIdx = 0;
+        while (bcIdx + 1 < bcOffsets.size() &&
+               boundaryGPIdx >= bcOffsets[bcIdx + 1])
+            ++bcIdx;
+
+        const int patchIdx = bcPatches[bcIdx];
+        BoxSide_d side(bcSideIndexes[bcIdx]);
+        const int localBoundaryGPIdx = boundaryGPIdx - bcOffsets[bcIdx];
+        TensorBsplineBasisDeviceView dispBasis = displacement.basis(patchIdx);
+        const int P1 = dispBasis.knotsOrder(0) + 1;
+
+        double fullPtData[2] = {0.0, 0.0};
+        double boundaryPtData[1] = {0.0};
+        DeviceVectorView<double> fullPt(fullPtData, 2);
+        DeviceVectorView<double> boundaryPt(boundaryPtData, 1);
+
+        double weight = 1.0;
+        followerMomentBoundaryPoint(localBoundaryGPIdx, dispBasis, side,
+                                    gaussPoints, patchIdx, fullPt, boundaryPt,
+                                    weight);
+
+        double currentPointData[2] = {0.0, 0.0};
+        double tangentData[2] = {0.0, 0.0};
+        double normalData[2] = {0.0, 0.0};
+        DeviceVectorView<double> currentPoint(currentPointData, 2);
+        DeviceVectorView<double> tangent(tangentData, 2);
+        DeviceVectorView<double> normal(normalData, 2);
+        double measure = 0.0;
+        double orientation = 1.0;
+        followerMomentCurrentBoundaryKinematics(displacement, geometry,
+                                                patchIdx, side, fullPt,
+                                                boundaryPt, currentPoint,
+                                                tangent, normal, measure,
+                                                orientation);
+
+        const int statsBase = FOLLOWER_MOMENT_STATS_STRIDE * bcIdx;
+        tangent[0] = stats[statsBase + 4];
+        tangent[1] = stats[statsBase + 5];
+        followerMomentSectionNormal(side, tangent, normal, orientation);
+
+        const double inertia = stats[statsBase + 3];
+        if (inertia <= 0.0 || fabs(orientation) <= 0.0)
+            continue;
+
+        double dispValuesAndDersData[5 * 4] = {0.0};
+        DeviceMatrixView<double> dispValuesAndDers(dispValuesAndDersData, P1,
+                                                   4);
+        dispBasis.evalAllDers_into(fullPt, 1, dispValuesAndDers);
+
+        const double N =
+            tensorBasisValue(shapeFuncIdx, P1, 2, 1, dispValuesAndDers);
+        const int activeIndexRow =
+            dispBasis.activeIndex(fullPt, shapeFuncIdx);
+        const double dx = currentPoint[0] - stats[statsBase + 1];
+        const double dy = currentPoint[1] - stats[statsBase + 2];
+        const double q = dx * tangent[0] + dy * tangent[1];
+        const double alpha = momentValues[bcIdx] / (orientation * inertia);
+        const double totalMeasure = stats[statsBase + 0];
+        const double tangentNorm = stats[statsBase + 6];
+
+        const int boundaryStart = bcBoundaryDofOffsets[bcIdx];
+        const int boundaryEnd = bcBoundaryDofOffsets[bcIdx + 1];
+        for (int boundaryDofIdx = boundaryStart;
+             boundaryDofIdx < boundaryEnd; ++boundaryDofIdx)
+        {
+            const int activeIndexCol = bcBoundaryDofs[boundaryDofIdx];
+            for (int rowComp = 0; rowComp < 2; ++rowComp)
+            {
+                for (int colComp = 0; colComp < 2; ++colComp)
+                {
+                    const int dofIndex =
+                        bcDofOffsets[bcIdx] + activeIndexCol * 2 + colComp;
+                    const int derivativeBase =
+                        FOLLOWER_MOMENT_DERIVATIVE_STRIDE * dofIndex;
+
+                    double centroidDerivativeX = 0.0;
+                    double centroidDerivativeY = 0.0;
+                    if (totalMeasure > 0.0)
+                    {
+                        centroidDerivativeX =
+                            (derivativeStats[derivativeBase + 1] -
+                             stats[statsBase + 1] *
+                                 derivativeStats[derivativeBase + 0]) /
+                            totalMeasure;
+                        centroidDerivativeY =
+                            (derivativeStats[derivativeBase + 2] -
+                             stats[statsBase + 2] *
+                                 derivativeStats[derivativeBase + 0]) /
+                            totalMeasure;
+                    }
+
+                    double tangentDerivativeData[2] = {0.0, 0.0};
+                    double normalDerivativeData[2] = {0.0, 0.0};
+                    DeviceVectorView<double> tangentDerivative(
+                        tangentDerivativeData, 2);
+                    DeviceVectorView<double> normalDerivative(
+                        normalDerivativeData, 2);
+
+                    if (tangentNorm > 0.0)
+                    {
+                        const double rawTangentDerivativeX =
+                            derivativeStats[derivativeBase + 4];
+                        const double rawTangentDerivativeY =
+                            derivativeStats[derivativeBase + 5];
+                        const double projection =
+                            tangent[0] * rawTangentDerivativeX +
+                            tangent[1] * rawTangentDerivativeY;
+                        tangentDerivative[0] =
+                            (rawTangentDerivativeX - tangent[0] * projection) /
+                            tangentNorm;
+                        tangentDerivative[1] =
+                            (rawTangentDerivativeY - tangent[1] * projection) /
+                            tangentNorm;
+                    }
+                    followerMomentSectionNormalDerivative(
+                        side, tangentDerivative, normalDerivative);
+
+                    const double centroidDerivativeDotT =
+                        centroidDerivativeX * tangent[0] +
+                        centroidDerivativeY * tangent[1];
+                    const double qDerivative =
+                        -centroidDerivativeDotT +
+                        dx * tangentDerivative[0] +
+                        dy * tangentDerivative[1];
+                    const double alphaDerivative =
+                        -alpha * derivativeStats[derivativeBase + 3] / inertia;
+
+                    const double dFext =
+                        N * weight * measure *
+                        ((alphaDerivative * q + alpha * qDerivative) *
+                             normal[rowComp] +
+                         alpha * q * normalDerivative[rowComp]);
+                    const int globalIndexRow =
+                        system.mapColIndex(activeIndexRow, patchIdx, rowComp);
+                    const int globalIndexCol =
+                        system.mapColIndex(activeIndexCol, patchIdx, colComp);
+                    system.pushToMatrix(-dFext, globalIndexRow, globalIndexCol,
+                                        eliminatedDofs, rowComp, colComp);
+                }
+            }
+        }
     }
 }
 
@@ -2216,12 +3326,21 @@ GPUAssembler::GPUAssembler(const MultiPatch &multiPatch,
         err = cudaMemcpy(&entryCountHost, entryCountDevicePtr, sizeof(int), cudaMemcpyDeviceToHost);
         assert(err == cudaSuccess && "cudaMemcpy failed in GPUAssembler constructor during counting matrix entries");
             
+        std::vector<int> followerMomentCOORows;
+        std::vector<int> followerMomentCOOCols;
+        appendFollowerMomentCOOPattern(m_boundaryConditions, multiBasis,
+                                       sparseSystem, dofMappers_stdVec,
+                                       m_domainDim, m_targetDim,
+                                       followerMomentCOORows,
+                                       followerMomentCOOCols);
+        const int followerMomentEntryCount =
+            static_cast<int>(followerMomentCOORows.size());
 
         //m_sparseSystem.setNumMatrixEntries(entryCountHost);
         //m_sparseSystem.resizeMatrixData(entryCountHost);
 
-        DeviceArray<int> cooRows(entryCountHost);
-        DeviceArray<int> cooCols(entryCountHost);
+        DeviceArray<int> cooRows(entryCountHost + followerMomentEntryCount);
+        DeviceArray<int> cooCols(entryCountHost + followerMomentEntryCount);
         //DeviceArray<double> cooValues(entryCountHost);
 
         err = cudaMemset(entryCountDevicePtr, 0, sizeof(int));
@@ -2246,6 +3365,20 @@ GPUAssembler::GPUAssembler(const MultiPatch &multiPatch,
         std::cout << "Constructed COO matrix in " << elapsed.count() << " s." << std::endl;
 #endif
         assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler constructor during COO construction");
+
+        if (followerMomentEntryCount > 0)
+        {
+            err = cudaMemcpy(cooRows.data() + entryCountHost,
+                             followerMomentCOORows.data(),
+                             followerMomentEntryCount * sizeof(int),
+                             cudaMemcpyHostToDevice);
+            assert(err == cudaSuccess && "cudaMemcpy failed while appending follower moment COO rows");
+            err = cudaMemcpy(cooCols.data() + entryCountHost,
+                             followerMomentCOOCols.data(),
+                             followerMomentEntryCount * sizeof(int),
+                             cudaMemcpyHostToDevice);
+            assert(err == cudaSuccess && "cudaMemcpy failed while appending follower moment COO cols");
+        }
 
 #ifdef TIME_INITIALIZATION
         start = std::chrono::high_resolution_clock::now();
@@ -2341,6 +3474,8 @@ OptionList GPUAssembler::defaultOptions()
     opt.addReal("poissons_ratio", "Poisson's ratio", 0.3);
     opt.addReal("neumann_load_scaling", "Multiplier for Neumann boundary and corner loads", 1.0);
     opt.addInt("material_law", "0: StVK, 1: neo-Hookean", 1);
+    opt.addSwitch("use_nonsymmetric_newton_solver",
+                  "Use a nonsymmetric direct solver for Newton systems", false);
     return opt;
 }
 
@@ -2585,6 +3720,128 @@ void GPUAssembler::constructCauchyStressFunction(GPUFunction& displacementFuncti
 
     constructCauchyStressFunctionFromDisplacement(displacementFunction.multiPatchDeviceView(),
                                                   cauchyStressFunction);
+}
+
+void GPUAssembler::constructDeformationGradientFunction(const DeviceVectorView<double>& solVector,
+                                                        const DeviceNestedArrayView<double>& fixedDoFs,
+                                                        GPUFunction& deformationGradientFunction)
+{
+    constructDispSolution(solVector, fixedDoFs);
+    constructDeformationGradientFunctionFromDisplacement(m_displacement.deviceView(),
+                                                         deformationGradientFunction);
+}
+
+void GPUAssembler::constructDeformationGradientFunction(GPUFunction& displacementFunction,
+                                                        GPUFunction& deformationGradientFunction)
+{
+    assert(displacementFunction.domainDim() == m_domainDim &&
+           "Displacement function domain dimension must match assembler domain dimension");
+    assert(displacementFunction.targetDim() == m_targetDim &&
+           "Displacement function target dimension must match assembler target dimension");
+
+    constructDeformationGradientFunctionFromDisplacement(
+        displacementFunction.multiPatchDeviceView(), deformationGradientFunction);
+}
+
+void GPUAssembler::constructDeformationGradientFunctionFromDisplacement(
+    MultiPatchDeviceView displacementView,
+    GPUFunction& deformationGradientFunction)
+{
+    const int dim2 = m_domainDim * m_domainDim;
+    assert(deformationGradientFunction.domainDim() == m_domainDim &&
+           "Deformation gradient function domain dimension must match assembler domain dimension");
+    assert(deformationGradientFunction.targetDim() == dim2 &&
+           "Deformation gradient function target dimension must be dim * dim");
+
+    int minGrid, blockSize;
+    int gridSize;
+    cudaError_t err;
+    const int totalControlPoints = m_displacementHost.getTotalNumControlPoints();
+    const int totalDeformationGradientEntries = totalControlPoints * dim2;
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+        zeroFunctionControlPointsKernel, 0, totalDeformationGradientEntries);
+    gridSize = (totalDeformationGradientEntries + blockSize - 1) / blockSize;
+    zeroFunctionControlPointsKernel<<<gridSize, blockSize>>>(
+        deformationGradientFunction.multiPatchDeviceView(),
+        totalDeformationGradientEntries);
+    err = cudaDeviceSynchronize();
+    assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler::constructDeformationGradientFunction zeroFunctionControlPointsKernel");
+
+    m_GPData.setZero();
+    int offset = 0;
+    DeviceMatrixView<double> geoJacobianInvs(m_GPData.data() + offset, m_domainDim, m_totalGPs * m_domainDim);
+    offset += geoJacobianInvs.size();
+    DeviceVectorView<double> measures(m_GPData.data() + offset, m_totalGPs);
+    offset += measures.size();
+    DeviceVectorView<double> weightForces(m_GPData.data() + offset, m_totalGPs);
+    offset += weightForces.size();
+    DeviceVectorView<double> weightBodys(m_GPData.data() + offset, m_totalGPs);
+    offset += weightBodys.size();
+    DeviceMatrixView<double> Fs(m_GPData.data() + offset, m_domainDim, m_totalGPs * m_domainDim);
+    offset += Fs.size();
+    DeviceMatrixView<double> Ss(m_GPData.data() + offset, m_domainDim, m_totalGPs * m_domainDim);
+    offset += Ss.size();
+    DeviceMatrixView<double> Cs(m_GPData.data() + offset, m_dimTensor, m_totalGPs * m_dimTensor);
+    offset += Cs.size();
+
+    const std::vector<double> patchPoissonsRatios =
+        patchRealOptionValues("poissons_ratio");
+    const std::vector<double> patchYoungsModuli =
+        patchRealOptionValues("youngs_modulus");
+    const std::vector<int> patchMaterialLaws =
+        patchIntOptionValues("material_law");
+    std::vector<double> materialParameters;
+    materialParameters.reserve(static_cast<std::size_t>(3 * numPatches()));
+    for (int p = 0; p < numPatches(); ++p)
+    {
+        materialParameters.push_back(patchPoissonsRatios[static_cast<std::size_t>(p)]);
+        materialParameters.push_back(patchYoungsModuli[static_cast<std::size_t>(p)]);
+        materialParameters.push_back(static_cast<double>(
+            patchMaterialLaws[static_cast<std::size_t>(p)]));
+    }
+    DeviceArray<double> parameterValues(materialParameters);
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+        evaluateGPKernel_withoutComputingGPTableAndDers, 0, m_totalGPs);
+    gridSize = (m_totalGPs + blockSize - 1) / blockSize;
+    evaluateGPKernel_withoutComputingGPTableAndDers<<<gridSize, blockSize>>>(
+        m_numDerivatives, m_totalGPs,
+        parameterValues.vectorView(),
+        displacementView,
+        m_multiPatch.deviceView(),
+        m_GPTable.matrixView(m_domainDim, m_totalGPs),
+        m_wts.vectorView(),
+        m_geoValuesAndDerss.matrixView(m_geoP1, m_totalGPs * (m_numDerivatives + 1) * m_domainDim),
+        m_dispValuesAndDerss.matrixView(m_dispP1, m_totalGPs * (m_numDerivatives + 1) * m_domainDim),
+        geoJacobianInvs, measures, weightForces, weightBodys,
+        Fs, Ss, Cs);
+    err = cudaDeviceSynchronize();
+    assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler::constructDeformationGradientFunction evaluateGPKernel_withoutComputingGPTableAndDers");
+
+    DeviceArray<double> nodalWeights(totalControlPoints);
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+        recoverDeformationGradientAtNodesKernel, 0, m_totalGPs);
+    gridSize = (m_totalGPs + blockSize - 1) / blockSize;
+    recoverDeformationGradientAtNodesKernel<<<gridSize, blockSize>>>(
+        m_numDerivatives, m_totalGPs,
+        displacementView,
+        deformationGradientFunction.multiPatchDeviceView(),
+        m_GPTable.matrixView(m_domainDim, m_totalGPs),
+        weightForces,
+        m_dispValuesAndDerss.matrixView(m_dispP1, m_totalGPs * (m_numDerivatives + 1) * m_domainDim),
+        Fs,
+        nodalWeights.vectorView());
+    err = cudaDeviceSynchronize();
+    assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler::constructDeformationGradientFunction recoverDeformationGradientAtNodesKernel");
+
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+        normalizeRecoveredStressKernel, 0, totalDeformationGradientEntries);
+    gridSize = (totalDeformationGradientEntries + blockSize - 1) / blockSize;
+    normalizeRecoveredStressKernel<<<gridSize, blockSize>>>(
+        deformationGradientFunction.multiPatchDeviceView(),
+        nodalWeights.vectorView(),
+        totalControlPoints);
+    err = cudaDeviceSynchronize();
+    assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler::constructDeformationGradientFunction normalizeRecoveredStressKernel");
 }
 
 void GPUAssembler::constructCauchyStressFunctionFromDisplacement(MultiPatchDeviceView displacementView,
@@ -2928,6 +4185,8 @@ void GPUAssembler::assemble(const DeviceVectorView<double> &solVector,
         std::cerr << "CUDA error during device synchronization (assembleRHSWithGPDataKernel): " << cudaGetErrorString(err) << std::endl;
 
     assembleNeumannBoundaryCondition();
+    assembleDoubleStressBoundaryCondition();
+    assembleFollowerMomentBoundaryCondition(fixedDofs_assemble);
     assembleNeumannCornerPointLoads();
 
 #if 0
@@ -3237,6 +4496,391 @@ void GPUAssembler::assembleNeumannBoundaryCondition()
     err = cudaDeviceSynchronize();
     if (err != cudaSuccess)
         std::cerr << "CUDA error during assembleNeumannBoundaryConditionKernel: "
+                  << cudaGetErrorString(err) << std::endl;
+}
+
+void GPUAssembler::assembleDoubleStressBoundaryCondition()
+{
+    const int numDoubleStressSides = static_cast<int>(
+        std::distance(m_boundaryConditions.doubleStressBegin(),
+                      m_boundaryConditions.doubleStressEnd()));
+    if (numDoubleStressSides == 0)
+        return;
+
+    if (m_domainDim != m_targetDim || (m_domainDim != 2 && m_domainDim != 3))
+        throw std::runtime_error("Double stress boundary conditions currently support 2D or 3D displacement problems only.");
+
+    const double neumannLoadScaling = options().getReal("neumann_load_scaling");
+    std::vector<int> bcOffsets;
+    std::vector<int> bcPatches;
+    std::vector<int> bcSideIndexes;
+    Eigen::MatrixXd bcValues(m_targetDim, numDoubleStressSides);
+    bcOffsets.reserve(numDoubleStressSides + 1);
+    bcPatches.reserve(numDoubleStressSides);
+    bcSideIndexes.reserve(numDoubleStressSides);
+    bcOffsets.push_back(0);
+    bcValues.setZero();
+
+    int totalNumBoundaryGPs = 0;
+    for (BoundaryConditions::bcContainer::const_iterator it = m_boundaryConditions.doubleStressBegin();
+         it != m_boundaryConditions.doubleStressEnd(); ++it)
+    {
+        const int bcIdx = static_cast<int>(
+            std::distance(m_boundaryConditions.doubleStressBegin(), it));
+        const int patchIdx = it->patchIndex();
+        const int fixedDir = it->side().direction();
+
+        int numBoundaryGPs = 1;
+        for (int d = 0; d < m_domainDim; ++d)
+            if (d != fixedDir)
+                numBoundaryGPs *= m_multiBasisHost.basis(patchIdx).getTotalNumGaussPoints(d);
+
+        totalNumBoundaryGPs += numBoundaryGPs;
+        bcOffsets.push_back(totalNumBoundaryGPs);
+        bcPatches.push_back(patchIdx);
+        bcSideIndexes.push_back(it->side().index());
+
+        const Eigen::VectorXd values = it->valuesVector();
+        const int numValues = static_cast<int>(values.size());
+        for (int i = 0; i < m_targetDim && i < numValues; ++i)
+            bcValues(i, bcIdx) = neumannLoadScaling * values[i];
+    }
+
+    if (totalNumBoundaryGPs == 0)
+        return;
+
+    DeviceArray<int> bcOffsetsDevice(bcOffsets);
+    DeviceArray<int> bcPatchesDevice(bcPatches);
+    DeviceArray<int> bcSideIndexesDevice(bcSideIndexes);
+    DeviceArray<double> bcValuesDevice(bcValues);
+
+    const int totalEntries = totalNumBoundaryGPs * m_N_D;
+    int blockSize = 0;
+    int minGrid = 0;
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+        assembleDoubleStressBoundaryConditionKernel, 0, totalEntries);
+    if (blockSize <= 0)
+        blockSize = 128;
+    const int gridSize = (totalEntries + blockSize - 1) / blockSize;
+
+    assembleDoubleStressBoundaryConditionKernel<<<gridSize, blockSize>>>(
+        totalNumBoundaryGPs,
+        m_N_D,
+        m_displacement.deviceView(),
+        m_multiPatch.deviceView(),
+        m_sparseSystem.deviceView(),
+        m_multiGaussPoints.view(),
+        bcOffsetsDevice.vectorView(),
+        bcPatchesDevice.vectorView(),
+        bcSideIndexesDevice.vectorView(),
+        bcValuesDevice.matrixView(m_targetDim, numDoubleStressSides));
+
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess)
+        std::cerr << "Error after assembleDoubleStressBoundaryConditionKernel launch: "
+                  << cudaGetErrorString(err) << std::endl;
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+        std::cerr << "CUDA error during assembleDoubleStressBoundaryConditionKernel: "
+                  << cudaGetErrorString(err) << std::endl;
+}
+
+void GPUAssembler::assembleFollowerMomentBoundaryCondition(
+    const DeviceNestedArrayView<double>& fixedDofs_assemble)
+{
+    const BoundaryConditions::bcContainer& followerMomentSides =
+        m_boundaryConditions.followerMomentSides();
+    const int numFollowerMomentSides =
+        static_cast<int>(followerMomentSides.size());
+    if (numFollowerMomentSides == 0)
+        return;
+
+    if (m_domainDim != 2 || m_targetDim != 2)
+        throw std::runtime_error("Follower moment boundary conditions currently support 2D displacement problems only.");
+
+    const double neumannLoadScaling = options().getReal("neumann_load_scaling");
+    std::vector<int> bcOffsets;
+    std::vector<int> bcPatches;
+    std::vector<int> bcSideIndexes;
+    std::vector<int> bcDofOffsets;
+    std::vector<int> bcBoundaryDofOffsets;
+    std::vector<int> bcBoundaryDofs;
+    std::vector<double> momentValues(numFollowerMomentSides, 0.0);
+    bcOffsets.reserve(numFollowerMomentSides + 1);
+    bcPatches.reserve(numFollowerMomentSides);
+    bcSideIndexes.reserve(numFollowerMomentSides);
+    bcDofOffsets.reserve(numFollowerMomentSides + 1);
+    bcBoundaryDofOffsets.reserve(numFollowerMomentSides + 1);
+    bcOffsets.push_back(0);
+    bcDofOffsets.push_back(0);
+    bcBoundaryDofOffsets.push_back(0);
+
+    int totalNumBoundaryGPs = 0;
+    for (BoundaryConditions::bcContainer::const_iterator it = followerMomentSides.begin();
+         it != followerMomentSides.end(); ++it)
+    {
+        const int bcIdx = static_cast<int>(
+            std::distance(followerMomentSides.begin(), it));
+        const int patchIdx = it->patchIndex();
+        const int fixedDir = it->side().direction();
+        if (fixedDir != 0)
+            throw std::runtime_error("Follower moment boundary conditions currently support west/east beam-end sides only.");
+
+        int numBoundaryGPs = 1;
+        for (int d = 0; d < m_domainDim; ++d)
+            if (d != fixedDir)
+                numBoundaryGPs *= m_multiBasisHost.basis(patchIdx).getTotalNumGaussPoints(d);
+
+        totalNumBoundaryGPs += numBoundaryGPs;
+        bcOffsets.push_back(totalNumBoundaryGPs);
+        bcPatches.push_back(patchIdx);
+        bcSideIndexes.push_back(it->side().index());
+        bcDofOffsets.push_back(
+            bcDofOffsets.back() +
+            m_multiBasisHost.basis(patchIdx).getNumControlPoints() *
+                m_targetDim);
+        const Eigen::VectorXi boundaryDofs =
+            m_multiBasisHost.basis(patchIdx).boundary(it->side());
+        for (int i = 0; i < boundaryDofs.size(); ++i)
+            bcBoundaryDofs.push_back(boundaryDofs[i]);
+        bcBoundaryDofOffsets.push_back(
+            static_cast<int>(bcBoundaryDofs.size()));
+
+        const Eigen::VectorXd values = it->valuesVector();
+        if (values.size() > 0)
+            momentValues[bcIdx] = neumannLoadScaling * values[0];
+    }
+
+    if (totalNumBoundaryGPs == 0)
+        return;
+
+    DeviceArray<int> bcOffsetsDevice(bcOffsets);
+    DeviceArray<int> bcPatchesDevice(bcPatches);
+    DeviceArray<int> bcSideIndexesDevice(bcSideIndexes);
+    DeviceArray<int> bcDofOffsetsDevice(bcDofOffsets);
+    DeviceArray<int> bcBoundaryDofOffsetsDevice(bcBoundaryDofOffsets);
+    DeviceArray<int> bcBoundaryDofsDevice(bcBoundaryDofs);
+    DeviceArray<double> momentValuesDevice(momentValues);
+    DeviceArray<double> statsDevice(
+        FOLLOWER_MOMENT_STATS_STRIDE * numFollowerMomentSides);
+    statsDevice.setZero();
+    DeviceArray<double> derivativeStatsDevice(
+        FOLLOWER_MOMENT_DERIVATIVE_STRIDE * bcDofOffsets.back());
+    derivativeStatsDevice.setZero();
+
+    int blockSize = 0;
+    int minGrid = 0;
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+        computeFollowerMomentBoundaryCentroidKernel, 0, totalNumBoundaryGPs);
+    if (blockSize <= 0)
+        blockSize = 128;
+    int gridSize = (totalNumBoundaryGPs + blockSize - 1) / blockSize;
+
+    computeFollowerMomentBoundaryCentroidKernel<<<gridSize, blockSize>>>(
+        totalNumBoundaryGPs,
+        m_displacement.deviceView(),
+        m_multiPatch.deviceView(),
+        m_multiGaussPoints.view(),
+        bcOffsetsDevice.vectorView(),
+        bcPatchesDevice.vectorView(),
+        bcSideIndexesDevice.vectorView(),
+        statsDevice.vectorView());
+
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess)
+        std::cerr << "Error after computeFollowerMomentBoundaryCentroidKernel launch: "
+                  << cudaGetErrorString(err) << std::endl;
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+        std::cerr << "CUDA error during computeFollowerMomentBoundaryCentroidKernel: "
+                  << cudaGetErrorString(err) << std::endl;
+
+    const int normalizeBlockSize = 128;
+    const int normalizeGridSize =
+        (numFollowerMomentSides + normalizeBlockSize - 1) / normalizeBlockSize;
+    normalizeFollowerMomentBoundaryCentroidKernel<<<normalizeGridSize, normalizeBlockSize>>>(
+        numFollowerMomentSides,
+        statsDevice.vectorView());
+
+    err = cudaGetLastError();
+    if (err != cudaSuccess)
+        std::cerr << "Error after normalizeFollowerMomentBoundaryCentroidKernel launch: "
+                  << cudaGetErrorString(err) << std::endl;
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+        std::cerr << "CUDA error during normalizeFollowerMomentBoundaryCentroidKernel: "
+                  << cudaGetErrorString(err) << std::endl;
+
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+        computeFollowerMomentBoundaryInertiaKernel, 0, totalNumBoundaryGPs);
+    if (blockSize <= 0)
+        blockSize = 128;
+    gridSize = (totalNumBoundaryGPs + blockSize - 1) / blockSize;
+
+    computeFollowerMomentBoundaryInertiaKernel<<<gridSize, blockSize>>>(
+        totalNumBoundaryGPs,
+        m_displacement.deviceView(),
+        m_multiPatch.deviceView(),
+        m_multiGaussPoints.view(),
+        bcOffsetsDevice.vectorView(),
+        bcPatchesDevice.vectorView(),
+        bcSideIndexesDevice.vectorView(),
+        statsDevice.vectorView());
+
+    err = cudaGetLastError();
+    if (err != cudaSuccess)
+        std::cerr << "Error after computeFollowerMomentBoundaryInertiaKernel launch: "
+                  << cudaGetErrorString(err) << std::endl;
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+        std::cerr << "CUDA error during computeFollowerMomentBoundaryInertiaKernel: "
+                  << cudaGetErrorString(err) << std::endl;
+
+    const int totalDerivativeEntries =
+        totalNumBoundaryGPs * m_N_D * m_targetDim;
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+        computeFollowerMomentBoundaryDerivativeStatsKernel, 0,
+        totalDerivativeEntries);
+    if (blockSize <= 0)
+        blockSize = 128;
+    gridSize = (totalDerivativeEntries + blockSize - 1) / blockSize;
+
+    computeFollowerMomentBoundaryDerivativeStatsKernel<<<gridSize, blockSize>>>(
+        totalNumBoundaryGPs,
+        m_N_D,
+        m_displacement.deviceView(),
+        m_multiPatch.deviceView(),
+        m_multiGaussPoints.view(),
+        bcOffsetsDevice.vectorView(),
+        bcPatchesDevice.vectorView(),
+        bcSideIndexesDevice.vectorView(),
+        bcDofOffsetsDevice.vectorView(),
+        derivativeStatsDevice.vectorView());
+
+    err = cudaGetLastError();
+    if (err != cudaSuccess)
+        std::cerr << "Error after computeFollowerMomentBoundaryDerivativeStatsKernel launch: "
+                  << cudaGetErrorString(err) << std::endl;
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+        std::cerr << "CUDA error during computeFollowerMomentBoundaryDerivativeStatsKernel: "
+                  << cudaGetErrorString(err) << std::endl;
+
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+        computeFollowerMomentBoundaryInertiaDerivativeKernel, 0,
+        totalDerivativeEntries);
+    if (blockSize <= 0)
+        blockSize = 128;
+    gridSize = (totalDerivativeEntries + blockSize - 1) / blockSize;
+
+    computeFollowerMomentBoundaryInertiaDerivativeKernel<<<gridSize, blockSize>>>(
+        totalNumBoundaryGPs,
+        m_N_D,
+        m_displacement.deviceView(),
+        m_multiPatch.deviceView(),
+        m_multiGaussPoints.view(),
+        bcOffsetsDevice.vectorView(),
+        bcPatchesDevice.vectorView(),
+        bcSideIndexesDevice.vectorView(),
+        bcDofOffsetsDevice.vectorView(),
+        statsDevice.vectorView(),
+        derivativeStatsDevice.vectorView());
+
+    err = cudaGetLastError();
+    if (err != cudaSuccess)
+        std::cerr << "Error after computeFollowerMomentBoundaryInertiaDerivativeKernel launch: "
+                  << cudaGetErrorString(err) << std::endl;
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+        std::cerr << "CUDA error during computeFollowerMomentBoundaryInertiaDerivativeKernel: "
+                  << cudaGetErrorString(err) << std::endl;
+
+    const int totalDerivativeDofs = bcDofOffsets.back();
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+        addFollowerMomentBoundaryGlobalInertiaDerivativeKernel, 0,
+        totalDerivativeDofs);
+    if (blockSize <= 0)
+        blockSize = 128;
+    gridSize = (totalDerivativeDofs + blockSize - 1) / blockSize;
+
+    addFollowerMomentBoundaryGlobalInertiaDerivativeKernel<<<gridSize, blockSize>>>(
+        numFollowerMomentSides,
+        bcDofOffsetsDevice.vectorView(),
+        statsDevice.vectorView(),
+        derivativeStatsDevice.vectorView());
+
+    err = cudaGetLastError();
+    if (err != cudaSuccess)
+        std::cerr << "Error after addFollowerMomentBoundaryGlobalInertiaDerivativeKernel launch: "
+                  << cudaGetErrorString(err) << std::endl;
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+        std::cerr << "CUDA error during addFollowerMomentBoundaryGlobalInertiaDerivativeKernel: "
+                  << cudaGetErrorString(err) << std::endl;
+
+    const int totalEntries = totalNumBoundaryGPs * m_N_D;
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+        assembleFollowerMomentBoundaryConditionKernel, 0, totalEntries);
+    if (blockSize <= 0)
+        blockSize = 128;
+    gridSize = (totalEntries + blockSize - 1) / blockSize;
+
+    assembleFollowerMomentBoundaryConditionKernel<<<gridSize, blockSize>>>(
+        totalNumBoundaryGPs,
+        m_N_D,
+        m_displacement.deviceView(),
+        m_multiPatch.deviceView(),
+        m_sparseSystem.deviceView(),
+        fixedDofs_assemble,
+        m_multiGaussPoints.view(),
+        bcOffsetsDevice.vectorView(),
+        bcPatchesDevice.vectorView(),
+        bcSideIndexesDevice.vectorView(),
+        bcDofOffsetsDevice.vectorView(),
+        momentValuesDevice.vectorView(),
+        statsDevice.vectorView(),
+        derivativeStatsDevice.vectorView());
+
+    err = cudaGetLastError();
+    if (err != cudaSuccess)
+        std::cerr << "Error after assembleFollowerMomentBoundaryConditionKernel launch: "
+                  << cudaGetErrorString(err) << std::endl;
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+        std::cerr << "CUDA error during assembleFollowerMomentBoundaryConditionKernel: "
+                  << cudaGetErrorString(err) << std::endl;
+
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+        assembleFollowerMomentBoundaryGlobalTangentKernel, 0, totalEntries);
+    if (blockSize <= 0)
+        blockSize = 128;
+    gridSize = (totalEntries + blockSize - 1) / blockSize;
+
+    assembleFollowerMomentBoundaryGlobalTangentKernel<<<gridSize, blockSize>>>(
+        totalNumBoundaryGPs,
+        m_N_D,
+        m_displacement.deviceView(),
+        m_multiPatch.deviceView(),
+        m_sparseSystem.deviceView(),
+        fixedDofs_assemble,
+        m_multiGaussPoints.view(),
+        bcOffsetsDevice.vectorView(),
+        bcPatchesDevice.vectorView(),
+        bcSideIndexesDevice.vectorView(),
+        bcDofOffsetsDevice.vectorView(),
+        bcBoundaryDofOffsetsDevice.vectorView(),
+        bcBoundaryDofsDevice.vectorView(),
+        momentValuesDevice.vectorView(),
+        statsDevice.vectorView(),
+        derivativeStatsDevice.vectorView());
+
+    err = cudaGetLastError();
+    if (err != cudaSuccess)
+        std::cerr << "Error after assembleFollowerMomentBoundaryGlobalTangentKernel launch: "
+                  << cudaGetErrorString(err) << std::endl;
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+        std::cerr << "CUDA error during assembleFollowerMomentBoundaryGlobalTangentKernel: "
                   << cudaGetErrorString(err) << std::endl;
 }
 

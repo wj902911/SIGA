@@ -2,7 +2,12 @@
 
 #include <Utility_d.h>
 
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
+#include <vector>
 
 // Implementation notes
 // --------------------
@@ -34,7 +39,8 @@ int strainGradientDoublesPerGP(int dim)
          + dim3         // P2
          + dim2 * dim2  // dP1/dF
          + dim2 * dim3  // dP1/dGradF
-         + dim3 * dim3; // dP2/dGradF
+         + dim3 * dim3  // dP2/dGradF
+         + dim3;        // GradF export
 }
 
 __host__ __device__
@@ -57,6 +63,28 @@ void strainGradientGPOffsets(int dim, int& geoInvOffset,
     dP1dFOffset = offset; offset += dim2 * dim2;
     dP1dGradFOffset = offset; offset += dim2 * dim3;
     dP2dGradFOffset = offset;
+}
+
+__host__ __device__
+int strainGradientGradFOffset(int dim)
+{
+    const int dim2 = dim * dim;
+    const int dim3 = dim2 * dim;
+    int geoInvOffset = 0;
+    int weightForceOffset = 0;
+    int weightBodyOffset = 0;
+    int geoHessOffset = 0;
+    int FOffset = 0;
+    int P1Offset = 0;
+    int P2Offset = 0;
+    int dP1dFOffset = 0;
+    int dP1dGradFOffset = 0;
+    int dP2dGradFOffset = 0;
+    strainGradientGPOffsets(dim, geoInvOffset, weightForceOffset,
+                            weightBodyOffset, geoHessOffset, FOffset,
+                            P1Offset, P2Offset, dP1dFOffset,
+                            dP1dGradFOffset, dP2dGradFOffset);
+    return dP2dGradFOffset + dim3 * dim3;
 }
 
 // Evaluates one tensor-product basis function derivative in parametric
@@ -671,11 +699,21 @@ void evaluateStrainGradientGPKernel(
         double gradFHess[27] = {0.0};
         physicalFieldHessians(dispPatch, pt, dispValuesAndDers, numDerivatives,
                               geoHessians, geoJacobianInv, gradFHess);
+        double* gradFStored = gp + strainGradientGradFOffset(dim);
+        for (int a = 0; a < dim3; ++a)
+            gradFStored[a] = gradFHess[a];
 
         computeKinematicsAndMaterial(materialLaw, youngsModulus, poissonsRatio,
             lengthScale, dim, F, gradFHess, gp + P1Offset, gp + P2Offset,
             gp + dP1dFOffset, gp + dP1dGradFOffset, gp + dP2dGradFOffset);
     }
+}
+
+std::string gaussPointStepFilename(int outputStep)
+{
+    std::ostringstream name;
+    name << "step_" << std::setw(4) << std::setfill('0') << outputStep << ".tsv";
+    return name.str();
 }
 
 /**
@@ -1132,6 +1170,8 @@ OptionList GPUStrainGradientElasticityAssembler::defaultStrainGradientOptions()
     opt.addReal("neumann_load_scaling", "Multiplier for Neumann boundary and corner loads", 1.0);
     opt.addReal("local_stiffening", "Local stiffening exponent", 0.0);
     opt.addInt("material_law", "0: StVK, 1: neo-Hookean", 1);
+    opt.addSwitch("use_nonsymmetric_newton_solver",
+                  "Use a nonsymmetric direct solver for Newton systems", false);
     return opt;
 }
 
@@ -1317,6 +1357,262 @@ void GPUStrainGradientElasticityAssembler::constructStrainGradientStressFunction
     }
 }
 
+void GPUStrainGradientElasticityAssembler::writeGaussPointKinematicsTSV(
+    const DeviceVectorView<double>& solVector,
+    const DeviceNestedArrayView<double>& fixedDoFs,
+    const std::string& outputFolder,
+    int outputStep)
+{
+    constructDispSolution(solVector, fixedDoFs);
+    writeGaussPointKinematicsTSV(displacementView(), outputFolder, outputStep);
+}
+
+void GPUStrainGradientElasticityAssembler::writeGaussPointKinematicsTSV(
+    const GPUFunction& displacementFunction,
+    const std::string& outputFolder,
+    int outputStep)
+{
+    if (displacementFunction.domainDim() != domainDim())
+        throw std::invalid_argument("Displacement function domain dimension must match assembler domain dimension");
+    if (displacementFunction.targetDim() != targetDim())
+        throw std::invalid_argument("Displacement function target dimension must match assembler target dimension");
+
+    writeGaussPointKinematicsTSV(displacementFunction.multiPatchDeviceView(),
+                                 outputFolder, outputStep);
+}
+
+void GPUStrainGradientElasticityAssembler::writeGaussPointKinematicsTSV(
+    MultiPatchDeviceView displacementView,
+    const std::string& outputFolder,
+    int outputStep)
+{
+    const int dim = domainDim();
+    if (dim < 1 || dim > 3)
+        throw std::runtime_error("Gauss-point kinematics TSV export supports domain dimensions 1, 2, and 3.");
+    if (outputStep < 0)
+        throw std::invalid_argument("outputStep must be nonnegative.");
+
+    const int totalGPs = numGPs();
+    if (totalGPs <= 0)
+        throw std::runtime_error("Cannot export Gauss-point kinematics with zero Gauss points.");
+
+    const double youngsModulus = options().getReal("youngs_modulus");
+    const double poissonsRatio = options().getReal("poissons_ratio");
+    const double lengthScale = options().getReal("length_scale");
+    const double localStiffening = options().getReal("local_stiffening");
+    const int materialLaw = options().getInt("material_law");
+
+    const int sgStride = strainGradientDoublesPerGP(dim);
+    const int sgDataSize = sgStride * totalGPs;
+    if (m_sgGPData.size() != sgDataSize)
+        m_sgGPData.resize(sgDataSize);
+    else
+        m_sgGPData.setZero();
+
+    int minGrid = 0;
+    int blockSize = 0;
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+        evaluateStrainGradientGPKernel, 0, totalGPs);
+    const int gridSize = (totalGPs + blockSize - 1) / blockSize;
+    evaluateStrainGradientGPKernel<<<gridSize, blockSize>>>(
+        numDerivatives(), totalGPs, sgStride, materialLaw, youngsModulus,
+        poissonsRatio, lengthScale, localStiffening, displacementView,
+        geometryView(), gpTable(), wts().vectorView(), geoValuesAndDerssView(),
+        dispValuesAndDerssView(), m_sgGPData.vectorView());
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess)
+        throw std::runtime_error(std::string("Error after evaluateStrainGradientGPKernel launch for TSV export: ") +
+                                 cudaGetErrorString(err));
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+        throw std::runtime_error(std::string("CUDA error during evaluateStrainGradientGPKernel for TSV export: ") +
+                                 cudaGetErrorString(err));
+
+    std::vector<double> sgGPDataHost;
+    m_sgGPData.copyToHost(sgGPDataHost);
+
+    int geoInvOffset = 0;
+    int weightForceOffset = 0;
+    int weightBodyOffset = 0;
+    int geoHessOffset = 0;
+    int FOffset = 0;
+    int P1Offset = 0;
+    int P2Offset = 0;
+    int dP1dFOffset = 0;
+    int dP1dGradFOffset = 0;
+    int dP2dGradFOffset = 0;
+    strainGradientGPOffsets(dim, geoInvOffset, weightForceOffset,
+                            weightBodyOffset, geoHessOffset, FOffset,
+                            P1Offset, P2Offset, dP1dFOffset,
+                            dP1dGradFOffset, dP2dGradFOffset);
+    const int gradFOffset = strainGradientGradFOffset(dim);
+    const int dim2 = dim * dim;
+
+    std::vector<double> parametricCoordinates(static_cast<std::size_t>(dim) * totalGPs);
+    DeviceMatrixView<double> gpTableView = gpTable();
+    err = cudaMemcpy(parametricCoordinates.data(), gpTableView.data(),
+                     parametricCoordinates.size() * sizeof(double),
+                     cudaMemcpyDeviceToHost);
+    if (err != cudaSuccess)
+        throw std::runtime_error(std::string("CUDA error copying Gauss-point coordinates: ") +
+                                 cudaGetErrorString(err));
+
+    const MultiBasis& basis = basisHost();
+    const int numPatches = basis.getNumBases();
+    std::vector<int> patchForGP(totalGPs);
+    std::vector<int> elementForGP(totalGPs);
+    std::vector<int> localGPForGP(totalGPs);
+
+    int commonGPsPerElement = -1;
+    int gpOffset = 0;
+    int elementOffset = 0;
+    for (int patch = 0; patch < numPatches; ++patch)
+    {
+        const TensorBsplineBasis& patchBasis = basis.basis(patch);
+        const int patchNumGPs = patchBasis.getTotalNumGaussPoints();
+        const int patchNumElements = patchBasis.getTotalNumElements();
+        if (patchNumElements <= 0)
+            throw std::runtime_error("Cannot export Gauss-point kinematics for a patch with zero elements.");
+        if (patchNumGPs % patchNumElements != 0)
+            throw std::runtime_error("Patch Gauss-point count is not divisible by element count.");
+
+        const int patchGPsPerElement = patchNumGPs / patchNumElements;
+        if (commonGPsPerElement < 0)
+            commonGPsPerElement = patchGPsPerElement;
+        else if (commonGPsPerElement != patchGPsPerElement)
+            throw std::runtime_error("All patches must have the same Gauss-point count per element for rectangular MATLAB export.");
+
+        for (int localPoint = 0; localPoint < patchNumGPs; ++localPoint)
+        {
+            const int globalPoint = gpOffset + localPoint;
+            patchForGP[globalPoint] = patch;
+            elementForGP[globalPoint] =
+                elementOffset + localPoint / patchGPsPerElement;
+            localGPForGP[globalPoint] = localPoint % patchGPsPerElement;
+        }
+
+        gpOffset += patchNumGPs;
+        elementOffset += patchNumElements;
+    }
+    if (gpOffset != totalGPs)
+        throw std::runtime_error("Gauss-point metadata does not match assembler Gauss-point count.");
+
+    const std::filesystem::path outputPath(outputFolder);
+    std::filesystem::create_directories(outputPath);
+
+    const std::filesystem::path metadataPath = outputPath / "metadata.json";
+    std::ofstream metadata(metadataPath);
+    if (!metadata)
+        throw std::runtime_error("Cannot open metadata file: " + metadataPath.string());
+    metadata << "{\n";
+    metadata << "  \"format\": \"SIGA strain-gradient Gauss-point kinematics TSV\",\n";
+    metadata << "  \"domainDim\": " << dim << ",\n";
+    metadata << "  \"embeddedDim\": 3,\n";
+    metadata << "  \"numPatches\": " << numPatches << ",\n";
+    metadata << "  \"numElements\": " << numElements() << ",\n";
+    metadata << "  \"gaussPointsPerElement\": " << commonGPsPerElement << ",\n";
+    metadata << "  \"numGaussPoints\": " << totalGPs << ",\n";
+    metadata << "  \"coordinateColumns\": [\"xi\", \"eta\", \"zeta\"],\n";
+    metadata << "  \"deformationGradientColumns\": [";
+    for (int a = 0; a < 3; ++a)
+        for (int A = 0; A < 3; ++A)
+        {
+            if (a != 0 || A != 0)
+                metadata << ", ";
+            metadata << "\"F" << a + 1 << A + 1 << "\"";
+        }
+    metadata << "],\n";
+    metadata << "  \"strainGradientColumns\": [";
+    bool first = true;
+    for (int a = 0; a < 3; ++a)
+        for (int A = 0; A < 3; ++A)
+            for (int B = 0; B < 3; ++B)
+            {
+                if (!first)
+                    metadata << ", ";
+                first = false;
+                metadata << "\"GradF" << a + 1 << A + 1 << B + 1 << "\"";
+            }
+    metadata << "],\n";
+    metadata << "  \"componentOrdering\": {\n";
+    metadata << "    \"F\": \"F[a,A] stored row-major as a * 3 + A\",\n";
+    metadata << "    \"GradF\": \"GradF[a,A,B] stored row-major as a * 9 + A * 3 + B\"\n";
+    metadata << "  }\n";
+    metadata << "}\n";
+
+    const std::filesystem::path coordinatesPath =
+        outputPath / "gauss_point_parametric_coordinates.tsv";
+    std::ofstream coordinatesOut(coordinatesPath);
+    if (!coordinatesOut)
+        throw std::runtime_error("Cannot open coordinates file: " + coordinatesPath.string());
+    coordinatesOut << std::setprecision(16) << std::scientific;
+    coordinatesOut << "patch\telement\tgaussPoint\txi\teta\tzeta\n";
+    for (int gp = 0; gp < totalGPs; ++gp)
+    {
+        coordinatesOut << patchForGP[gp] << '\t'
+                       << elementForGP[gp] << '\t'
+                       << localGPForGP[gp];
+        for (int d = 0; d < 3; ++d)
+        {
+            const double value =
+                d < dim ? parametricCoordinates[static_cast<std::size_t>(gp) * dim + d] : 0.0;
+            coordinatesOut << '\t' << value;
+        }
+        coordinatesOut << '\n';
+    }
+
+    const std::filesystem::path stepPath =
+        outputPath / gaussPointStepFilename(outputStep);
+    std::ofstream stepOut(stepPath);
+    if (!stepOut)
+        throw std::runtime_error("Cannot open Gauss-point step file: " + stepPath.string());
+    stepOut << std::setprecision(16) << std::scientific;
+    stepOut << "patch\telement\tgaussPoint";
+    for (int a = 0; a < 3; ++a)
+        for (int A = 0; A < 3; ++A)
+            stepOut << "\tF" << a + 1 << A + 1;
+    for (int a = 0; a < 3; ++a)
+        for (int A = 0; A < 3; ++A)
+            for (int B = 0; B < 3; ++B)
+                stepOut << "\tGradF" << a + 1 << A + 1 << B + 1;
+    stepOut << '\n';
+
+    for (int gp = 0; gp < totalGPs; ++gp)
+    {
+        stepOut << patchForGP[gp] << '\t'
+                << elementForGP[gp] << '\t'
+                << localGPForGP[gp];
+        const double* gpData =
+            sgGPDataHost.data() + static_cast<std::size_t>(gp) * sgStride;
+
+        for (int a = 0; a < 3; ++a)
+        {
+            for (int A = 0; A < 3; ++A)
+            {
+                double value = a == A ? 1.0 : 0.0;
+                if (a < dim && A < dim)
+                    value = gpData[FOffset + a * dim + A];
+                stepOut << '\t' << value;
+            }
+        }
+
+        for (int a = 0; a < 3; ++a)
+        {
+            for (int A = 0; A < 3; ++A)
+            {
+                for (int B = 0; B < 3; ++B)
+                {
+                    double value = 0.0;
+                    if (a < dim && A < dim && B < dim)
+                        value = gpData[gradFOffset + a * dim2 + A * dim + B];
+                    stepOut << '\t' << value;
+                }
+            }
+        }
+        stepOut << '\n';
+    }
+}
+
 // Assembly flow:
 //   1. Rebuild the current displacement control points from free + fixed dofs.
 //   2. Evaluate and cache expensive Gauss-point data once.
@@ -1404,5 +1700,7 @@ void GPUStrainGradientElasticityAssembler::assemble(
                   << cudaGetErrorString(err) << std::endl;
 
     assembleNeumannBoundaryCondition();
+    assembleDoubleStressBoundaryCondition();
+    assembleFollowerMomentBoundaryCondition(fixedDofsAssemble);
     assembleNeumannCornerPointLoads();
 }

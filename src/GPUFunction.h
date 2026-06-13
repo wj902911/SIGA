@@ -13,6 +13,8 @@ public:
 
     Eigen::MatrixXd eval(int patch, const Eigen::MatrixXd &u) const;
 
+    Eigen::MatrixXd controlPoints(int patch) const;
+
     void eval_into(DeviceMatrixView<double> gridPoints,
                    DeviceVectorView<int> numPointsPerPatch,
                    DeviceMatrixView<double> values) const;

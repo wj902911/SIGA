@@ -2,6 +2,8 @@
 
 #include <GPUAssembler.h>
 
+#include <string>
+
 /**
  * GPU assembler for finite-strain strain-gradient elasticity.
  *
@@ -40,6 +42,11 @@ private:
     void constructStrainGradientStressFunctions(MultiPatchDeviceView displacementView,
                                                 GPUFunction* firstPiolaStressFunction,
                                                 GPUFunction* cauchyStressFunction);
+
+    __host__
+    void writeGaussPointKinematicsTSV(MultiPatchDeviceView displacementView,
+                                      const std::string& outputFolder,
+                                      int outputStep);
 
 public:
     /**
@@ -115,4 +122,30 @@ public:
     void constructStrainGradientStressFunctions(GPUFunction& displacementFunction,
                                                 GPUFunction& firstPiolaStressFunction,
                                                 GPUFunction& cauchyStressFunction);
+
+    /**
+     * Writes Gauss-point kinematics for MATLAB/Python postprocessing.
+     *
+     * The output folder receives:
+     *   - metadata.json
+     *   - gauss_point_parametric_coordinates.tsv
+     *   - step_XXXX.tsv
+     *
+     * Data are embedded in 3D component layouts:
+     *   F11 ... F33 and GradF111 ... GradF333. For 2D runs, zeta is 0,
+     *   F33 is 1, and out-of-plane GradF entries are 0.
+     */
+    __host__
+    void writeGaussPointKinematicsTSV(const DeviceVectorView<double>& solVector,
+                                      const DeviceNestedArrayView<double>& fixedDoFs,
+                                      const std::string& outputFolder,
+                                      int outputStep);
+
+    /**
+     * Same export, but reuses an already constructed displacement function.
+     */
+    __host__
+    void writeGaussPointKinematicsTSV(const GPUFunction& displacementFunction,
+                                      const std::string& outputFolder,
+                                      int outputStep);
 };

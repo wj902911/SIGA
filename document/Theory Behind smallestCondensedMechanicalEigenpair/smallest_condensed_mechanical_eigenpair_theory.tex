@@ -1,0 +1,635 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{hyperref}
+
+\title{Theory Behind \texttt{GPUSolver::smallestCondensedMechanicalEigenpair}}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Purpose}
+
+The function \texttt{GPUSolver::smallestCondensedMechanicalEigenpair}
+computes the smallest eigenvalue and corresponding eigenvector of the
+mechanical stability problem after eliminating the electric potential
+degrees of freedom. In the flexoelectric problem, the unknown vector is
+ordered as
+\[
+    \bm z =
+    \begin{bmatrix}
+        \bm u \\
+        \bm \phi
+    \end{bmatrix},
+\]
+where \(\bm u\) contains the displacement degrees of freedom and
+\(\bm \phi\) contains the electric potential degrees of freedom.
+
+At a converged nonlinear state, the assembled tangent/Hessian matrix has
+the block form
+\[
+    \bm H =
+    \begin{bmatrix}
+        \bm H_{uu} & \bm H_{u\phi} \\
+        \bm H_{\phi u} & \bm H_{\phi\phi}
+    \end{bmatrix}.
+\]
+
+The goal is to test mechanical stability while allowing the electric
+potential field to relax consistently with the mechanical perturbation.
+
+\section{Condensation of the Electric Potential}
+
+For a perturbation \((\delta \bm u, \delta \bm \phi)\), the quadratic
+second variation is
+\[
+    \delta^2 \Pi =
+    \begin{bmatrix}
+        \delta \bm u \\
+        \delta \bm \phi
+    \end{bmatrix}^{T}
+    \begin{bmatrix}
+        \bm H_{uu} & \bm H_{u\phi} \\
+        \bm H_{\phi u} & \bm H_{\phi\phi}
+    \end{bmatrix}
+    \begin{bmatrix}
+        \delta \bm u \\
+        \delta \bm \phi
+    \end{bmatrix}.
+\]
+
+For a given mechanical perturbation \(\delta \bm u\), the compatible
+electric perturbation is obtained by enforcing stationarity with respect
+to \(\delta \bm \phi\):
+\[
+    \bm H_{\phi u}\delta \bm u
+    +
+    \bm H_{\phi\phi}\delta \bm \phi
+    =
+    \bm 0.
+\]
+Assuming \(\bm H_{\phi\phi}\) is nonsingular,
+\[
+    \delta \bm \phi
+    =
+    -\bm H_{\phi\phi}^{-1}\bm H_{\phi u}\delta \bm u.
+\]
+
+Substituting this expression into the quadratic form gives the condensed
+mechanical Hessian
+\[
+    \widehat{\bm H}
+    =
+    \bm H_{uu}
+    -
+    \bm H_{u\phi}
+    \bm H_{\phi\phi}^{-1}
+    \bm H_{\phi u}.
+\]
+
+Therefore the condensed mechanical eigenvalue problem is
+\[
+    \widehat{\bm H}\bm x = \lambda \bm x.
+\]
+The smallest eigenvalue \(\lambda_{\min}\) is used as the stability
+indicator. When it crosses zero, the current equilibrium loses stability
+in the condensed mechanical sense.
+
+\section{Computing the Smallest Eigenvector by Inverse Iteration}
+
+The purpose of this section is to explain how the code updates the
+mechanical eigenvector during the outer iteration. At this stage, assume
+the code already has a normalized mechanical vector
+\[
+    \bm x_k.
+\]
+The goal of one inverse-iteration step is to compute
+\[
+    \bm y_k = \widehat{\bm H}^{-1}\bm x_k.
+\]
+If this operation can be performed repeatedly, then the direction of
+\(\bm x_k\) will converge to the eigenvector associated with the
+eigenvalue of \(\widehat{\bm H}\) closest to zero.
+
+\subsection*{Applying \(\widehat{\bm H}^{-1}\) Without Forming It}
+
+The code does not explicitly form \(\widehat{\bm H}^{-1}\). It also does
+not need to explicitly form a dense inverse of the Schur complement.
+Instead, it applies \(\widehat{\bm H}^{-1}\) to the current vector
+\(\bm x_k\) by solving one full coupled linear system.
+
+The right-hand side of this coupled solve is
+\[
+    \begin{bmatrix}
+        \bm x_k \\
+        \bm 0
+    \end{bmatrix}.
+\]
+The upper part is the current mechanical vector, and the lower part is
+zero because we are applying a purely mechanical load in the condensed
+mechanical problem.
+
+The code solves
+\[
+    \begin{bmatrix}
+        \bm H_{uu} & \bm H_{u\phi} \\
+        \bm H_{\phi u} & \bm H_{\phi\phi}
+    \end{bmatrix}
+    \begin{bmatrix}
+        \bm y \\
+        \bm \eta
+    \end{bmatrix}
+    =
+    \begin{bmatrix}
+        \bm x_k \\
+        \bm 0
+    \end{bmatrix}.
+\]
+The unknown \(\bm y\) is the displacement part of the coupled solution.
+The unknown \(\bm \eta\) is the electric-potential part needed to satisfy
+the coupled system during this solve.
+
+The block equations are
+\[
+    \bm H_{uu}\bm y + \bm H_{u\phi}\bm \eta = \bm x_k,
+\]
+\[
+    \bm H_{\phi u}\bm y + \bm H_{\phi\phi}\bm \eta = \bm 0.
+\]
+The second equation can be solved for the electric part:
+\[
+    \bm \eta =
+    -\bm H_{\phi\phi}^{-1}\bm H_{\phi u}\bm y.
+\]
+Substituting this expression into the first equation removes
+\(\bm \eta\):
+\[
+    \left(
+        \bm H_{uu}
+        -
+        \bm H_{u\phi}
+        \bm H_{\phi\phi}^{-1}
+        \bm H_{\phi u}
+    \right)\bm y
+    =
+    \bm x_k.
+\]
+The matrix in parentheses is exactly the condensed mechanical Hessian
+\(\widehat{\bm H}\). Therefore
+\[
+    \widehat{\bm H}\bm y = \bm x_k.
+\]
+Thus
+\[
+    \bm y = \widehat{\bm H}^{-1}\bm x_k.
+\]
+This shows why solving the full coupled system gives the same
+mechanical vector that would be obtained by applying the inverse
+condensed mechanical operator.
+
+\subsection*{Updating the Eigenvector Direction}
+
+After the coupled solve, the code keeps only the displacement part
+\(\bm y\). This vector is the inverse-iteration update direction. The
+code then normalizes it:
+\[
+    \bm x_{k+1}
+    =
+    \frac{\bm y}{\|\bm y\|}.
+\]
+Therefore one outer iteration is
+\[
+    \bm y_k = \widehat{\bm H}^{-1}\bm x_k,
+    \qquad
+    \bm x_{k+1} = \frac{\bm y_k}{\|\bm y_k\|}.
+\]
+This is inverse iteration applied to the condensed mechanical Hessian.
+
+\subsection*{Why This Finds the Eigenvector Closest to Zero}
+
+If \(\widehat{\bm H}\) has eigenpairs
+\[
+    \widehat{\bm H}\bm q_i = \lambda_i \bm q_i,
+\]
+then
+\[
+    \widehat{\bm H}^{-1}\bm q_i =
+    \frac{1}{\lambda_i}\bm q_i.
+\]
+To see the amplification more explicitly, write the current iterate as a
+linear combination of eigenvectors:
+\[
+    \bm x_k = \sum_i c_i^{(k)} \bm q_i .
+\]
+Here \(c_i^{(k)}\) measures how much of eigenvector \(\bm q_i\) is
+present in the current iterate. Applying the inverse operator gives
+\[
+    \bm y_k
+    =
+    \widehat{\bm H}^{-1}\bm x_k
+    =
+    \sum_i c_i^{(k)}
+    \widehat{\bm H}^{-1}\bm q_i
+    =
+    \sum_i
+    \frac{c_i^{(k)}}{\lambda_i}
+    \bm q_i .
+\]
+Thus each eigenvector component is multiplied by the factor
+\[
+    \frac{1}{\lambda_i}.
+\]
+This is the central reason inverse iteration works. Components
+corresponding to smaller \(|\lambda_i|\) are multiplied by larger
+\(|1/\lambda_i|\). Suppose \(\lambda_1\) is the eigenvalue closest to
+zero, so that
+\[
+    |\lambda_1| < |\lambda_j|, \qquad j \ne 1.
+\]
+Then after one inverse application, the relative size of the
+\(\bm q_1\) component compared with the \(\bm q_j\) component changes as
+\[
+    \left|
+    \frac{c_1^{(k)}/\lambda_1}
+         {c_j^{(k)}/\lambda_j}
+    \right|
+    =
+    \left|
+    \frac{c_1^{(k)}}{c_j^{(k)}}
+    \right|
+    \left|
+    \frac{\lambda_j}{\lambda_1}
+    \right|.
+\]
+Because \(|\lambda_j/\lambda_1|>1\), the relative contribution of
+\(\bm q_1\) grows after each inverse iteration. In other words, even if
+\(\bm q_1\) is only a small part of the initial vector, it is magnified
+faster than the other eigenvector components. After \(m\) ideal inverse
+applications,
+\[
+    \bm x_{k+m}
+    \quad \hbox{is dominated by} \quad
+    \bm q_1,
+\]
+provided the initial vector has a nonzero component in the
+\(\bm q_1\) direction.
+
+This gives the main requirement on the initial vector. If
+\[
+    \bm x_0 = \sum_i c_i^{(0)}\bm q_i,
+\]
+then convergence to \(\bm q_1\) requires
+\[
+    c_1^{(0)} \ne 0.
+\]
+If \(c_1^{(0)}=0\) exactly, inverse iteration cannot create that missing
+component, because each application of \(\widehat{\bm H}^{-1}\) only
+rescales the coefficients already present:
+\[
+    \widehat{\bm H}^{-1}\bm x_0
+    =
+    \sum_i
+    \frac{c_i^{(0)}}{\lambda_i}\bm q_i.
+\]
+Therefore the \(\bm q_1\) coefficient remains zero for all later
+iterations. In practice, this exact orthogonality is unlikely if a
+generic or random-looking initial vector is used. The code initializes
+\(\bm x_0\) with a deterministic sine--cosine pattern, which is intended
+to give a nonzero projection onto the critical eigenvector while avoiding
+the need for random number generation.
+
+The normalization step,
+\[
+    \bm x_{k+1} = \frac{\bm y_k}{\|\bm y_k\|}
+\]
+does not change which eigenvector components are relatively larger or
+smaller. It only prevents the vector norm from growing without bound.
+Therefore the direction of the iterate converges to the eigenvector
+whose eigenvalue has the largest reciprocal magnitude, which is the
+eigenvalue closest to zero in magnitude.
+
+In a stability calculation, this mode is important because loss of
+stability occurs when a mechanical eigenvalue approaches and crosses
+zero. The inverse iteration therefore naturally focuses on the critical
+mode near loss of stability.
+
+\section{Eigenvalue Estimate During Iteration}
+
+During inverse iteration, the code needs a scalar estimate of the
+eigenvalue so it can decide whether the outer iteration has converged.
+At each iteration, the code already has two vectors:
+\[
+    \bm x,
+\]
+the current normalized displacement vector, and
+\[
+    \bm y,
+\]
+the result of applying the inverse condensed operator to \(\bm x\).
+That is,
+\[
+    \bm y = \widehat{\bm H}^{-1}\bm x,
+\]
+where \(\bm y\) is obtained from the full coupled solve described in
+Section 3.
+
+The code then computes
+\[
+    \mu = \bm x^T\bm y
+\]
+and stores this value in the variable \(\texttt{inverseEigenvalue}\):
+\[
+    \texttt{inverseEigenvalue} = \texttt{x.dot(y)}.
+\]
+This quantity is called \(\texttt{inverseEigenvalue}\) because it is an
+estimate of \(1/\lambda\), not \(\lambda\) itself.
+
+To see why, first consider the ideal case where the current vector is
+exactly an eigenvector:
+\[
+    \bm x = \bm q,
+    \qquad
+    \widehat{\bm H}\bm q = \lambda \bm q,
+    \qquad
+    \|\bm q\|=1.
+\]
+Applying the inverse condensed operator gives
+\[
+    \bm y =
+    \widehat{\bm H}^{-1}\bm q =
+    \frac{1}{\lambda}\bm q.
+\]
+Then the dot product is
+\[
+    \mu
+    =
+    \bm q^T
+    \left(
+        \frac{1}{\lambda}\bm q
+    \right)
+    =
+    \frac{1}{\lambda},
+\]
+because \(\bm q^T\bm q=1\). Therefore
+\[
+    \lambda = \frac{1}{\mu}.
+\]
+
+In the actual iteration, \(\bm x\) is not exactly equal to the
+eigenvector until convergence. However, after several inverse-iteration
+steps, \(\bm x\) becomes close to the critical eigenvector. Then
+\[
+    \bm y
+    =
+    \widehat{\bm H}^{-1}\bm x
+    \approx
+    \frac{1}{\lambda}\bm x,
+\]
+so
+\[
+    \bm x^T\bm y
+    \approx
+    \frac{1}{\lambda}\bm x^T\bm x.
+\]
+Since the code normalizes \(\bm x\), we have
+\[
+    \bm x^T\bm x = 1,
+\]
+and therefore
+\[
+    \bm x^T\bm y \approx \frac{1}{\lambda}.
+\]
+This gives the iteration-level eigenvalue estimate
+\[
+    \lambda \approx \frac{1}{\bm x^T\bm y}.
+\]
+In the code, this appears as
+\[
+    \texttt{smallestEigenvalue}
+    =
+    \frac{1}{\texttt{inverseEigenvalue}}.
+\]
+
+This estimate is used only to monitor convergence during inverse
+iteration. The code compares the current estimate with the previous one:
+\[
+    |\lambda_k-\lambda_{k-1}|.
+\]
+The iteration stops when this change is small relative to the current
+eigenvalue scale:
+\[
+    |\lambda_k-\lambda_{k-1}|
+    <
+    \texttt{tolerance}
+    \max(1,|\lambda_k|).
+\]
+After the eigenvector has converged, the code recomputes the eigenvalue
+using the Rayleigh quotient described in the next section.
+
+\section{Final Rayleigh Quotient}
+
+After convergence, the function recomputes the eigenvalue using the
+Rayleigh quotient of the condensed Hessian:
+\[
+    \lambda
+    =
+    \bm x^T \widehat{\bm H}\bm x.
+\]
+The code evaluates this without explicitly storing the dense Schur
+complement:
+\[
+    \widehat{\bm H}\bm x
+    =
+    \bm H_{uu}\bm x
+    -
+    \bm H_{u\phi}
+    \bm H_{\phi\phi}^{-1}
+    \bm H_{\phi u}\bm x.
+\]
+
+The important point is that the Rayleigh quotient only needs the vector
+\(\widehat{\bm H}\bm x\). It does not need every entry of
+\(\widehat{\bm H}\). Therefore the code evaluates the product
+\(\widehat{\bm H}\bm x\) from right to left.
+
+First, it computes the electric residual produced by the mechanical
+eigenvector:
+\[
+    \bm r = \bm H_{\phi u}\bm x.
+\]
+In the code, this is
+\[
+    \texttt{hpuX} = \bm H_{\phi u}\bm x.
+\]
+
+Second, it solves the electric block system
+\[
+    \bm H_{\phi\phi}\bm w = \bm r.
+\]
+Thus
+\[
+    \bm w
+    =
+    \bm H_{\phi\phi}^{-1}\bm H_{\phi u}\bm x.
+\]
+In the code, this is
+\[
+    \texttt{invHppHpuX}
+    =
+    \bm H_{\phi\phi}^{-1}\bm H_{\phi u}\bm x.
+\]
+
+Third, it forms the condensed mechanical matrix-vector product
+\[
+    \bm z
+    =
+    \bm H_{uu}\bm x
+    -
+    \bm H_{u\phi}\bm w.
+\]
+Since \(\bm w=\bm H_{\phi\phi}^{-1}\bm H_{\phi u}\bm x\), this is exactly
+\[
+    \bm z
+    =
+    \widehat{\bm H}\bm x.
+\]
+In the code, this vector is named \(\texttt{hhatX}\):
+\[
+    \texttt{hhatX}
+    =
+    \bm H_{uu}\bm x
+    -
+    \bm H_{u\phi}\texttt{invHppHpuX}.
+\]
+
+Finally, the Rayleigh quotient is computed as
+\[
+    \lambda
+    =
+    \bm x^T\bm z
+    =
+    \bm x^T\widehat{\bm H}\bm x.
+\]
+In the code, this is
+\[
+    \texttt{smallestEigenvalue}
+    =
+    \texttt{x.dot(hhatX)}.
+\]
+
+This treatment is different from the inverse iteration step in Section
+3. In Section 3, the code applies the inverse condensed operator,
+\[
+    \widehat{\bm H}^{-1}\bm x,
+\]
+by solving the full coupled system with right-hand side
+\([\,\bm x;\bm 0\,]\). That solve produces the next iterate direction
+\(\bm y=\widehat{\bm H}^{-1}\bm x\). In the final Rayleigh quotient, the
+code applies the condensed operator itself,
+\[
+    \widehat{\bm H}\bm x,
+\]
+using two block matrix-vector products and one solve with the electric
+block \(\bm H_{\phi\phi}\). Therefore Section 3 uses the full coupled
+solve to move the eigenvector iteration forward, while Section 5 uses
+the Schur-complement formula to evaluate the eigenvalue of the already
+converged vector.
+
+This final Rayleigh quotient is usually more directly tied to the
+condensed mechanical operator than the reciprocal estimate used during
+the iteration.
+
+\section{Recovered Full Eigenvector}
+
+The displacement eigenvector returned by the function is
+\[
+    \delta \bm u = \bm x.
+\]
+The associated electric potential eigenvector is recovered from the
+condensation relation:
+\[
+    \delta \bm \phi
+    =
+    -\bm H_{\phi\phi}^{-1}
+    \bm H_{\phi u}\bm x.
+\]
+Therefore the full coupled perturbation is
+\[
+    \delta \bm z =
+    \begin{bmatrix}
+        \delta \bm u \\
+        \delta \bm \phi
+    \end{bmatrix}
+    =
+    \begin{bmatrix}
+        \bm x \\
+        -\bm H_{\phi\phi}^{-1}\bm H_{\phi u}\bm x
+    \end{bmatrix}.
+\]
+
+\section{Assumptions}
+
+The procedure relies on the following assumptions:
+\begin{itemize}
+    \item The global tangent matrix is ordered as displacement blocks
+          followed by the electric potential block.
+    \item The electric block \(\bm H_{\phi\phi}\) is nonsingular.
+    \item The condensed mechanical Hessian
+          \(\widehat{\bm H}\) is the correct stability operator for the
+          chosen electrical boundary conditions.
+    \item The eigenvalue of interest is the one closest to zero, so that
+          inverse iteration on \(\widehat{\bm H}^{-1}\) converges to the
+          critical mode.
+    \item The initial vector is nonzero, finite, and has a nonzero
+          projection onto the desired critical eigenvector. If the
+          critical eigenvalue has multiplicity greater than one, the
+          method may converge to a linear combination inside the
+          corresponding eigenspace.
+\end{itemize}
+
+\section{Connection to the Implementation}
+
+The implementation follows these mathematical steps:
+\begin{enumerate}
+    \item Assemble the full tangent matrix \(\bm H\).
+    \item Split it into
+          \(\bm H_{uu}\), \(\bm H_{u\phi}\),
+          \(\bm H_{\phi u}\), and \(\bm H_{\phi\phi}\).
+    \item Factorize the full coupled matrix for inverse iteration.
+    \item Repeatedly solve
+          \[
+              \bm H
+              \begin{bmatrix}
+                  \bm y \\
+                  \bm \eta
+              \end{bmatrix}
+              =
+              \begin{bmatrix}
+                  \bm x \\
+                  \bm 0
+              \end{bmatrix}.
+          \]
+    \item Keep only the displacement part \(\bm y\), normalize it, and
+          update \(\bm x\).
+    \item Estimate the eigenvalue during iteration as
+          \[
+              \lambda \approx \frac{1}{\bm x^T\bm y}.
+          \]
+    \item After convergence, compute the final value using
+          \[
+              \lambda = \bm x^T\widehat{\bm H}\bm x.
+          \]
+    \item Return \(\bm x\) as the displacement eigenvector and recover
+          the electric part using
+          \[
+              \delta\bm\phi
+              =
+              -\bm H_{\phi\phi}^{-1}\bm H_{\phi u}\bm x.
+          \]
+\end{enumerate}
+
+\end{document}

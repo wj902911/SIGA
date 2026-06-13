@@ -3306,6 +3306,7 @@ void GPUFlexoelectriciyAssembler::assemble(
         throw std::runtime_error("CUDA synchronize failed in assembleFlexoRHSKernel");
 
     assembleNeumannBoundaryCondition();
+    assembleFollowerMomentBoundaryCondition(fixedDofsAssemble);
     assembleNeumannCornerPointLoads();
 }
 

@@ -53,6 +53,9 @@ private:
     __host__
     void constructCauchyStressFunctionFromDisplacement(MultiPatchDeviceView displacementView,
                                                        GPUFunction& cauchyStressFunction);
+    __host__
+    void constructDeformationGradientFunctionFromDisplacement(MultiPatchDeviceView displacementView,
+                                                              GPUFunction& deformationGradientFunction);
 public:
     __host__
     GPUAssembler(const MultiPatch& multiPatch,
@@ -108,6 +111,15 @@ public:
                                        GPUFunction& cauchyStressFunction);
 
     __host__
+    void constructDeformationGradientFunction(const DeviceVectorView<double>& solVector,
+                                              const DeviceNestedArrayView<double>& fixedDoFs,
+                                              GPUFunction& deformationGradientFunction);
+
+    __host__
+    void constructDeformationGradientFunction(GPUFunction& displacementFunction,
+                                              GPUFunction& deformationGradientFunction);
+
+    __host__
     void constructDispSolution(const DeviceVectorView<double>& solVector,
                                const DeviceNestedArrayView<double>& fixedDoFs) const;
     
@@ -132,6 +144,13 @@ public:
 
     __host__
     void assembleNeumannBoundaryCondition();
+
+    __host__
+    void assembleDoubleStressBoundaryCondition();
+
+    __host__
+    void assembleFollowerMomentBoundaryCondition(
+        const DeviceNestedArrayView<double>& fixedDofs_assemble);
 
     __host__
     void assembleNeumannCornerPointLoads();

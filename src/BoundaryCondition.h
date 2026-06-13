@@ -15,7 +15,8 @@ struct condition_type
         dirichlet = 0,
         neumann = 1,
         robin = 2,
-        double_stress = 3
+        double_stress = 3,
+        follower_moment = 4
     };
 };
 
@@ -53,6 +54,9 @@ public:
         case condition_type::double_stress:
             m_label = "Double stress";
             break;
+        case condition_type::follower_moment:
+            m_label = "Follower moment";
+            break;
         }
     }
 
@@ -76,6 +80,9 @@ public:
             break;
         case condition_type::double_stress:
             m_label = "Double stress";
+            break;
+        case condition_type::follower_moment:
+            m_label = "Follower moment";
             break;
         }
     }
@@ -143,6 +150,9 @@ public:
         case condition_type::double_stress:
             m_label = "Double stress";
             break;
+        case condition_type::follower_moment:
+            m_label = "Follower moment";
+            break;
         }
     }
 
@@ -166,6 +176,9 @@ public:
             break;
         case condition_type::double_stress:
             m_label = "Double stress";
+            break;
+        case condition_type::follower_moment:
+            m_label = "Follower moment";
             break;
         }
     }
@@ -321,6 +334,12 @@ public:
     const_iterator doubleStressEnd() const
     { return m_bc["Double stress"].end(); }
 
+    const_iterator followerMomentBegin() const
+    { return m_bc["Follower moment"].begin(); }
+
+    const_iterator followerMomentEnd() const
+    { return m_bc["Follower moment"].end(); }
+
     const_corner_iterator dirichletCornerBegin() const
     { return m_cc["Dirichlet"].begin(); }
 
@@ -346,6 +365,8 @@ public:
     { return m_cc["Double stress"].end(); }
 
     const bcContainer & neumannSides()   const { return m_bc["Neumann"]; }
+
+    const bcContainer & followerMomentSides() const { return m_bc["Follower moment"]; }
 
     const_coupling_iterator couplingBegin() const
     { return m_couplings.begin(); }

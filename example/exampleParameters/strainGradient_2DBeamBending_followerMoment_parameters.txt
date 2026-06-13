@@ -1,0 +1,23 @@
+# Geometry and mesh
+L: 150
+H: 10
+numEle_L: 20
+numEle_H: 1
+numRefinements: 4
+numDegElev: 3
+numPointsPerPatch: 10000
+outputPostfix: l3_L150_H10_followerMoment0.5
+outputGaussPointData: true
+outputControlPointLocations: true
+
+# Loading
+followerMoment: -0.5
+initialLoadStep: 0.05
+maxNewtonIterations: 50
+targetNumIterations: 6
+
+# Material parameters
+YM: 3
+PR: 0.495
+lengthScale: 1
+materialLaw: 1

@@ -1,0 +1,23 @@
+# Geometry and mesh
+L: 150
+H: 10
+numEle_L: 10
+numEle_H: 1
+numRefinements: 4
+numDegElev: 2
+numPointsPerPatch: 1000
+outputPostfix: L150_H10_doubleStress005
+
+# Loading
+doubleStressX: 0.0
+doubleStressY: -0.05
+numLoadSteps: 10
+initialLoadStep: 0.005
+maxNewtonIterations: 50
+targetNumIterations: 5
+
+# Material parameters
+YM: 1
+PR: 0.495
+lengthScale: 5
+materialLaw: 1
