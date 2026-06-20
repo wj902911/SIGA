@@ -92,11 +92,6 @@ int main(int argc, char* argv[])
     const bool useExactCondensedStability = condensedEigenMaxIterations <= 0;
     const int eigenvectorMaxIterations =
         condensedEigenMaxIterations > 0 ? condensedEigenMaxIterations : 60;
-    const double meterToMicrometer = 1.0e-6;
-    const double dielectricPermittivityModel = dielectricPermittivity * meterToMicrometer;
-    const double muLModel = muL * meterToMicrometer;
-    const double muTModel = muT * meterToMicrometer;
-    const double muSModel = muS * meterToMicrometer;
     if (materialLaw != 0 && materialLaw != 1)
         throw std::invalid_argument("materialLaw must be 0 (StVK) or 1 (neo-Hookean).");
     std::vector<int> numPointsPerPatch{ 1000 };
@@ -163,15 +158,10 @@ int main(int argc, char* argv[])
     std::cout << "Material law: " << (materialLaw == 0 ? "StVK" : "neo-Hookean")
               << " (" << materialLaw << ")\n";
     std::cout << "Length scale: " << lengthScale << "\n";
-    std::cout << "Dielectric permittivity input: " << dielectricPermittivity
-              << " nJ/(V^2 m), model units: "
-              << dielectricPermittivityModel << " nJ/(V^2 um)\n";
-    std::cout << "Flexoelectric tensor input: mu_L = " << muL
+    std::cout << "Dielectric permittivity: " << dielectricPermittivity << "\n";
+    std::cout << "Flexoelectric tensor: mu_L = " << muL
               << ", mu_T = " << muT
-              << ", mu_S = " << muS << " nJ/(V m)\n";
-    std::cout << "Flexoelectric tensor model units: mu_L = " << muLModel
-              << ", mu_T = " << muTModel
-              << ", mu_S = " << muSModel << " nJ/(V um)\n";
+              << ", mu_S = " << muS << "\n";
     std::cout << "hbar flexoelectric correction: "
               << (includeHbarFlexoCorrection ? "on" : "off") << "\n";
     if (useExactCondensedStability)
@@ -217,10 +207,10 @@ int main(int argc, char* argv[])
     assembler.options().setReal("youngs_modulus", YM);
 	assembler.options().setReal("poissons_ratio", PR);
     assembler.options().setReal("length_scale", lengthScale);
-    assembler.options().setReal("dielectric_permittivity", dielectricPermittivityModel);
-    assembler.options().setReal("flexoelectric_mu_L", muLModel);
-    assembler.options().setReal("flexoelectric_mu_T", muTModel);
-    assembler.options().setReal("flexoelectric_mu_S", muSModel);
+    assembler.options().setReal("dielectric_permittivity", dielectricPermittivity);
+    assembler.options().setReal("flexoelectric_mu_L", muL);
+    assembler.options().setReal("flexoelectric_mu_T", muT);
+    assembler.options().setReal("flexoelectric_mu_S", muS);
     assembler.options().setInt("material_law", materialLaw);
     assembler.options().setInt("include_hbar_flexo_correction",
                                includeHbarFlexoCorrection);

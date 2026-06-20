@@ -1,6 +1,7 @@
 #include <GPUPostProcessor.h>
 #include <fstream>
 #include <iomanip>
+#include <stdexcept>
 
 __global__
 void patchLengthesKernel(int numTotalBoundaryGPs,
@@ -724,6 +725,12 @@ void GPUPostProcessor::writeParaviewSinglePatch(const std::string &fn,
     std::string mfn(fn);
     mfn.append(".vts");
     std::ofstream file(mfn.c_str());
+    if (!file.is_open())
+    {
+        throw std::runtime_error(
+            "Cannot open Paraview output file: " + mfn +
+            ". Shorten the output path or check write permissions.");
+    }
     file << std::fixed; // no exponents
     file << std::setprecision (11);
 
@@ -774,6 +781,8 @@ void GPUPostProcessor::writeParaviewSinglePatch(const std::string &fn,
     file <<"</VTKFile>\n";
 
     file.close();
+    if (!file)
+        throw std::runtime_error("Failed while writing Paraview output file: " + mfn);
 }
 
 void GPUPostProcessor::writeParaviewSinglePatchMesh(const std::string &fn, 
@@ -783,6 +792,12 @@ void GPUPostProcessor::writeParaviewSinglePatchMesh(const std::string &fn,
     std::string mfn(fn);
     mfn.append(".vtp");
     std::ofstream file(mfn.c_str());
+    if (!file.is_open())
+    {
+        throw std::runtime_error(
+            "Cannot open Paraview output file: " + mfn +
+            ". Shorten the output path or check write permissions.");
+    }
     file << std::fixed;
     file << std::setprecision (11);
 
@@ -852,4 +867,6 @@ void GPUPostProcessor::writeParaviewSinglePatchMesh(const std::string &fn,
     file <<"</VTKFile>\n";
 
     file.close();
+    if (!file)
+        throw std::runtime_error("Failed while writing Paraview output file: " + mfn);
 }

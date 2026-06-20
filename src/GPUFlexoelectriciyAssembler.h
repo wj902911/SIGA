@@ -20,6 +20,13 @@ private:
         MultiPatchDeviceView electricPotentialView,
         GPUFunction& electricFieldFunction) const;
 
+    __host__
+    void constructFlexoelectricStressFunctions(
+        MultiPatchDeviceView displacementView,
+        MultiPatchDeviceView electricPotentialView,
+        GPUFunction* firstPiolaStressFunction,
+        GPUFunction* cauchyStressFunction);
+
 public:
     __host__
     GPUFlexoelectriciyAssembler(const MultiPatch& multiPatch,
@@ -51,6 +58,30 @@ public:
     __host__
     void constructElectricFieldFunction(GPUFunction& electricPotentialFunction,
                                         GPUFunction& electricFieldFunction) const;
+
+    /**
+     * Constructs flexoelectric first Piola and Cauchy stress functions from the
+     * coupled displacement/electric-potential solution. First Piola must have
+     * target dimension dim * dim; Cauchy stress must have target dimension
+     * dim * (dim + 1) / 2.
+     */
+    __host__
+    void constructFlexoelectricStressFunctions(
+        const DeviceVectorView<double>& solVector,
+        const DeviceNestedArrayView<double>& fixedDoFs,
+        GPUFunction& firstPiolaStressFunction,
+        GPUFunction& cauchyStressFunction);
+
+    /**
+     * Same recovery, but reuses already constructed displacement and electric
+     * potential functions.
+     */
+    __host__
+    void constructFlexoelectricStressFunctions(
+        GPUFunction& displacementFunction,
+        GPUFunction& electricPotentialFunction,
+        GPUFunction& firstPiolaStressFunction,
+        GPUFunction& cauchyStressFunction);
 
     __host__
     void assemble(const DeviceVectorView<double>& solVector,

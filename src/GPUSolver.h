@@ -3,6 +3,7 @@
 #include <GPUAssembler.h>
 #include <Eigen/Core>
 #include <Eigen/Sparse>
+#include <string>
 
 #if ENABLE_PARDISO
 #include <Eigen/PardisoSupport>
@@ -39,6 +40,12 @@ private:
     double m_schurGammaMax = 1.0;
     double m_schurDisplacementScale = 1.0;
     double m_schurPotentialScale = 1.0;
+    bool m_printTiming = false;
+    int m_timingIterations = 0;
+    double m_timingAssemblySeconds = 0.0;
+    double m_timingDeviceToHostSeconds = 0.0;
+    double m_timingLinearSolveSeconds = 0.0;
+    double m_timingHostToDeviceSeconds = 0.0;
 
 #if ENABLE_PARDISO
     using PardisoSpMat = Eigen::SparseMatrix<double, Eigen::RowMajor, int>;
@@ -50,6 +57,12 @@ private:
     int m_pardisoRows = -1;
     int m_pardisoCols = -1;
     int m_pardisoNonZeros = -1;
+
+    PardisoLUSolver m_pardisoLUSolver;
+    bool m_pardisoLUPatternAnalyzed = false;
+    int m_pardisoLURows = -1;
+    int m_pardisoLUCols = -1;
+    int m_pardisoLUNonZeros = -1;
 
     PardisoSolver m_schurPhiPardisoSolver;
     bool m_schurPhiPatternAnalyzed = false;
@@ -86,7 +99,25 @@ private:
                           Eigen::VectorXd& x,
                           const char* context);
 
+    bool factorWithPardisoLU(PardisoLUSolver& solver,
+                             bool& patternAnalyzed,
+                             int& rows,
+                             int& cols,
+                             int& nonZeros,
+                             const PardisoSpMat& A,
+                             const char* context);
+
     bool solveWithPardisoLU(const PardisoSpMat& A,
+                            const Eigen::VectorXd& b,
+                            Eigen::VectorXd& x,
+                            const char* context);
+
+    bool solveWithPardisoLU(PardisoLUSolver& solver,
+                            bool& patternAnalyzed,
+                            int& rows,
+                            int& cols,
+                            int& nonZeros,
+                            const PardisoSpMat& A,
                             const Eigen::VectorXd& b,
                             Eigen::VectorXd& x,
                             const char* context);
@@ -213,6 +244,10 @@ public:
     }
 
     void setMaxIterations(int maxIter) { m_maxIter = maxIter; }
+
+    void setPrintTiming(bool printTiming) { m_printTiming = printTiming; }
+    void resetTimingStats();
+    void printTimingSummary(const std::string& label = "Solver timing summary") const;
 
     void setUseSchurSolve(bool useSchurSolve)
     {

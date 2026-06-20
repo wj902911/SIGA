@@ -96,6 +96,24 @@ void DofMapper::init(const std::vector<TensorBsplineBasis> &basis,
             matchDofs(patchIndex, boundaryDofs, patchIndex, offsetDofs);
         }
     }
+
+    for (BoundaryConditions::const_electrode_iterator
+         it = bc.electrodeBoundaryBegin(); it != bc.electrodeBoundaryEnd(); ++it)
+    {
+        if (it->unknown() == -1 || it->unknown() == unk)
+        {
+            int patchIndex = it->patchIndex();
+            if (patchIndex >= numPatches())
+            {
+                std::cerr << "Problem: an electrode boundary is set on a patch id which does not exist." << std::endl;
+                return;
+            }
+
+            Eigen::VectorXi boundaryDofs = basis[patchIndex].boundary(it->side());
+            for (int i = 1; i < boundaryDofs.size(); ++i)
+                matchDof(patchIndex, boundaryDofs(0), patchIndex, boundaryDofs(i));
+        }
+    }
 }
 
 void DofMapper::markBoundary(int k, 

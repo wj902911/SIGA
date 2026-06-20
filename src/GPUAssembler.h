@@ -12,6 +12,16 @@
 #include <stdexcept>
 #include <vector>
 
+void appendFollowerMomentCOOPattern(
+    const BoundaryConditions& boundaryConditions,
+    const MultiBasis& multiBasis,
+    const SparseSystem& sparseSystem,
+    const std::vector<DofMapper>& dofMappers,
+    int domainDim,
+    int targetDim,
+    std::vector<int>& rows,
+    std::vector<int>& cols);
+
 class GPUAssembler
 {
 private:
@@ -56,6 +66,11 @@ private:
     __host__
     void constructDeformationGradientFunctionFromDisplacement(MultiPatchDeviceView displacementView,
                                                               GPUFunction& deformationGradientFunction);
+    __host__
+    void constructKinematicGradientFunctionsFromDisplacement(
+        MultiPatchDeviceView displacementView,
+        GPUFunction& deformationGradientGradientFunction,
+        GPUFunction& greenLagrangeStrainGradientFunction);
 public:
     __host__
     GPUAssembler(const MultiPatch& multiPatch,
@@ -118,6 +133,30 @@ public:
     __host__
     void constructDeformationGradientFunction(GPUFunction& displacementFunction,
                                               GPUFunction& deformationGradientFunction);
+
+    /**
+     * Constructs Grad F (mathcal G) and Grad E (mathcal E) from a solution
+     * vector. Both output functions must have target dimension dim * dim * dim.
+     *
+     * Component ordering:
+     *   Grad F: a * dim * dim + A * dim + K
+     *   Grad E: (I * dim + J) * dim + K
+     */
+    __host__
+    void constructKinematicGradientFunctions(
+        const DeviceVectorView<double>& solVector,
+        const DeviceNestedArrayView<double>& fixedDoFs,
+        GPUFunction& deformationGradientGradientFunction,
+        GPUFunction& greenLagrangeStrainGradientFunction);
+
+    /**
+     * Same recovery, but reuses an already constructed displacement function.
+     */
+    __host__
+    void constructKinematicGradientFunctions(
+        GPUFunction& displacementFunction,
+        GPUFunction& deformationGradientGradientFunction,
+        GPUFunction& greenLagrangeStrainGradientFunction);
 
     __host__
     void constructDispSolution(const DeviceVectorView<double>& solVector,

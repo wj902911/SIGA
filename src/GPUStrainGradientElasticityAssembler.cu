@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
@@ -1172,6 +1173,8 @@ OptionList GPUStrainGradientElasticityAssembler::defaultStrainGradientOptions()
     opt.addInt("material_law", "0: StVK, 1: neo-Hookean", 1);
     opt.addSwitch("use_nonsymmetric_newton_solver",
                   "Use a nonsymmetric direct solver for Newton systems", false);
+    opt.addSwitch("print_timing",
+                  "Print assembly and solve timing diagnostics", false);
     return opt;
 }
 

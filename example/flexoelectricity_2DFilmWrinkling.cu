@@ -417,16 +417,6 @@ int main(int argc, char* argv[])
     const bool useExactCondensedStability = condensedEigenMaxIterations <= 0;
     const int eigenvectorMaxIterations =
         condensedEigenMaxIterations > 0 ? condensedEigenMaxIterations : 60;
-    const double meterToMicrometer = 1.0e-6;
-    const double dielectricPermittivityModel = dielectricPermittivity * meterToMicrometer;
-    const double muLModel = muL * meterToMicrometer;
-    const double muTModel = muT * meterToMicrometer;
-    const double muSModel = muS * meterToMicrometer;
-    const double substrateDielectricPermittivityModel =
-        substrateDielectricPermittivity * meterToMicrometer;
-    const double substrateMuLModel = substrateMuL * meterToMicrometer;
-    const double substrateMuTModel = substrateMuT * meterToMicrometer;
-    const double substrateMuSModel = substrateMuS * meterToMicrometer;
     if (materialLaw != 0 && materialLaw != 1)
         throw std::invalid_argument("materialLaw must be 0 (StVK) or 1 (neo-Hookean).");
     if (substrateMaterialLaw != 0 && substrateMaterialLaw != 1)
@@ -513,27 +503,17 @@ int main(int argc, char* argv[])
               << " (" << substrateMaterialLaw << ")\n";
     std::cout << "Film length scale: " << lengthScale << "\n";
     std::cout << "Substrate length scale: " << substrateLengthScale << "\n";
-    std::cout << "Film dielectric permittivity input: " << dielectricPermittivity
-              << " nJ/(V^2 m), model units: "
-              << dielectricPermittivityModel << " nJ/(V^2 um)\n";
-    std::cout << "Substrate dielectric permittivity input: "
-              << substrateDielectricPermittivity
-              << " nJ/(V^2 m), model units: "
-              << substrateDielectricPermittivityModel << " nJ/(V^2 um)\n";
-    std::cout << "Film flexoelectric tensor input: mu_L = " << muL
+    std::cout << "Film dielectric permittivity: "
+              << dielectricPermittivity << "\n";
+    std::cout << "Substrate dielectric permittivity: "
+              << substrateDielectricPermittivity << "\n";
+    std::cout << "Film flexoelectric tensor: mu_L = " << muL
               << ", mu_T = " << muT
-              << ", mu_S = " << muS << " nJ/(V m)\n";
-    std::cout << "Film flexoelectric tensor model units: mu_L = " << muLModel
-              << ", mu_T = " << muTModel
-              << ", mu_S = " << muSModel << " nJ/(V um)\n";
-    std::cout << "Substrate flexoelectric tensor input: mu_L = "
+              << ", mu_S = " << muS << "\n";
+    std::cout << "Substrate flexoelectric tensor: mu_L = "
               << substrateMuL
               << ", mu_T = " << substrateMuT
-              << ", mu_S = " << substrateMuS << " nJ/(V m)\n";
-    std::cout << "Substrate flexoelectric tensor model units: mu_L = "
-              << substrateMuLModel
-              << ", mu_T = " << substrateMuTModel
-              << ", mu_S = " << substrateMuSModel << " nJ/(V um)\n";
+              << ", mu_S = " << substrateMuS << "\n";
     std::cout << "Film hbar flexoelectric correction: "
               << (includeHbarFlexoCorrection ? "on" : "off") << "\n";
     std::cout << "Substrate hbar flexoelectric correction: "
@@ -595,10 +575,10 @@ int main(int argc, char* argv[])
     assembler.options().setReal("youngs_modulus", YM);
 	assembler.options().setReal("poissons_ratio", PR);
     assembler.options().setReal("length_scale", lengthScale);
-    assembler.options().setReal("dielectric_permittivity", dielectricPermittivityModel);
-    assembler.options().setReal("flexoelectric_mu_L", muLModel);
-    assembler.options().setReal("flexoelectric_mu_T", muTModel);
-    assembler.options().setReal("flexoelectric_mu_S", muSModel);
+    assembler.options().setReal("dielectric_permittivity", dielectricPermittivity);
+    assembler.options().setReal("flexoelectric_mu_L", muL);
+    assembler.options().setReal("flexoelectric_mu_T", muT);
+    assembler.options().setReal("flexoelectric_mu_S", muS);
     assembler.options().setInt("material_law", materialLaw);
     assembler.options().setInt("include_hbar_flexo_correction",
                                includeHbarFlexoCorrection);
@@ -607,13 +587,13 @@ int main(int argc, char* argv[])
     assembler.setPatchRealOption("length_scale",
                                  {lengthScale, substrateLengthScale});
     assembler.setPatchRealOption("dielectric_permittivity",
-        {dielectricPermittivityModel, substrateDielectricPermittivityModel});
+        {dielectricPermittivity, substrateDielectricPermittivity});
     assembler.setPatchRealOption("flexoelectric_mu_L",
-                                 {muLModel, substrateMuLModel});
+                                 {muL, substrateMuL});
     assembler.setPatchRealOption("flexoelectric_mu_T",
-                                 {muTModel, substrateMuTModel});
+                                 {muT, substrateMuT});
     assembler.setPatchRealOption("flexoelectric_mu_S",
-                                 {muSModel, substrateMuSModel});
+                                 {muS, substrateMuS});
     assembler.setPatchIntOption("material_law",
                                 {materialLaw, substrateMaterialLaw});
     assembler.setPatchIntOption("include_hbar_flexo_correction",

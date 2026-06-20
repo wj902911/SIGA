@@ -238,6 +238,28 @@ private:
     int m_unknown;
 };
 
+struct electrode_boundary_condition
+{
+public:
+    electrode_boundary_condition(int p, BoxSide s, int unknown)
+        : m_ps(p, s),
+          m_unknown(unknown)
+    {
+    }
+
+    const PatchSide& patchSide() const { return m_ps; }
+
+    const BoxSide& side() const { return m_ps.side(); }
+
+    int patchIndex() const { return m_ps.patchIndex(); }
+
+    int unknown() const { return m_unknown; }
+
+private:
+    PatchSide m_ps;
+    int m_unknown;
+};
+
 class BoundaryConditions
 {
 public:
@@ -258,6 +280,9 @@ public:
     typedef typename std::deque<boundary_coupling_condition> couplingContainer;
     typedef typename couplingContainer::const_iterator const_coupling_iterator;
 
+    typedef typename std::deque<electrode_boundary_condition> electrodeContainer;
+    typedef typename electrodeContainer::const_iterator const_electrode_iterator;
+
     BoundaryConditions() = default;
 
     void clear()
@@ -265,6 +290,7 @@ public:
         m_bc.clear();
         m_cc.clear();
         m_couplings.clear();
+        m_electrodeBoundaries.clear();
     }
 
     const bcContainer & container(const std::string & label) const 
@@ -308,6 +334,26 @@ public:
     void addBoundaryCoupling(int p, boundary::side s, int offset, int unknown = -1)
     {
         addBoundaryCoupling(p, BoxSide(s), offset, unknown);
+    }
+
+    void addElectrodeBoundary(int p, BoxSide s, int unknown = -1)
+    {
+        m_electrodeBoundaries.emplace_back(p, s, unknown);
+    }
+
+    void addElectrodeBoundary(int p, boundary::side s, int unknown = -1)
+    {
+        addElectrodeBoundary(p, BoxSide(s), unknown);
+    }
+
+    void addEquipotentialBoundary(int p, BoxSide s, int unknown = -1)
+    {
+        addElectrodeBoundary(p, s, unknown);
+    }
+
+    void addEquipotentialBoundary(int p, boundary::side s, int unknown = -1)
+    {
+        addElectrodeBoundary(p, s, unknown);
     }
 
     const_iterator dirichletBegin() const
@@ -374,8 +420,15 @@ public:
     const_coupling_iterator couplingEnd() const
     { return m_couplings.end(); }
 
+    const_electrode_iterator electrodeBoundaryBegin() const
+    { return m_electrodeBoundaries.begin(); }
+
+    const_electrode_iterator electrodeBoundaryEnd() const
+    { return m_electrodeBoundaries.end(); }
+
 private:
     mutable bcData m_bc;
     mutable cornerData m_cc;
     couplingContainer m_couplings;
+    electrodeContainer m_electrodeBoundaries;
 };

@@ -1,0 +1,31 @@
+# Geometry and mesh
+L: 150
+H: 10
+numEle_L: 450
+numEle_H: 30
+centerElementThicknessRatio: 0.034
+surfaceElementThicknessRatio: 0.033
+numDegElev: 3
+numPointsPerPatch: 10000
+outputPostfix: l0_LxH150x10_ele450x30
+outputGaussPointData: false
+outputControlPointLocations: false
+printTiming: false
+electrodeBoundary: north
+
+# Loading
+followerMoment: -0.5
+initialLoadStep: 0.05
+maxNewtonIterations: 50
+targetNumIterations: 6
+
+# Material parameters
+YM: 1
+PR: 0.495
+lengthScale: 0
+dielectricPermittivity: 92
+muL: 10
+muT: 10
+muS: 10
+materialLaw: 1
+includeHbarFlexoCorrection: 0

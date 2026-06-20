@@ -165,6 +165,247 @@ void recoverDeformationGradientAtNodesKernel(int numDerivatives,
     }
 }
 
+__device__
+double kinematicTensorBasisPartial(int r, int P1, int dim, int numDerivatives,
+                                   DeviceMatrixView<double> valuesAndDers,
+                                   int derivativeDir1, int derivativeDir2)
+{
+    int tensorCoordData[3] = {0}; // max 3D
+    DeviceVectorView<int> tensorCoord(tensorCoordData, dim);
+    getTensorCoordinate(dim, P1, r, tensorCoordData);
+
+    double value = 1.0;
+    for (int d = 0; d < dim; ++d)
+    {
+        int order = 0;
+        if (d == derivativeDir1)
+            ++order;
+        if (d == derivativeDir2)
+            ++order;
+        value *= valuesAndDers(tensorCoord[d],
+                               (numDerivatives + 1) * d + order);
+    }
+    return value;
+}
+
+__device__
+void kinematicTensorBasisHessianParam(int r, int P1, int dim,
+                                      int numDerivatives,
+                                      DeviceMatrixView<double> valuesAndDers,
+                                      double* hessian)
+{
+    for (int a = 0; a < dim; ++a)
+        for (int b = 0; b < dim; ++b)
+            hessian[a * dim + b] = kinematicTensorBasisPartial(
+                r, P1, dim, numDerivatives, valuesAndDers, a, b);
+}
+
+__device__
+void kinematicPatchParamHessian(PatchDeviceView patch,
+                                DeviceVectorView<double> pt,
+                                DeviceMatrixView<double> valuesAndDers,
+                                int numDerivatives, int component,
+                                double* hessian)
+{
+    const int dim = patch.domainDim();
+    const int P1 = patch.basis().knotsOrder(0) + 1;
+    const int numActive = patch.basis().numActiveControlPoints();
+
+    for (int a = 0; a < dim * dim; ++a)
+        hessian[a] = 0.0;
+
+    for (int r = 0; r < numActive; ++r)
+    {
+        double basisHessian[9] = {0.0};
+        kinematicTensorBasisHessianParam(r, P1, dim, numDerivatives,
+                                         valuesAndDers, basisHessian);
+        const double cp = patch.activeControlPointComponent(pt, r, component);
+        for (int a = 0; a < dim * dim; ++a)
+            hessian[a] += cp * basisHessian[a];
+    }
+}
+
+__device__
+void kinematicPhysicalBasisHessian(int r, int P1, int dim, int numDerivatives,
+                                   DeviceMatrixView<double> basisValuesAndDers,
+                                   double* geoHessians,
+                                   DeviceMatrixView<double> geoJacobianInv,
+                                   double* result)
+{
+    double gradParamData[3] = {0.0};
+    DeviceVectorView<double> gradParam(gradParamData, dim);
+    double hessParam[9] = {0.0};
+    tensorBasisDerivative(r, P1, dim, numDerivatives, basisValuesAndDers,
+                          gradParam);
+    kinematicTensorBasisHessianParam(r, P1, dim, numDerivatives,
+                                     basisValuesAndDers, hessParam);
+
+    double corrected[9] = {0.0};
+    for (int i = 0; i < dim; ++i)
+    {
+        for (int j = 0; j < dim; ++j)
+        {
+            double correction = 0.0;
+            for (int k = 0; k < dim; ++k)
+                for (int c = 0; c < dim; ++c)
+                    correction += gradParam[k] * geoJacobianInv(k, c) *
+                                  geoHessians[c * dim * dim + i * dim + j];
+            corrected[i * dim + j] = hessParam[i * dim + j] - correction;
+        }
+    }
+
+    for (int A = 0; A < dim; ++A)
+        for (int B = 0; B < dim; ++B)
+        {
+            double value = 0.0;
+            for (int i = 0; i < dim; ++i)
+                for (int j = 0; j < dim; ++j)
+                    value += geoJacobianInv(i, A) * geoJacobianInv(j, B) *
+                             corrected[i * dim + j];
+            result[A * dim + B] = value;
+        }
+}
+
+__device__
+void kinematicPhysicalFieldHessians(PatchDeviceView fieldPatch,
+                                    DeviceVectorView<double> pt,
+                                    DeviceMatrixView<double> fieldValuesAndDers,
+                                    int numDerivatives, double* geoHessians,
+                                    DeviceMatrixView<double> geoJacobianInv,
+                                    double* result)
+{
+    const int dim = fieldPatch.domainDim();
+    const int P1 = fieldPatch.basis().knotsOrder(0) + 1;
+    const int numActive = fieldPatch.basis().numActiveControlPoints();
+
+    for (int a = 0; a < dim * dim * dim; ++a)
+        result[a] = 0.0;
+
+    for (int r = 0; r < numActive; ++r)
+    {
+        double basisHessian[9] = {0.0};
+        kinematicPhysicalBasisHessian(r, P1, dim, numDerivatives,
+                                      fieldValuesAndDers, geoHessians,
+                                      geoJacobianInv, basisHessian);
+        for (int comp = 0; comp < dim; ++comp)
+        {
+            const double cp =
+                fieldPatch.activeControlPointComponent(pt, r, comp);
+            for (int a = 0; a < dim * dim; ++a)
+                result[comp * dim * dim + a] += cp * basisHessian[a];
+        }
+    }
+}
+
+__device__
+void computeGreenLagrangeStrainGradient(int dim, DeviceMatrixView<double> F,
+                                         const double* gradF,
+                                         double* greenStrainGradient)
+{
+    const int dim2 = dim * dim;
+    for (int I = 0; I < dim; ++I)
+        for (int J = 0; J < dim; ++J)
+            for (int K = 0; K < dim; ++K)
+            {
+                double value = 0.0;
+                for (int a = 0; a < dim; ++a)
+                    value += gradF[a * dim2 + I * dim + K] * F(a, J) +
+                             F(a, I) * gradF[a * dim2 + J * dim + K];
+                greenStrainGradient[(I * dim + J) * dim + K] = 0.5 * value;
+            }
+}
+
+__global__
+void recoverKinematicGradientsAtNodesKernel(
+    int numDerivatives,
+    int totalNumGPs,
+    MultiPatchDeviceView displacement,
+    MultiPatchDeviceView geometry,
+    MultiPatchDeviceView deformationGradientGradient,
+    MultiPatchDeviceView greenLagrangeStrainGradient,
+    DeviceMatrixView<double> pts,
+    DeviceVectorView<double> weightForces,
+    DeviceMatrixView<double> geoValuesAndDerss,
+    DeviceMatrixView<double> dispValuesAndDerss,
+    DeviceMatrixView<double> geoJacobianInvs,
+    DeviceMatrixView<double> Fs,
+    DeviceVectorView<double> nodalWeights)
+{
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x;
+         idx < totalNumGPs; idx += blockDim.x * gridDim.x)
+    {
+        const int dim = displacement.domainDim();
+        const int dim2 = dim * dim;
+        const int dim3 = dim2 * dim;
+
+        int patchIdx = 0;
+        displacement.threadPatch(idx, patchIdx);
+
+        PatchDeviceView geoPatch = geometry.patch(patchIdx);
+        PatchDeviceView dispPatch = displacement.patch(patchIdx);
+        TensorBsplineBasisDeviceView basis = displacement.basis(patchIdx);
+        const int geoP1 = geoPatch.basis().knotsOrder(0) + 1;
+        const int dispP1 = basis.knotsOrder(0) + 1;
+        const int numActive = basis.numActiveControlPoints();
+
+        DeviceVectorView<double> pt(pts.data() + idx * dim, dim);
+        DeviceMatrixView<double> geoValuesAndDers(
+            geoValuesAndDerss.data() +
+                idx * geoP1 * (numDerivatives + 1) * dim,
+            geoP1, (numDerivatives + 1) * dim);
+        DeviceMatrixView<double> dispValuesAndDers(
+            dispValuesAndDerss.data() +
+                idx * dispP1 * (numDerivatives + 1) * dim,
+            dispP1, (numDerivatives + 1) * dim);
+        DeviceMatrixView<double> geoJacobianInv(
+            geoJacobianInvs.data() + idx * dim2, dim, dim);
+        DeviceMatrixView<double> F(Fs.data() + idx * dim2, dim, dim);
+
+        double geoHessians[27] = {0.0};
+        for (int a = 0; a < dim; ++a)
+            kinematicPatchParamHessian(geoPatch, pt, geoValuesAndDers,
+                                       numDerivatives, a,
+                                       geoHessians + a * dim2);
+
+        double gradF[27] = {0.0};
+        kinematicPhysicalFieldHessians(dispPatch, pt, dispValuesAndDers,
+                                       numDerivatives, geoHessians,
+                                       geoJacobianInv, gradF);
+
+        double greenStrainGradient[27] = {0.0};
+        computeGreenLagrangeStrainGradient(dim, F, gradF,
+                                           greenStrainGradient);
+
+        int patchControlPointOffset = 0;
+        for (int p = 0; p < patchIdx; ++p)
+            patchControlPointOffset +=
+                deformationGradientGradient.numControlPoints(p);
+
+        DeviceMatrixView<double> gradFControlPoints =
+            deformationGradientGradient.controlPoints(patchIdx);
+        DeviceMatrixView<double> greenStrainGradientControlPoints =
+            greenLagrangeStrainGradient.controlPoints(patchIdx);
+        for (int r = 0; r < numActive; ++r)
+        {
+            const int localControlPoint = basis.activeIndex(pt, r);
+            const int globalControlPoint =
+                patchControlPointOffset + localControlPoint;
+            const double N = tensorBasisValue(r, dispP1, dim, numDerivatives,
+                                              dispValuesAndDers);
+            const double weight = N * weightForces[idx];
+
+            atomicAdd(&nodalWeights[globalControlPoint], weight);
+            for (int c = 0; c < dim3; ++c)
+            {
+                atomicAdd(&gradFControlPoints(localControlPoint, c),
+                          weight * gradF[c]);
+                atomicAdd(&greenStrainGradientControlPoints(localControlPoint, c),
+                          weight * greenStrainGradient[c]);
+            }
+        }
+    }
+}
+
 __global__
 void normalizeRecoveredStressKernel(MultiPatchDeviceView cauchyStress,
                                     DeviceVectorView<double> nodalWeights,
@@ -3476,6 +3717,8 @@ OptionList GPUAssembler::defaultOptions()
     opt.addInt("material_law", "0: StVK, 1: neo-Hookean", 1);
     opt.addSwitch("use_nonsymmetric_newton_solver",
                   "Use a nonsymmetric direct solver for Newton systems", false);
+    opt.addSwitch("print_timing",
+                  "Print assembly and solve timing diagnostics", false);
     return opt;
 }
 
@@ -3741,6 +3984,162 @@ void GPUAssembler::constructDeformationGradientFunction(GPUFunction& displacemen
 
     constructDeformationGradientFunctionFromDisplacement(
         displacementFunction.multiPatchDeviceView(), deformationGradientFunction);
+}
+
+void GPUAssembler::constructKinematicGradientFunctions(
+    const DeviceVectorView<double>& solVector,
+    const DeviceNestedArrayView<double>& fixedDoFs,
+    GPUFunction& deformationGradientGradientFunction,
+    GPUFunction& greenLagrangeStrainGradientFunction)
+{
+    constructDispSolution(solVector, fixedDoFs);
+    constructKinematicGradientFunctionsFromDisplacement(
+        m_displacement.deviceView(), deformationGradientGradientFunction,
+        greenLagrangeStrainGradientFunction);
+}
+
+void GPUAssembler::constructKinematicGradientFunctions(
+    GPUFunction& displacementFunction,
+    GPUFunction& deformationGradientGradientFunction,
+    GPUFunction& greenLagrangeStrainGradientFunction)
+{
+    assert(displacementFunction.domainDim() == m_domainDim &&
+           "Displacement function domain dimension must match assembler domain dimension");
+    assert(displacementFunction.targetDim() == m_targetDim &&
+           "Displacement function target dimension must match assembler target dimension");
+
+    constructKinematicGradientFunctionsFromDisplacement(
+        displacementFunction.multiPatchDeviceView(),
+        deformationGradientGradientFunction,
+        greenLagrangeStrainGradientFunction);
+}
+
+void GPUAssembler::constructKinematicGradientFunctionsFromDisplacement(
+    MultiPatchDeviceView displacementView,
+    GPUFunction& deformationGradientGradientFunction,
+    GPUFunction& greenLagrangeStrainGradientFunction)
+{
+    if (m_numDerivatives < 2)
+        throw std::invalid_argument(
+            "Kinematic gradient recovery requires numDerivatives >= 2");
+
+    const int dim3 = m_domainDim * m_domainDim * m_domainDim;
+    assert(deformationGradientGradientFunction.domainDim() == m_domainDim &&
+           "Grad F function domain dimension must match assembler domain dimension");
+    assert(deformationGradientGradientFunction.targetDim() == dim3 &&
+           "Grad F function target dimension must be dim * dim * dim");
+    assert(greenLagrangeStrainGradientFunction.domainDim() == m_domainDim &&
+           "Grad Green-Lagrange strain function domain dimension must match assembler domain dimension");
+    assert(greenLagrangeStrainGradientFunction.targetDim() == dim3 &&
+           "Grad Green-Lagrange strain function target dimension must be dim * dim * dim");
+
+    int minGrid, blockSize;
+    int gridSize;
+    cudaError_t err;
+    const int totalControlPoints = m_displacementHost.getTotalNumControlPoints();
+    const int totalKinematicGradientEntries = totalControlPoints * dim3;
+
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+        zeroFunctionControlPointsKernel, 0, totalKinematicGradientEntries);
+    gridSize = (totalKinematicGradientEntries + blockSize - 1) / blockSize;
+    zeroFunctionControlPointsKernel<<<gridSize, blockSize>>>(
+        deformationGradientGradientFunction.multiPatchDeviceView(),
+        totalKinematicGradientEntries);
+    err = cudaDeviceSynchronize();
+    assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler::constructKinematicGradientFunctions zero Grad F kernel");
+
+    zeroFunctionControlPointsKernel<<<gridSize, blockSize>>>(
+        greenLagrangeStrainGradientFunction.multiPatchDeviceView(),
+        totalKinematicGradientEntries);
+    err = cudaDeviceSynchronize();
+    assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler::constructKinematicGradientFunctions zero Grad E kernel");
+
+    m_GPData.setZero();
+    int offset = 0;
+    DeviceMatrixView<double> geoJacobianInvs(m_GPData.data() + offset, m_domainDim, m_totalGPs * m_domainDim);
+    offset += geoJacobianInvs.size();
+    DeviceVectorView<double> measures(m_GPData.data() + offset, m_totalGPs);
+    offset += measures.size();
+    DeviceVectorView<double> weightForces(m_GPData.data() + offset, m_totalGPs);
+    offset += weightForces.size();
+    DeviceVectorView<double> weightBodys(m_GPData.data() + offset, m_totalGPs);
+    offset += weightBodys.size();
+    DeviceMatrixView<double> Fs(m_GPData.data() + offset, m_domainDim, m_totalGPs * m_domainDim);
+    offset += Fs.size();
+    DeviceMatrixView<double> Ss(m_GPData.data() + offset, m_domainDim, m_totalGPs * m_domainDim);
+    offset += Ss.size();
+    DeviceMatrixView<double> Cs(m_GPData.data() + offset, m_dimTensor, m_totalGPs * m_dimTensor);
+    offset += Cs.size();
+
+    const std::vector<double> patchPoissonsRatios =
+        patchRealOptionValues("poissons_ratio");
+    const std::vector<double> patchYoungsModuli =
+        patchRealOptionValues("youngs_modulus");
+    const std::vector<int> patchMaterialLaws =
+        patchIntOptionValues("material_law");
+    std::vector<double> materialParameters;
+    materialParameters.reserve(static_cast<std::size_t>(3 * numPatches()));
+    for (int p = 0; p < numPatches(); ++p)
+    {
+        materialParameters.push_back(patchPoissonsRatios[static_cast<std::size_t>(p)]);
+        materialParameters.push_back(patchYoungsModuli[static_cast<std::size_t>(p)]);
+        materialParameters.push_back(static_cast<double>(
+            patchMaterialLaws[static_cast<std::size_t>(p)]));
+    }
+    DeviceArray<double> parameterValues(materialParameters);
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+        evaluateGPKernel_withoutComputingGPTableAndDers, 0, m_totalGPs);
+    gridSize = (m_totalGPs + blockSize - 1) / blockSize;
+    evaluateGPKernel_withoutComputingGPTableAndDers<<<gridSize, blockSize>>>(
+        m_numDerivatives, m_totalGPs,
+        parameterValues.vectorView(),
+        displacementView,
+        m_multiPatch.deviceView(),
+        m_GPTable.matrixView(m_domainDim, m_totalGPs),
+        m_wts.vectorView(),
+        m_geoValuesAndDerss.matrixView(m_geoP1, m_totalGPs * (m_numDerivatives + 1) * m_domainDim),
+        m_dispValuesAndDerss.matrixView(m_dispP1, m_totalGPs * (m_numDerivatives + 1) * m_domainDim),
+        geoJacobianInvs, measures, weightForces, weightBodys,
+        Fs, Ss, Cs);
+    err = cudaDeviceSynchronize();
+    assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler::constructKinematicGradientFunctions GP evaluation");
+
+    DeviceArray<double> nodalWeights(totalControlPoints);
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+        recoverKinematicGradientsAtNodesKernel, 0, m_totalGPs);
+    gridSize = (m_totalGPs + blockSize - 1) / blockSize;
+    recoverKinematicGradientsAtNodesKernel<<<gridSize, blockSize>>>(
+        m_numDerivatives, m_totalGPs,
+        displacementView,
+        m_multiPatch.deviceView(),
+        deformationGradientGradientFunction.multiPatchDeviceView(),
+        greenLagrangeStrainGradientFunction.multiPatchDeviceView(),
+        m_GPTable.matrixView(m_domainDim, m_totalGPs),
+        weightForces,
+        m_geoValuesAndDerss.matrixView(m_geoP1, m_totalGPs * (m_numDerivatives + 1) * m_domainDim),
+        m_dispValuesAndDerss.matrixView(m_dispP1, m_totalGPs * (m_numDerivatives + 1) * m_domainDim),
+        geoJacobianInvs,
+        Fs,
+        nodalWeights.vectorView());
+    err = cudaDeviceSynchronize();
+    assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler::constructKinematicGradientFunctions recovery");
+
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+        normalizeRecoveredStressKernel, 0, totalKinematicGradientEntries);
+    gridSize = (totalKinematicGradientEntries + blockSize - 1) / blockSize;
+    normalizeRecoveredStressKernel<<<gridSize, blockSize>>>(
+        deformationGradientGradientFunction.multiPatchDeviceView(),
+        nodalWeights.vectorView(),
+        totalControlPoints);
+    err = cudaDeviceSynchronize();
+    assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler::constructKinematicGradientFunctions normalize Grad F");
+
+    normalizeRecoveredStressKernel<<<gridSize, blockSize>>>(
+        greenLagrangeStrainGradientFunction.multiPatchDeviceView(),
+        nodalWeights.vectorView(),
+        totalControlPoints);
+    err = cudaDeviceSynchronize();
+    assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler::constructKinematicGradientFunctions normalize Grad E");
 }
 
 void GPUAssembler::constructDeformationGradientFunctionFromDisplacement(

@@ -24,8 +24,11 @@
 #endif
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <iomanip>
+#include <iostream>
 #include <limits>
 #include <vector>
 
@@ -253,12 +256,38 @@ bool GPUSolver::solveWithPardisoLU(const PardisoSpMat& A,
                                    Eigen::VectorXd& x,
                                    const char* context)
 {
-    PardisoLUSolver solver;
-    solver.analyzePattern(A);
-    if (solver.info() != Eigen::Success)
+    return solveWithPardisoLU(m_pardisoLUSolver, m_pardisoLUPatternAnalyzed,
+                              m_pardisoLURows, m_pardisoLUCols,
+                              m_pardisoLUNonZeros, A, b, x, context);
+}
+
+bool GPUSolver::factorWithPardisoLU(PardisoLUSolver& solver,
+                                    bool& patternAnalyzed,
+                                    int& rows,
+                                    int& cols,
+                                    int& nonZeros,
+                                    const PardisoSpMat& A,
+                                    const char* context)
+{
+    const bool matrixShapeChanged =
+        A.rows() != rows ||
+        A.cols() != cols ||
+        A.nonZeros() != nonZeros;
+
+    if (!patternAnalyzed || matrixShapeChanged)
     {
-        printf("Eigen PARDISO LU analyzePattern failed in %s\n", context);
-        return false;
+        solver.analyzePattern(A);
+        if (solver.info() != Eigen::Success)
+        {
+            printf("Eigen PARDISO LU analyzePattern failed in %s\n", context);
+            patternAnalyzed = false;
+            return false;
+        }
+
+        rows = static_cast<int>(A.rows());
+        cols = static_cast<int>(A.cols());
+        nonZeros = static_cast<int>(A.nonZeros());
+        patternAnalyzed = true;
     }
 
     solver.factorize(A);
@@ -267,6 +296,23 @@ bool GPUSolver::solveWithPardisoLU(const PardisoSpMat& A,
         printf("Eigen PARDISO LU factorization failed in %s\n", context);
         return false;
     }
+
+    return true;
+}
+
+bool GPUSolver::solveWithPardisoLU(PardisoLUSolver& solver,
+                                   bool& patternAnalyzed,
+                                   int& rows,
+                                   int& cols,
+                                   int& nonZeros,
+                                   const PardisoSpMat& A,
+                                   const Eigen::VectorXd& b,
+                                   Eigen::VectorXd& x,
+                                   const char* context)
+{
+    if (!factorWithPardisoLU(solver, patternAnalyzed, rows, cols, nonZeros,
+                             A, context))
+        return false;
 
     x = solver.solve(b);
     if (solver.info() != Eigen::Success)
@@ -342,6 +388,43 @@ void GPUSolver::print() const
                          m_fixedDoFs.view());
     cudaError_t err = cudaDeviceSynchronize();
     assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUSolver::print");
+}
+
+void GPUSolver::resetTimingStats()
+{
+    m_timingIterations = 0;
+    m_timingAssemblySeconds = 0.0;
+    m_timingDeviceToHostSeconds = 0.0;
+    m_timingLinearSolveSeconds = 0.0;
+    m_timingHostToDeviceSeconds = 0.0;
+}
+
+void GPUSolver::printTimingSummary(const std::string& label) const
+{
+    if (!m_printTiming || m_timingIterations == 0)
+        return;
+
+    const double total =
+        m_timingAssemblySeconds +
+        m_timingDeviceToHostSeconds +
+        m_timingLinearSolveSeconds +
+        m_timingHostToDeviceSeconds;
+    const std::ios::fmtflags oldFlags = std::cout.flags();
+    const std::streamsize oldPrecision = std::cout.precision();
+
+    std::cout << std::fixed << std::setprecision(6);
+    std::cout << label << "\n"
+              << "  Timed Newton iterations: " << m_timingIterations << "\n"
+              << "  Assembly time: " << m_timingAssemblySeconds << " s\n"
+              << "  Device-to-host transfer time: "
+              << m_timingDeviceToHostSeconds << " s\n"
+              << "  Linear solve time: " << m_timingLinearSolveSeconds << " s\n"
+              << "  Host-to-device transfer time: "
+              << m_timingHostToDeviceSeconds << " s\n"
+              << "  Total timed Newton work: " << total << " s\n";
+
+    std::cout.flags(oldFlags);
+    std::cout.precision(oldPrecision);
 }
 
 #if 0
@@ -485,10 +568,18 @@ bool GPUSolver::solveSingleIteration()
 
 bool GPUSolver::solveSingleIteration_Eigen()
 {
+    using Clock = std::chrono::high_resolution_clock;
+    auto seconds = [](const Clock::time_point& start,
+                      const Clock::time_point& end)
+    {
+        return std::chrono::duration<double>(end - start).count();
+    };
+
     //m_solVector.vectorView().print();
-    //auto start = std::chrono::high_resolution_clock::now();
+    const auto assemblyStart = Clock::now();
     m_assembler.assemble(m_solVector.vectorView(), m_numIterations, m_fixedDoFs.view());
-    //auto end = std::chrono::high_resolution_clock::now();
+    const auto assemblyEnd = Clock::now();
+    const double assemblySeconds = seconds(assemblyStart, assemblyEnd);
     //printf("Assemble time: %f seconds\n", std::chrono::duration<double>(end - start).count());
 #if 0
     if(m_numIterations == 0)
@@ -609,8 +700,12 @@ bool GPUSolver::solveSingleIteration_Eigen()
 
     //auto t_cpu_start = std::chrono::high_resolution_clock::now();
     using SpMat = Eigen::SparseMatrix<double, Eigen::RowMajor, int>;
+    const auto deviceToHostStart = Clock::now();
     SpMat A = m_assembler.csrMatrix().toEigenCSR();
     Eigen::VectorXd b = m_assembler.hostRHS();
+    const auto deviceToHostEnd = Clock::now();
+    const double deviceToHostSeconds =
+        seconds(deviceToHostStart, deviceToHostEnd);
 
     //std::cout << std::scientific << std::setprecision(12);
     //std::cout << "Matrix:\n" << Eigen::MatrixXd(A) << std::endl;
@@ -636,6 +731,7 @@ bool GPUSolver::solveSingleIteration_Eigen()
     const bool useNonsymmetricNewtonSolver =
         m_assembler.options().isSwitch("use_nonsymmetric_newton_solver") &&
         m_assembler.options().getSwitch("use_nonsymmetric_newton_solver");
+    const auto linearSolveStart = Clock::now();
 #if ENABLE_PARDISO
     if (useNonsymmetricNewtonSolver)
     {
@@ -676,6 +772,8 @@ bool GPUSolver::solveSingleIteration_Eigen()
         return false;
     }
 #endif
+    const auto linearSolveEnd = Clock::now();
+    const double linearSolveSeconds = seconds(linearSolveStart, linearSolveEnd);
     //std::cout << std::endl;
     //std::cout << "delta solution:\n" << x << std::endl;
     //auto t_cpu_end = std::chrono::high_resolution_clock::now();
@@ -685,7 +783,32 @@ bool GPUSolver::solveSingleIteration_Eigen()
     // ============================================================
     //  Copy x back to device (m_deltaSolVector)
     // ============================================================
+    const auto hostToDeviceStart = Clock::now();
     CHECK_CUDA(cudaMemcpy(m_deltaSolVector.data(), x.data(), n * sizeof(double), cudaMemcpyHostToDevice));
+    const auto hostToDeviceEnd = Clock::now();
+    const double hostToDeviceSeconds =
+        seconds(hostToDeviceStart, hostToDeviceEnd);
+
+    if (m_printTiming)
+    {
+        ++m_timingIterations;
+        m_timingAssemblySeconds += assemblySeconds;
+        m_timingDeviceToHostSeconds += deviceToHostSeconds;
+        m_timingLinearSolveSeconds += linearSolveSeconds;
+        m_timingHostToDeviceSeconds += hostToDeviceSeconds;
+
+        const std::ios::fmtflags oldFlags = std::cout.flags();
+        const std::streamsize oldPrecision = std::cout.precision();
+        std::cout << std::fixed << std::setprecision(6)
+                  << "Timing Newton iteration " << m_numIterations
+                  << ": assembly " << assemblySeconds
+                  << " s, device-to-host transfer " << deviceToHostSeconds
+                  << " s, linear solve " << linearSolveSeconds
+                  << " s, host-to-device transfer " << hostToDeviceSeconds
+                  << " s\n";
+        std::cout.flags(oldFlags);
+        std::cout.precision(oldPrecision);
+    }
 
     //end = std::chrono::high_resolution_clock::now();
     //printf("Total linear solve time (incl H<->D): %f seconds\n",

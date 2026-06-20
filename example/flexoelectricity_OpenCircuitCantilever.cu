@@ -54,11 +54,6 @@ int main(int argc, char* argv[])
         argc > 27 ? std::stoi(argv[27]) : 1;
     const int condensedEigenMaxIterations =
         argc > 28 ? std::stoi(argv[28]) : 60;
-    const double meterToMicrometer = 1.0e-6;
-    const double dielectricPermittivityModel = dielectricPermittivity * meterToMicrometer;
-    const double muLModel = muL * meterToMicrometer;
-    const double muTModel = muT * meterToMicrometer;
-    const double muSModel = muS * meterToMicrometer;
     if (initialLoadStep <= 0.0)
         throw std::invalid_argument("initialLoadStep must be positive.");
     if (materialLaw != 0 && materialLaw != 1)
@@ -76,19 +71,14 @@ int main(int argc, char* argv[])
     std::cout << "Elements: " << numEle_L << " x " << numEle_H
               << ", degree = " << numDegreeElevations + 1 << "\n";
     std::cout << "Material input: Y = " << YM << " GPa, nu = " << PR
-              << ", epsilon = " << dielectricPermittivity << " nJ/(V^2 m)"
+              << ", epsilon = " << dielectricPermittivity
               << ", length scale = " << lengthScale << "\n";
-    std::cout << "Material model units: epsilon = " << dielectricPermittivityModel
-              << " nJ/(V^2 um)\n";
     std::cout << "Material law: "
               << (materialLaw == 0 ? "St. Venant-Kirchhoff" : "neo-Hookean")
               << " (" << materialLaw << ")\n";
-    std::cout << "Flexoelectric tensor input: mu_L = " << muL
+    std::cout << "Flexoelectric tensor: mu_L = " << muL
               << ", mu_T = " << muT
-              << ", mu_S = " << muS << " nJ/(V m)\n";
-    std::cout << "Flexoelectric tensor model units: mu_L = " << muLModel
-              << ", mu_T = " << muTModel
-              << ", mu_S = " << muSModel << " nJ/(V um)\n";
+              << ", mu_S = " << muS << "\n";
     std::cout << "Southeast corner point load: (0, " << pointLoadY << ")\n";
     std::cout << "Initial load step factor: " << initialLoadStep << "\n";
     std::cout << "Target solver iterations per load step: " << targetNumIterations << "\n";
@@ -170,11 +160,11 @@ int main(int argc, char* argv[])
                                           bodyForce);
     assembler.options().setReal("youngs_modulus", YM);
     assembler.options().setReal("poissons_ratio", PR);
-    assembler.options().setReal("dielectric_permittivity", dielectricPermittivityModel);
+    assembler.options().setReal("dielectric_permittivity", dielectricPermittivity);
     assembler.options().setReal("length_scale", lengthScale);
-    assembler.options().setReal("flexoelectric_mu_L", muLModel);
-    assembler.options().setReal("flexoelectric_mu_T", muTModel);
-    assembler.options().setReal("flexoelectric_mu_S", muSModel);
+    assembler.options().setReal("flexoelectric_mu_L", muL);
+    assembler.options().setReal("flexoelectric_mu_T", muT);
+    assembler.options().setReal("flexoelectric_mu_S", muS);
     assembler.options().setReal("neumann_load_scaling", 0.0);
     assembler.options().setInt("material_law", materialLaw);
     assembler.options().setInt("include_hbar_flexo_correction",

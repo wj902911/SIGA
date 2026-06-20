@@ -2,9 +2,9 @@
 
 #include <Eigen/Core>
 #include <Eigen/Sparse>
+#include <GPUFlexoelectriciyAssembler.h>
 #include <GPUPostProcessor.h>
 #include <GPUSolver.h>
-#include <GPUStrainGradientElasticityAssembler.h>
 #include <SparseSystem.h>
 #include <TeeLogger.h>
 
@@ -114,6 +114,14 @@ bool parseBool(const std::string& value, const std::string& key)
                                 " (true/false, on/off, yes/no, or 1/0).");
 }
 
+std::string normalizedText(const std::string& value)
+{
+    std::string text = trim(value);
+    std::transform(text.begin(), text.end(), text.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return text;
+}
+
 bool parameterBool(const std::map<std::string, std::string>& parameters,
                    const std::string& key,
                    bool defaultValue)
@@ -122,6 +130,91 @@ bool parameterBool(const std::map<std::string, std::string>& parameters,
     if (it == parameters.end())
         return defaultValue;
     return parseBool(it->second, key);
+}
+
+std::string boundarySideName(const BoxSide& side)
+{
+    switch (side.index())
+    {
+    case boundary::west: return "west";
+    case boundary::east: return "east";
+    case boundary::south: return "south";
+    case boundary::north: return "north";
+    case boundary::front: return "front";
+    case boundary::back: return "back";
+    default: return "none";
+    }
+}
+
+Eigen::MatrixXd boundarySamplePoints(const BoxSide& side, int numPoints)
+{
+    if (numPoints < 1)
+        throw std::invalid_argument("numPoints must be positive.");
+
+    const int fixedDirection = side.direction();
+    if (fixedDirection < 0 || fixedDirection >= 2)
+        throw std::invalid_argument(
+            "Electrode boundary output is only implemented for 2D sides.");
+
+    const int freeDirection = fixedDirection == 0 ? 1 : 0;
+    const double fixedValue = side.parameter() ? 1.0 : 0.0;
+
+    Eigen::MatrixXd points(2, numPoints);
+    for (int i = 0; i < numPoints; ++i)
+    {
+        points(fixedDirection, i) = fixedValue;
+        points(freeDirection, i) =
+            numPoints == 1
+                ? 0.0
+                : static_cast<double>(i) /
+                      static_cast<double>(numPoints - 1);
+    }
+    return points;
+}
+
+bool parseOptionalBoundarySide(const std::string& value,
+                               BoxSide& side,
+                               const std::string& key)
+{
+    const std::string text = normalizedText(value);
+    if (text.empty() || text == "none" || text == "off" ||
+        text == "false" || text == "0")
+        return false;
+
+    if (text == "west" || text == "left")
+    {
+        side = BoxSide(boundary::west);
+        return true;
+    }
+    if (text == "east" || text == "right")
+    {
+        side = BoxSide(boundary::east);
+        return true;
+    }
+    if (text == "south" || text == "bottom" || text == "down")
+    {
+        side = BoxSide(boundary::south);
+        return true;
+    }
+    if (text == "north" || text == "top" || text == "up")
+    {
+        side = BoxSide(boundary::north);
+        return true;
+    }
+    if (text == "front")
+    {
+        side = BoxSide(boundary::front);
+        return true;
+    }
+    if (text == "back")
+    {
+        side = BoxSide(boundary::back);
+        return true;
+    }
+
+    throw std::invalid_argument(
+        "Expected boundary side for " + key +
+        " (none, west/east/south/north, or left/right/bottom/top).");
 }
 
 std::vector<double> solveGradedHalfThicknesses(int numHalfElements,
@@ -296,6 +389,14 @@ bool envFlag(const char* name)
     return text != "0" && text != "false" && text != "off";
 }
 
+double envDouble(const char* name, double defaultValue)
+{
+    const char* value = std::getenv(name);
+    if (value == nullptr || value[0] == '\0')
+        return defaultValue;
+    return std::atof(value);
+}
+
 int activeDofIndex(const DofMapper& mapper, int localDof, int patchIdx)
 {
     const std::vector<int>& dofs = mapper.getDofs(0);
@@ -417,16 +518,18 @@ void writeControlPointLocations(const GPUFunction& displacementFunction,
     }
 }
 
-void runFollowerMomentTangentCheck(GPUStrainGradientElasticityAssembler& assembler,
+void runFollowerMomentTangentCheck(GPUFlexoelectriciyAssembler& assembler,
                                    GPUSolver& solver,
-                                   const MultiBasis& basis,
+                                   const MultiBasis& basisDisplacement,
+                                   const MultiBasis& basisElectricPotential,
                                    const BoundaryConditions& bcInfo,
                                    double loadFactor,
                                    double H)
 {
-    std::vector<DofMapper> dofMappers(2);
-    basis.getMappers(true, bcInfo, dofMappers, true);
-    SparseSystem sparseSystem(dofMappers, Eigen::VectorXi::Ones(2));
+    std::vector<DofMapper> dofMappers(3);
+    basisDisplacement.getMappers(true, bcInfo, dofMappers, true);
+    basisElectricPotential.getMapper(true, bcInfo, 2, dofMappers.back(), true);
+    SparseSystem sparseSystem(dofMappers, Eigen::VectorXi::Ones(3));
 
     Eigen::VectorXd solution;
     solver.solutionToHost(solution);
@@ -444,8 +547,9 @@ void runFollowerMomentTangentCheck(GPUStrainGradientElasticityAssembler& assembl
         onlyBoundaryIndexText == nullptr || onlyBoundaryIndexText[0] == '\0'
             ? -1
             : std::atoi(onlyBoundaryIndexText);
-    const Eigen::VectorXi eastDofs = basis.basis(0).boundary(BoxSide(boundary::east));
-    const TensorBsplineBasis& patchBasis = basis.basis(0);
+    const Eigen::VectorXi eastDofs =
+        basisDisplacement.basis(0).boundary(BoxSide(boundary::east));
+    const TensorBsplineBasis& patchBasis = basisDisplacement.basis(0);
     const int sizeU = patchBasis.size(0);
     const int degreeV = patchBasis.getOrder(1);
     const std::vector<double>& knotsV = patchBasis.getKnots(1);
@@ -608,6 +712,10 @@ int main(int argc, char* argv[])
     double YM = 1.0;
     double PR = 0.495;
     double lengthScale = 5.0;
+    double dielectricPermittivity = 0.092;
+    double muL = 0.0;
+    double muT = 10.0;
+    double muS = 0.0;
     double followerMoment = -0.05;
     double centerElementThicknessRatio = 0.0;
     double surfaceElementThicknessRatio = 0.0;
@@ -619,10 +727,12 @@ int main(int argc, char* argv[])
     double initialLoadStep = 0.005;
     int maxNewtonIterations = 50;
     int targetNumIterations = 5;
-    bool outputGaussPointData = true;
+    int includeHbarFlexoCorrection = 0;
+    bool outputGaussPointData = false;
     bool outputControlPointLocations = true;
     bool printTiming = false;
     std::string outputPostfix = "default";
+    std::string electrodeBoundary = "none";
 
     const bool useParameterFile = argc == 2 &&
         std::filesystem::path(argv[1]).extension() == ".txt";
@@ -635,6 +745,12 @@ int main(int argc, char* argv[])
         YM = parameterDouble(parameters, "YM", YM);
         PR = parameterDouble(parameters, "PR", PR);
         lengthScale = parameterDouble(parameters, "lengthScale", lengthScale);
+        dielectricPermittivity =
+            parameterDouble(parameters, "dielectricPermittivity",
+                            dielectricPermittivity);
+        muL = parameterDouble(parameters, "muL", muL);
+        muT = parameterDouble(parameters, "muT", muT);
+        muS = parameterDouble(parameters, "muS", muS);
         followerMoment = parameterDouble(parameters, "followerMoment",
                                          followerMoment);
         centerElementThicknessRatio =
@@ -655,6 +771,9 @@ int main(int argc, char* argv[])
                                            maxNewtonIterations);
         targetNumIterations = parameterInt(parameters, "targetNumIterations",
                                            targetNumIterations);
+        includeHbarFlexoCorrection =
+            parameterInt(parameters, "includeHbarFlexoCorrection",
+                         includeHbarFlexoCorrection);
         outputGaussPointData =
             parameterBool(parameters, "outputGaussPointData",
                           outputGaussPointData);
@@ -662,6 +781,8 @@ int main(int argc, char* argv[])
             parameterBool(parameters, "outputControlPointLocations",
                           outputControlPointLocations);
         printTiming = parameterBool(parameters, "printTiming", printTiming);
+        electrodeBoundary =
+            parameterString(parameters, "electrodeBoundary", electrodeBoundary);
         outputPostfix = parameterString(parameters, "outputPostfix", outputPostfix);
     }
     else
@@ -686,6 +807,12 @@ int main(int argc, char* argv[])
         if (argc > 16) printTiming = parseBool(argv[16], "printTiming");
         if (argc > 17) centerElementThicknessRatio = std::stod(argv[17]);
         if (argc > 18) surfaceElementThicknessRatio = std::stod(argv[18]);
+        if (argc > 19) dielectricPermittivity = std::stod(argv[19]);
+        if (argc > 20) muL = std::stod(argv[20]);
+        if (argc > 21) muT = std::stod(argv[21]);
+        if (argc > 22) muS = std::stod(argv[22]);
+        if (argc > 23) includeHbarFlexoCorrection = std::stoi(argv[23]);
+        if (argc > 24) electrodeBoundary = argv[24];
         outputPostfix = "manual";
         for (int i = 1; i < argc; ++i)
             outputPostfix += "_" + std::string(argv[i]);
@@ -703,6 +830,9 @@ int main(int argc, char* argv[])
         throw std::invalid_argument("initialLoadStep must be in (0, 1].");
     if (maxNewtonIterations < 1)
         throw std::invalid_argument("maxNewtonIterations must be positive.");
+    if (outputGaussPointData)
+        throw std::invalid_argument(
+            "outputGaussPointData is not available for the flexoelectric follower-moment example.");
     const bool useGradedHMesh =
         centerElementThicknessRatio > 0.0 ||
         surfaceElementThicknessRatio > 0.0;
@@ -713,26 +843,29 @@ int main(int argc, char* argv[])
         throw std::invalid_argument(
             "Both centerElementThicknessRatio and surfaceElementThicknessRatio must be positive for graded H mesh.");
     }
+    BoxSide electrodeBoundarySide;
+    const bool useElectrodeBoundary =
+        parseOptionalBoundarySide(electrodeBoundary, electrodeBoundarySide,
+                                  "electrodeBoundary");
 
-    const std::string rootFolder = "./strainGradient_2DBeamBending_followerMoment";
+    const std::string rootFolder =
+        "./flexoelectricity_2DBeamBending_followerMoment";
     const std::string outputFolderName =
-        "strainGradient_2DBeamBending_followerMoment_output_" + outputPostfix;
-    const std::string filenameParaview = "sg_bend_fm_";
+        "flexoelectricity_2DBeamBending_followerMoment_output_" +
+        outputPostfix;
+    const std::string filenameParaview = "flexo_bend_fm_";
     const std::string outputFolder =
         rootFolder + "/" + outputFolderName;
     std::filesystem::create_directories(outputFolder);
     const std::string sectionDataFolder = outputFolder + "/SectionData";
     std::filesystem::create_directories(sectionDataFolder);
-    const std::string gaussPointDataFolder = outputFolder + "/GaussPointData";
-    if (outputGaussPointData)
-        std::filesystem::create_directories(gaussPointDataFolder);
     const std::string controlPointLocationFolder =
         outputFolder + "/ControlPointLocations";
     if (outputControlPointLocations)
         std::filesystem::create_directories(controlPointLocationFolder);
     TeeLogger log(outputFolder + "/log.txt");
 
-    std::cout << "2D strain-gradient cantilever beam bending with follower moment\n";
+    std::cout << "2D flexoelectric cantilever beam bending with follower moment\n";
     std::cout << "Beam length: " << L << "\n";
     std::cout << "Beam height: " << H << "\n";
     std::cout << "Number of elements: "
@@ -749,8 +882,22 @@ int main(int argc, char* argv[])
         std::cout << "H-direction mesh: uniform\n";
     }
     std::cout << "Degree elevations: " << numDegElev << "\n";
-    std::cout << "Material: Y = " << YM << ", nu = " << PR
+    std::cout << "Mechanical material: Y = " << YM << ", nu = " << PR
               << ", length scale = " << lengthScale << "\n";
+    std::cout << "Dielectric permittivity: "
+              << dielectricPermittivity << "\n";
+    std::cout << "Flexoelectric tensor: mu_L = " << muL
+              << ", mu_T = " << muT
+              << ", mu_S = " << muS << "\n";
+    std::cout << "hbar flexoelectric correction: "
+              << (includeHbarFlexoCorrection ? "on" : "off") << "\n";
+    std::cout << "Electrical BC: bottom side grounded";
+    if (useElectrodeBoundary)
+        std::cout << ", " << boundarySideName(electrodeBoundarySide)
+                  << " side equipotential electrode";
+    else
+        std::cout << ", remaining boundaries open circuit";
+    std::cout << "\n";
     std::cout << "Right-end follower moment: " << followerMoment << "\n";
     std::cout << "Initial load step factor: " << initialLoadStep << "\n";
     std::cout << "Max Newton iterations per load step: "
@@ -784,30 +931,41 @@ int main(int argc, char* argv[])
     geometry.addPatch(patch);
     geometry.computeTopology();
 
-    MultiBasis basis(geometry);
+    MultiBasis basisDisplacement(geometry);
+    MultiBasis basisElectricPotential(geometry);
     for (int i = 0; i < numDegElev; ++i)
-        basis.degreeElevate(false);
-    basis.uniformRefine(0, numEle_L - 1);
+    {
+        basisDisplacement.degreeElevate(false);
+        basisElectricPotential.degreeElevate(false);
+    }
+    basisDisplacement.uniformRefine(0, numEle_L - 1);
+    basisElectricPotential.uniformRefine(0, numEle_L - 1);
     if (useGradedHMesh)
     {
         const std::vector<double> hKnots =
             hDirectionGradedInternalKnots(numEle_H,
                                           surfaceElementThicknessRatio,
                                           centerElementThicknessRatio);
-        basis.insertKnots(1, hKnots);
+        basisDisplacement.insertKnots(1, hKnots);
+        basisElectricPotential.insertKnots(1, hKnots);
     }
     else
     {
-        basis.uniformRefine(1, numEle_H - 1);
+        basisDisplacement.uniformRefine(1, numEle_H - 1);
+        basisElectricPotential.uniformRefine(1, numEle_H - 1);
     }
     const MultiPatch refinedGeometry =
-        outputControlPointLocations ? buildRefinedGeometry(geometry, basis)
-                                    : MultiPatch();
+        outputControlPointLocations
+            ? buildRefinedGeometry(geometry, basisDisplacement)
+            : MultiPatch();
 
     BoundaryConditions bcInfo;
     const std::vector<double> zeros{0.0, 0.0};
     bcInfo.addCondition(0, boundary::west, condition_type::dirichlet, zeros, 0);
     bcInfo.addCondition(0, boundary::southwest, condition_type::dirichlet, zeros, 1);
+    bcInfo.addCondition(0, boundary::south, condition_type::dirichlet, zeros, 2);
+    if (useElectrodeBoundary)
+        bcInfo.addElectrodeBoundary(0, electrodeBoundarySide, 2);
 
     const std::vector<double> moment{followerMoment};
     bcInfo.addCondition(0, boundary::east, condition_type::follower_moment,
@@ -816,12 +974,21 @@ int main(int argc, char* argv[])
     Eigen::VectorXd bodyForce(2);
     bodyForce << 0.0, 0.0;
 
-    GPUStrainGradientElasticityAssembler assembler(geometry, basis, bcInfo, bodyForce);
+    GPUFlexoelectriciyAssembler assembler(geometry, basisDisplacement,
+                                          basisElectricPotential, bcInfo,
+                                          bodyForce);
     assembler.options().setReal("youngs_modulus", YM);
     assembler.options().setReal("poissons_ratio", PR);
     assembler.options().setReal("length_scale", lengthScale);
+    assembler.options().setReal("dielectric_permittivity",
+                                dielectricPermittivity);
+    assembler.options().setReal("flexoelectric_mu_L", muL);
+    assembler.options().setReal("flexoelectric_mu_T", muT);
+    assembler.options().setReal("flexoelectric_mu_S", muS);
     assembler.options().setReal("neumann_load_scaling", 0.0);
     assembler.options().setInt("material_law", materialLaw);
+    assembler.options().setInt("include_hbar_flexo_correction",
+                               includeHbarFlexoCorrection);
     assembler.options().setSwitch("use_nonsymmetric_newton_solver", true);
     assembler.options().setSwitch("print_timing", printTiming);
     std::cout << "Initialized system with " << assembler.numDofs() << " dofs.\n";
@@ -836,43 +1003,46 @@ int main(int argc, char* argv[])
     if (envFlag("SIGA_FOLLOWER_MOMENT_TANGENT_CHECK_INITIAL") ||
         envFlag("SIGA_FOLLOWER_MOMENT_TANGENT_CHECK_ONLY"))
     {
-        runFollowerMomentTangentCheck(assembler, solver, basis, bcInfo, 1.0,
-                                      H);
+        runFollowerMomentTangentCheck(assembler, solver, basisDisplacement,
+                                      basisElectricPotential, bcInfo, 1.0, H);
         if (envFlag("SIGA_FOLLOWER_MOMENT_TANGENT_CHECK_ONLY"))
             return 0;
     }
 
     MultiPatch displacementHost;
-    basis.giveBasis(displacementHost, 2);
+    basisDisplacement.giveBasis(displacementHost, 2);
     GPUFunction displacementFunction(displacementHost);
     assembler.constructSolution(solver.solutionView(),
                                 solver.allFixedDofsView(),
                                 displacementFunction);
 
-    MultiPatch firstPiolaHost;
-    basis.giveBasis(firstPiolaHost, 4);
-    GPUFunction firstPiolaFunction(firstPiolaHost);
+    MultiPatch electricPotentialHost;
+    basisElectricPotential.giveBasis(electricPotentialHost, 1);
+    GPUFunction electricPotentialFunction(electricPotentialHost);
+
+    MultiPatch electricFieldHost;
+    basisElectricPotential.giveBasis(electricFieldHost, 2);
+    GPUFunction electricFieldFunction(electricFieldHost);
 
     MultiPatch cauchyStressHost;
-    basis.giveBasis(cauchyStressHost, assembler.dimTensor());
+    basisDisplacement.giveBasis(cauchyStressHost, assembler.dimTensor());
     GPUFunction cauchyStressFunction(cauchyStressHost);
-    assembler.constructStrainGradientStressFunctions(displacementFunction,
-                                                     firstPiolaFunction,
-                                                     cauchyStressFunction);
+    assembler.constructCauchyStressFunction(displacementFunction,
+                                            cauchyStressFunction);
 
     MultiPatch deformationGradientHost;
-    basis.giveBasis(deformationGradientHost, 4);
+    basisDisplacement.giveBasis(deformationGradientHost, 4);
     GPUFunction deformationGradientFunction(deformationGradientHost);
     assembler.constructDeformationGradientFunction(displacementFunction,
                                                    deformationGradientFunction);
 
     MultiPatch deformationGradientGradientHost;
-    basis.giveBasis(deformationGradientGradientHost, 8);
+    basisDisplacement.giveBasis(deformationGradientGradientHost, 8);
     GPUFunction deformationGradientGradientFunction(
         deformationGradientGradientHost);
 
     MultiPatch greenLagrangeStrainGradientHost;
-    basis.giveBasis(greenLagrangeStrainGradientHost, 8);
+    basisDisplacement.giveBasis(greenLagrangeStrainGradientHost, 8);
     GPUFunction greenLagrangeStrainGradientFunction(
         greenLagrangeStrainGradientHost);
     assembler.constructKinematicGradientFunctions(
@@ -886,8 +1056,9 @@ int main(int argc, char* argv[])
     std::vector<int> numPointsPerPatch{numPointsPerPatchValue};
     GPUPostProcessor postProcessor(assembler, numPointsPerPatch, true, 2);
     postProcessor.addFunction("displacement", &displacementFunction);
-    postProcessor.addFunction("first_piola", &firstPiolaFunction);
     postProcessor.addFunction("stress_cauchy", &cauchyStressFunction);
+    postProcessor.addFunction("electric_potential", &electricPotentialFunction);
+    postProcessor.addFunction("electric_field", &electricFieldFunction);
     postProcessor.addFunction("grad_F", &deformationGradientGradientFunction);
     postProcessor.addFunction("grad_green_lagrange_strain",
                               &greenLagrangeStrainGradientFunction);
@@ -904,31 +1075,57 @@ int main(int argc, char* argv[])
                 static_cast<double>(numSectionPoints - 1);
         }
 
-        const Eigen::MatrixXd sectionStress =
-            firstPiolaFunction.eval(0, sectionPoints);
         const Eigen::MatrixXd sectionCauchyStress =
             cauchyStressFunction.eval(0, sectionPoints);
         const Eigen::MatrixXd sectionDeformationGradient =
             deformationGradientFunction.eval(0, sectionPoints);
+        const Eigen::MatrixXd sectionPotential =
+            electricPotentialFunction.eval(0, sectionPoints);
+        const Eigen::MatrixXd sectionElectricField =
+            electricFieldFunction.eval(0, sectionPoints);
         const std::string stepFolder =
             sectionDataFolder + "/step_" + std::to_string(outputStep);
         std::filesystem::create_directories(stepFolder);
+        const auto openSectionFile = [&](const std::string& filename)
+        {
+            const std::string path = stepFolder + "/" + filename;
+            std::ofstream out(path);
+            if (!out)
+                throw std::runtime_error("Cannot open section output file: " +
+                                         path);
+            out << std::setprecision(16);
+            return out;
+        };
 
-        std::ofstream stressOut(stepFolder + "/SecStress11.txt");
-        stressOut << std::setprecision(16);
+        std::ofstream stressOut = openSectionFile("SecStress11.txt");
         for (int i = 0; i < numSectionPoints; ++i)
-            stressOut << sectionStress(0, i) << "\n";
+        {
+            const double sigma11 = sectionCauchyStress(0, i);
+            const double sigma12 = sectionCauchyStress(2, i);
+            const double f12 = sectionDeformationGradient(1, i);
+            const double f22 = sectionDeformationGradient(3, i);
+            stressOut << sigma11 * f22 - sigma12 * f12 << "\n";
+        }
 
-        std::ofstream cauchyStressOut(stepFolder + "/SecCauStress11.txt");
-        cauchyStressOut << std::setprecision(16);
+        std::ofstream cauchyStressOut =
+            openSectionFile("SecCauStress11.txt");
         for (int i = 0; i < numSectionPoints; ++i)
             cauchyStressOut << sectionCauchyStress(0, i) << "\n";
+
+        std::ofstream potentialOut =
+            openSectionFile("SecElectricPotential.txt");
+        for (int i = 0; i < numSectionPoints; ++i)
+            potentialOut << sectionPotential(0, i) << "\n";
+
+        std::ofstream electricFieldOut =
+            openSectionFile("SecElectricFieldY.txt");
+        for (int i = 0; i < numSectionPoints; ++i)
+            electricFieldOut << sectionElectricField(1, i) << "\n";
 
         const auto writeDeformationGradientComponent =
             [&](const std::string& filename, int component)
         {
-            std::ofstream out(stepFolder + "/" + filename);
-            out << std::setprecision(16);
+            std::ofstream out = openSectionFile(filename);
             for (int i = 0; i < numSectionPoints; ++i)
                 out << sectionDeformationGradient(component, i) << "\n";
         };
@@ -938,11 +1135,49 @@ int main(int argc, char* argv[])
         writeDeformationGradientComponent("SecF22.txt", 3);
     };
 
+    auto outputFinalElectrodePotential = [&](int lastOutputStep)
+    {
+        if (!useElectrodeBoundary)
+            return;
+
+        constexpr int numBoundaryPoints = 101;
+        const Eigen::MatrixXd boundaryPoints =
+            boundarySamplePoints(electrodeBoundarySide, numBoundaryPoints);
+        const Eigen::MatrixXd boundaryPotential =
+            electricPotentialFunction.eval(0, boundaryPoints);
+
+        const double electrodePotential = boundaryPotential.row(0).mean();
+        const double minPotential = boundaryPotential.row(0).minCoeff();
+        const double maxPotential = boundaryPotential.row(0).maxCoeff();
+        const double spread = maxPotential - minPotential;
+
+        const std::string stepFolder =
+            sectionDataFolder + "/step_" + std::to_string(lastOutputStep);
+        std::filesystem::create_directories(stepFolder);
+        const std::string path =
+            stepFolder + "/ElectrodeElectricPotential.txt";
+        std::ofstream out(path);
+        if (!out)
+            throw std::runtime_error("Cannot open electrode potential output file: " +
+                                     path);
+        out << std::setprecision(16) << electrodePotential << "\n";
+
+        std::cout << "Wrote final electrode electric potential to "
+                  << path << " (boundary: "
+                  << boundarySideName(electrodeBoundarySide)
+                  << ", sampled spread: " << spread << ").\n";
+    };
+
     auto writeParaviewOutput = [&](int outputStep, double loadFactor)
     {
         assembler.constructSolution(solver.solutionView(),
                                     solver.allFixedDofsView(),
                                     displacementFunction);
+        assembler.constructElecSolution(solver.solutionView(),
+                                        solver.allFixedDofsView(),
+                                        electricPotentialFunction);
+        assembler.constructElectricFieldFunction(electricPotentialFunction,
+                                                 electricFieldFunction);
         if (outputControlPointLocations)
         {
             writeControlPointLocations(displacementFunction,
@@ -950,21 +1185,14 @@ int main(int argc, char* argv[])
                                        controlPointLocationFolder,
                                        outputStep);
         }
-        assembler.constructStrainGradientStressFunctions(displacementFunction,
-                                                         firstPiolaFunction,
-                                                         cauchyStressFunction);
+        assembler.constructCauchyStressFunction(displacementFunction,
+                                                cauchyStressFunction);
         assembler.constructDeformationGradientFunction(displacementFunction,
                                                        deformationGradientFunction);
         assembler.constructKinematicGradientFunctions(
             displacementFunction,
             deformationGradientGradientFunction,
             greenLagrangeStrainGradientFunction);
-        if (outputGaussPointData)
-        {
-            assembler.writeGaussPointKinematicsTSV(displacementFunction,
-                                                   gaussPointDataFolder,
-                                                   outputStep);
-        }
         postProcessor.outputToParaview(filePrefix, outputStep, collection);
         collection.saveStep();
         outputFixedEndSectionStress11(outputStep);
@@ -1013,6 +1241,22 @@ int main(int argc, char* argv[])
             if (loadStep < minLoadStep)
                 throw std::runtime_error("Load step became too small before convergence.");
             continue;
+        }
+
+        if (envFlag("SIGA_FLEXO_NUMERIC_JACOBIAN_CHECK"))
+        {
+            Eigen::VectorXd jacobianCheckSolution;
+            solver.solutionToHost(jacobianCheckSolution);
+            const double relativeStep = envDouble(
+                "SIGA_FLEXO_NUMERIC_JACOBIAN_REL_STEP", 1.0e-6);
+            std::cout << "Checking flexoelectric numerical Jacobian at step "
+                      << step << ", load factor " << loadFactor << ".\n";
+            assembler.checkNumericalJacobian(jacobianCheckSolution,
+                                             solver.allFixedDofsView(),
+                                             relativeStep,
+                                             stepNumIterations);
+            if (envFlag("SIGA_FLEXO_NUMERIC_JACOBIAN_CHECK_ONLY"))
+                return 0;
         }
 
         writeParaviewOutput(outputStep++, loadFactor);
@@ -1064,6 +1308,7 @@ int main(int argc, char* argv[])
     }
 
     collection.save();
+    outputFinalElectrodePotential(outputStep - 1);
 
     Eigen::VectorXd solution;
     solver.solutionToHost(solution);
@@ -1071,7 +1316,8 @@ int main(int argc, char* argv[])
     if (printTiming)
         solver.printTimingSummary("Total Newton solver timing");
     if (envFlag("SIGA_FOLLOWER_MOMENT_TANGENT_CHECK"))
-        runFollowerMomentTangentCheck(assembler, solver, basis, bcInfo,
+        runFollowerMomentTangentCheck(assembler, solver, basisDisplacement,
+                                      basisElectricPotential, bcInfo,
                                       loadFactor, H);
     std::cout << "Paraview output: " << outputFolder << "\n";
     return solver.isConverged() ? 0 : 2;

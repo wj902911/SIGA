@@ -1698,6 +1698,156 @@ void normalizeRecoveredFlexoFunctionKernel(MultiPatchDeviceView result,
     }
 }
 
+__device__
+void flexoFirstPiolaFromGreenStress(int dim, const double* F,
+                                    const double* gradF,
+                                    const double* secondPK,
+                                    const double* strainGradientStress,
+                                    double* firstPiola)
+{
+    const int dim2 = dim * dim;
+    for (int a = 0; a < dim; ++a)
+        for (int A = 0; A < dim; ++A)
+        {
+            double value = 0.0;
+            for (int B = 0; B < dim; ++B)
+                value += 0.5 * F[a * dim + B] *
+                         (secondPK[A * dim + B] + secondPK[B * dim + A]);
+            for (int I = 0; I < dim; ++I)
+                for (int K = 0; K < dim; ++K)
+                    value += 0.5 *
+                             (strainGradientStress[A * dim2 + I * dim + K] +
+                              strainGradientStress[I * dim2 + A * dim + K]) *
+                             gradF[a * dim2 + I * dim + K];
+            firstPiola[a * dim + A] = value;
+        }
+}
+
+__global__
+void recoverFlexoelectricFirstPiolaStressAtNodesKernel(
+    int numDerivatives, int totalNumGPs, int stride,
+    MultiPatchDeviceView displacement,
+    MultiPatchDeviceView firstPiolaStress,
+    DeviceMatrixView<double> pts,
+    DeviceMatrixView<double> dispValuesAndDerss,
+    DeviceVectorView<double> flexoGPData,
+    DeviceVectorView<double> nodalWeights)
+{
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x;
+         idx < totalNumGPs; idx += blockDim.x * gridDim.x)
+    {
+        const int dim = displacement.domainDim();
+        const int dim2 = dim * dim;
+        const FlexoGPOffsets offsets = flexoMakeGPOffsets(dim);
+
+        int patchIdx = 0;
+        displacement.threadPatch(idx, patchIdx);
+        TensorBsplineBasisDeviceView basis = displacement.basis(patchIdx);
+        const int basisP1 = basis.knotsOrder(0) + 1;
+        const int numActive = basis.numActiveControlPoints();
+        DeviceVectorView<double> pt(pts.data() + idx * dim, dim);
+        DeviceMatrixView<double> dispValuesAndDers(
+            dispValuesAndDerss.data() + idx * basisP1 * (numDerivatives + 1) * dim,
+            basisP1, (numDerivatives + 1) * dim);
+
+        double* gp = flexoGPData.data() + idx * stride;
+        double firstPiolaData[9] = {0.0};
+        flexoFirstPiolaFromGreenStress(
+            dim, gp + offsets.FOffset, gp + offsets.gradFOffset,
+            gp + offsets.SOffset, gp + offsets.SgradOffset, firstPiolaData);
+        const double weightForce = gp[offsets.weightForceOffset];
+
+        int patchControlPointOffset = 0;
+        for (int p = 0; p < patchIdx; ++p)
+            patchControlPointOffset += firstPiolaStress.numControlPoints(p);
+
+        DeviceMatrixView<double> stressControlPoints =
+            firstPiolaStress.controlPoints(patchIdx);
+        for (int r = 0; r < numActive; ++r)
+        {
+            const int localControlPoint = basis.activeIndex(pt, r);
+            const int globalControlPoint =
+                patchControlPointOffset + localControlPoint;
+            const double N = tensorBasisValueFlexo(
+                r, basisP1, dim, numDerivatives, dispValuesAndDers);
+            const double weight = N * weightForce;
+
+            atomicAdd(&nodalWeights[globalControlPoint], weight);
+            for (int c = 0; c < dim2; ++c)
+                atomicAdd(&stressControlPoints(localControlPoint, c),
+                          weight * firstPiolaData[c]);
+        }
+    }
+}
+
+__global__
+void recoverFlexoelectricCauchyStressAtNodesKernel(
+    int numDerivatives, int totalNumGPs, int stride,
+    MultiPatchDeviceView displacement,
+    MultiPatchDeviceView cauchyStress,
+    DeviceMatrixView<double> pts,
+    DeviceMatrixView<double> dispValuesAndDerss,
+    DeviceVectorView<double> flexoGPData,
+    DeviceVectorView<double> nodalWeights)
+{
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x;
+         idx < totalNumGPs; idx += blockDim.x * gridDim.x)
+    {
+        const int dim = displacement.domainDim();
+        const int dimTensor = dim * (dim + 1) / 2;
+        const FlexoGPOffsets offsets = flexoMakeGPOffsets(dim);
+
+        int patchIdx = 0;
+        displacement.threadPatch(idx, patchIdx);
+        TensorBsplineBasisDeviceView basis = displacement.basis(patchIdx);
+        const int basisP1 = basis.knotsOrder(0) + 1;
+        const int numActive = basis.numActiveControlPoints();
+        DeviceVectorView<double> pt(pts.data() + idx * dim, dim);
+        DeviceMatrixView<double> dispValuesAndDers(
+            dispValuesAndDerss.data() + idx * basisP1 * (numDerivatives + 1) * dim,
+            basisP1, (numDerivatives + 1) * dim);
+
+        double* gp = flexoGPData.data() + idx * stride;
+        double firstPiolaData[9] = {0.0};
+        flexoFirstPiolaFromGreenStress(
+            dim, gp + offsets.FOffset, gp + offsets.gradFOffset,
+            gp + offsets.SOffset, gp + offsets.SgradOffset, firstPiolaData);
+
+        DeviceMatrixView<double> F(gp + offsets.FOffset, dim, dim);
+        DeviceMatrixView<double> firstPiola(firstPiolaData, dim, dim);
+        double sigmaData[9] = {0.0};
+        DeviceMatrixView<double> sigma(sigmaData, dim, dim);
+        firstPiola.timeTranspose(F, sigma);
+        sigma.times(1.0 / F.determinant());
+
+        double sigmaVecData[6] = {0.0};
+        DeviceVectorView<double> sigmaVec(sigmaVecData, dimTensor);
+        voigtStressView(sigmaVec, sigma);
+        const double weightForce = gp[offsets.weightForceOffset];
+
+        int patchControlPointOffset = 0;
+        for (int p = 0; p < patchIdx; ++p)
+            patchControlPointOffset += cauchyStress.numControlPoints(p);
+
+        DeviceMatrixView<double> stressControlPoints =
+            cauchyStress.controlPoints(patchIdx);
+        for (int r = 0; r < numActive; ++r)
+        {
+            const int localControlPoint = basis.activeIndex(pt, r);
+            const int globalControlPoint =
+                patchControlPointOffset + localControlPoint;
+            const double N = tensorBasisValueFlexo(
+                r, basisP1, dim, numDerivatives, dispValuesAndDers);
+            const double weight = N * weightForce;
+
+            atomicAdd(&nodalWeights[globalControlPoint], weight);
+            for (int c = 0; c < dimTensor; ++c)
+                atomicAdd(&stressControlPoints(localControlPoint, c),
+                          weight * sigmaVec[c]);
+        }
+    }
+}
+
 __global__
 void evaluateFlexoGPKernel(int numDerivatives, int totalNumGPs, int stride,
                            DeviceVectorView<double> materialParameters,
@@ -2824,8 +2974,17 @@ GPUFlexoelectriciyAssembler::GPUFlexoelectriciyAssembler(
                                  cudaGetErrorString(err));
     }
 
-    DeviceArray<int> cooRows(entryCountHost);
-    DeviceArray<int> cooCols(entryCountHost);
+    std::vector<int> followerMomentCOORows;
+    std::vector<int> followerMomentCOOCols;
+    appendFollowerMomentCOOPattern(boundaryConditions(), displacementBasis,
+                                   sparseSystem, dofMappers, domainDim(),
+                                   targetDim(), followerMomentCOORows,
+                                   followerMomentCOOCols);
+    const int followerMomentEntryCount =
+        static_cast<int>(followerMomentCOORows.size());
+
+    DeviceArray<int> cooRows(entryCountHost + followerMomentEntryCount);
+    DeviceArray<int> cooCols(entryCountHost + followerMomentEntryCount);
     err = cudaMemset(entryCounter, 0, sizeof(int));
     if (err != cudaSuccess)
     {
@@ -2852,6 +3011,26 @@ GPUFlexoelectriciyAssembler::GPUFlexoelectriciyAssembler(
                                  cudaGetErrorString(err));
     }
     cudaFree(entryCounter);
+
+    if (followerMomentEntryCount > 0)
+    {
+        err = cudaMemcpy(cooRows.data() + entryCountHost,
+                         followerMomentCOORows.data(),
+                         followerMomentEntryCount * sizeof(int),
+                         cudaMemcpyHostToDevice);
+        if (err != cudaSuccess)
+            throw std::runtime_error(std::string("CUDA memcpy failed while appending follower moment COO rows: ") +
+                                     cudaGetErrorString(err));
+
+        err = cudaMemcpy(cooCols.data() + entryCountHost,
+                         followerMomentCOOCols.data(),
+                         followerMomentEntryCount * sizeof(int),
+                         cudaMemcpyHostToDevice);
+        if (err != cudaSuccess)
+            throw std::runtime_error(std::string("CUDA memcpy failed while appending follower moment COO cols: ") +
+                                     cudaGetErrorString(err));
+    }
+
     setCSRMatrixFromCOO(sparseSystem.matrixRows(), sparseSystem.matrixCols(),
                         cooRows.vectorView(), cooCols.vectorView());
 
@@ -2878,6 +3057,10 @@ void GPUFlexoelectriciyAssembler::setDefaultOptions()
     opt.addInt("material_law", "0: StVK, 1: neo-Hookean", 1);
     opt.addInt("include_hbar_flexo_correction",
                "Include eliminated-polarization flexoelectric correction in hbar", 0);
+    opt.addSwitch("use_nonsymmetric_newton_solver",
+                  "Use a nonsymmetric direct solver for Newton systems", false);
+    opt.addSwitch("print_timing",
+                  "Print assembly and solve timing diagnostics", false);
     GPUAssembler::setDefaultOptions(opt);
 }
 
@@ -3024,6 +3207,232 @@ void GPUFlexoelectriciyAssembler::constructElectricFieldFunctionFromPotential(
     if (err != cudaSuccess)
         throw std::runtime_error(
             "CUDA synchronize failed while normalizing electric field function");
+}
+
+void GPUFlexoelectriciyAssembler::constructFlexoelectricStressFunctions(
+    const DeviceVectorView<double>& solVector,
+    const DeviceNestedArrayView<double>& fixedDoFs,
+    GPUFunction& firstPiolaStressFunction,
+    GPUFunction& cauchyStressFunction)
+{
+    constructDispSolution(solVector, fixedDoFs);
+    constructElecSolution(solVector, fixedDoFs);
+    constructFlexoelectricStressFunctions(
+        displacementView(), m_electricPotentialPatch.deviceView(),
+        &firstPiolaStressFunction, &cauchyStressFunction);
+}
+
+void GPUFlexoelectriciyAssembler::constructFlexoelectricStressFunctions(
+    GPUFunction& displacementFunction,
+    GPUFunction& electricPotentialFunction,
+    GPUFunction& firstPiolaStressFunction,
+    GPUFunction& cauchyStressFunction)
+{
+    if (displacementFunction.domainDim() != domainDim())
+        throw std::invalid_argument(
+            "Displacement function domain dimension must match assembler domain dimension");
+    if (displacementFunction.targetDim() != targetDim())
+        throw std::invalid_argument(
+            "Displacement function target dimension must match assembler target dimension");
+    if (electricPotentialFunction.domainDim() != domainDim())
+        throw std::invalid_argument(
+            "Electric potential function domain dimension must match assembler domain dimension");
+    if (electricPotentialFunction.targetDim() != 1)
+        throw std::invalid_argument(
+            "Electric potential function target dimension must be 1");
+
+    constructFlexoelectricStressFunctions(
+        displacementFunction.multiPatchDeviceView(),
+        electricPotentialFunction.multiPatchDeviceView(),
+        &firstPiolaStressFunction, &cauchyStressFunction);
+}
+
+void GPUFlexoelectriciyAssembler::constructFlexoelectricStressFunctions(
+    MultiPatchDeviceView displacementView,
+    MultiPatchDeviceView electricPotentialView,
+    GPUFunction* firstPiolaStressFunction,
+    GPUFunction* cauchyStressFunction)
+{
+    const int dim = domainDim();
+    const int dim2 = dim * dim;
+    const int dimTensor = dim * (dim + 1) / 2;
+    if (firstPiolaStressFunction == nullptr && cauchyStressFunction == nullptr)
+        throw std::invalid_argument(
+            "At least one flexoelectric stress function must be requested");
+    if (firstPiolaStressFunction != nullptr)
+    {
+        if (firstPiolaStressFunction->domainDim() != dim)
+            throw std::invalid_argument(
+                "First Piola stress function domain dimension must match assembler domain dimension");
+        if (firstPiolaStressFunction->targetDim() != dim2)
+            throw std::invalid_argument(
+                "First Piola stress function target dimension must be dim * dim");
+    }
+    if (cauchyStressFunction != nullptr)
+    {
+        if (cauchyStressFunction->domainDim() != dim)
+            throw std::invalid_argument(
+                "Cauchy stress function domain dimension must match assembler domain dimension");
+        if (cauchyStressFunction->targetDim() != dimTensor)
+            throw std::invalid_argument(
+                "Cauchy stress function target dimension must be dim * (dim + 1) / 2");
+    }
+
+    int minGrid = 0;
+    int blockSize = 0;
+    int gridSize = 0;
+    cudaError_t err = cudaSuccess;
+
+    const int totalControlPoints = totalNumControlPoints();
+    const int totalFirstPiolaEntries = totalControlPoints * dim2;
+    const int totalCauchyEntries = totalControlPoints * dimTensor;
+    if (firstPiolaStressFunction != nullptr)
+    {
+        cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+            zeroFlexoFunctionControlPointsKernel, 0, totalFirstPiolaEntries);
+        gridSize = (totalFirstPiolaEntries + blockSize - 1) / blockSize;
+        zeroFlexoFunctionControlPointsKernel<<<gridSize, blockSize>>>(
+            firstPiolaStressFunction->multiPatchDeviceView(),
+            totalFirstPiolaEntries);
+        err = cudaDeviceSynchronize();
+        if (err != cudaSuccess)
+            throw std::runtime_error(
+                "CUDA synchronize failed while zeroing flexoelectric first Piola stress function");
+    }
+    if (cauchyStressFunction != nullptr)
+    {
+        cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+            zeroFlexoFunctionControlPointsKernel, 0, totalCauchyEntries);
+        gridSize = (totalCauchyEntries + blockSize - 1) / blockSize;
+        zeroFlexoFunctionControlPointsKernel<<<gridSize, blockSize>>>(
+            cauchyStressFunction->multiPatchDeviceView(), totalCauchyEntries);
+        err = cudaDeviceSynchronize();
+        if (err != cudaSuccess)
+            throw std::runtime_error(
+                "CUDA synchronize failed while zeroing flexoelectric Cauchy stress function");
+    }
+
+    const int stride = flexoDoublesPerGP(dim);
+    const int dataSize = stride * numGPs();
+    if (m_flexoGPData.size() != dataSize)
+        m_flexoGPData.resize(dataSize);
+    else
+        m_flexoGPData.setZero();
+
+    const double localStiffening = options().getReal("local_stiffening");
+    const std::vector<int> patchMaterialLaws =
+        patchIntOptionValues("material_law");
+    const std::vector<double> patchYoungsModuli =
+        patchRealOptionValues("youngs_modulus");
+    const std::vector<double> patchPoissonsRatios =
+        patchRealOptionValues("poissons_ratio");
+    const std::vector<double> patchLengthScales =
+        patchRealOptionValues("length_scale");
+    const std::vector<double> patchDielectricPermittivities =
+        patchRealOptionValues("dielectric_permittivity");
+    const std::vector<double> patchVacuumPermittivities =
+        patchRealOptionValues("vacuum_permittivity");
+    const std::vector<double> patchMuL =
+        patchRealOptionValues("flexoelectric_mu_L");
+    const std::vector<double> patchMuT =
+        patchRealOptionValues("flexoelectric_mu_T");
+    const std::vector<double> patchMuS =
+        patchRealOptionValues("flexoelectric_mu_S");
+    const std::vector<int> patchHbarFlexoCorrections =
+        patchIntOptionValues("include_hbar_flexo_correction");
+
+    std::vector<double> flexoMaterialParameters;
+    flexoMaterialParameters.reserve(static_cast<std::size_t>(10 * numPatches()));
+    for (int p = 0; p < numPatches(); ++p)
+    {
+        const std::size_t patch = static_cast<std::size_t>(p);
+        flexoMaterialParameters.push_back(
+            static_cast<double>(patchMaterialLaws[patch]));
+        flexoMaterialParameters.push_back(patchYoungsModuli[patch]);
+        flexoMaterialParameters.push_back(patchPoissonsRatios[patch]);
+        flexoMaterialParameters.push_back(patchLengthScales[patch]);
+        flexoMaterialParameters.push_back(
+            patchDielectricPermittivities[patch]);
+        flexoMaterialParameters.push_back(patchVacuumPermittivities[patch]);
+        flexoMaterialParameters.push_back(patchMuL[patch]);
+        flexoMaterialParameters.push_back(patchMuT[patch]);
+        flexoMaterialParameters.push_back(patchMuS[patch]);
+        flexoMaterialParameters.push_back(
+            static_cast<double>(patchHbarFlexoCorrections[patch]));
+    }
+    DeviceArray<double> materialParameterValues(flexoMaterialParameters);
+
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+        evaluateFlexoGPKernel, 0, numGPs());
+    gridSize = (numGPs() + blockSize - 1) / blockSize;
+    evaluateFlexoGPKernel<<<gridSize, blockSize>>>(
+        numDerivatives(), numGPs(), stride, materialParameterValues.vectorView(),
+        localStiffening, displacementView, electricPotentialView,
+        geometryView(), gpTable(), wts().vectorView(), geoValuesAndDerssView(),
+        dispValuesAndDerssView(),
+        m_elecValuesAndDerss.matrixView(m_elePotentialP1,
+            numGPs() * (numDerivatives() + 1) * dim),
+        m_flexoGPData.vectorView());
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+        throw std::runtime_error(
+            "CUDA synchronize failed while evaluating flexoelectric stress Gauss-point data");
+
+    if (firstPiolaStressFunction != nullptr)
+    {
+        DeviceArray<double> nodalWeights(totalControlPoints);
+        cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+            recoverFlexoelectricFirstPiolaStressAtNodesKernel, 0, numGPs());
+        gridSize = (numGPs() + blockSize - 1) / blockSize;
+        recoverFlexoelectricFirstPiolaStressAtNodesKernel<<<gridSize, blockSize>>>(
+            numDerivatives(), numGPs(), stride, displacementView,
+            firstPiolaStressFunction->multiPatchDeviceView(), gpTable(),
+            dispValuesAndDerssView(), m_flexoGPData.vectorView(),
+            nodalWeights.vectorView());
+        err = cudaDeviceSynchronize();
+        if (err != cudaSuccess)
+            throw std::runtime_error(
+                "CUDA synchronize failed while recovering flexoelectric first Piola stress function");
+
+        cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+            normalizeRecoveredFlexoFunctionKernel, 0, totalFirstPiolaEntries);
+        gridSize = (totalFirstPiolaEntries + blockSize - 1) / blockSize;
+        normalizeRecoveredFlexoFunctionKernel<<<gridSize, blockSize>>>(
+            firstPiolaStressFunction->multiPatchDeviceView(),
+            nodalWeights.vectorView(), totalControlPoints);
+        err = cudaDeviceSynchronize();
+        if (err != cudaSuccess)
+            throw std::runtime_error(
+                "CUDA synchronize failed while normalizing flexoelectric first Piola stress function");
+    }
+
+    if (cauchyStressFunction != nullptr)
+    {
+        DeviceArray<double> nodalWeights(totalControlPoints);
+        cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+            recoverFlexoelectricCauchyStressAtNodesKernel, 0, numGPs());
+        gridSize = (numGPs() + blockSize - 1) / blockSize;
+        recoverFlexoelectricCauchyStressAtNodesKernel<<<gridSize, blockSize>>>(
+            numDerivatives(), numGPs(), stride, displacementView,
+            cauchyStressFunction->multiPatchDeviceView(), gpTable(),
+            dispValuesAndDerssView(), m_flexoGPData.vectorView(),
+            nodalWeights.vectorView());
+        err = cudaDeviceSynchronize();
+        if (err != cudaSuccess)
+            throw std::runtime_error(
+                "CUDA synchronize failed while recovering flexoelectric Cauchy stress function");
+
+        cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+            normalizeRecoveredFlexoFunctionKernel, 0, totalCauchyEntries);
+        gridSize = (totalCauchyEntries + blockSize - 1) / blockSize;
+        normalizeRecoveredFlexoFunctionKernel<<<gridSize, blockSize>>>(
+            cauchyStressFunction->multiPatchDeviceView(),
+            nodalWeights.vectorView(), totalControlPoints);
+        err = cudaDeviceSynchronize();
+        if (err != cudaSuccess)
+            throw std::runtime_error(
+                "CUDA synchronize failed while normalizing flexoelectric Cauchy stress function");
+    }
 }
 
 void GPUFlexoelectriciyAssembler::checkNumericalJacobian(
