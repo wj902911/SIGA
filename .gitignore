@@ -1,6 +1,18 @@
 build/
+build-tacc*/
 build_spectra/
 build_spectra_vs17/
+/CMakeCache.txt
+/CMakeFiles/
+/Makefile
+/amgx_ep-prefix/
+/cmake_install.cmake
+/example/CMakeFiles/
+/example/Makefile
+/example/cmake_install.cmake
+/src/CMakeFiles/
+/src/Makefile
+/src/cmake_install.cmake
 .vscode/
 .vs/
 CMakeSettings.json
@@ -8,3 +20,4 @@ pyscript/__pycache__/
 *.aux
 *.log
 *.out
+scripts/

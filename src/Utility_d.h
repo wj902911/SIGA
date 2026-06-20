@@ -36,7 +36,9 @@ inline void getTensorCoordinate(int dim, int numVlue, int index,
 __host__ __device__
 inline int getTensorCoordinate(int dir, int numVlue, int index)
 {
-    
+    for (int i = 0; i < dir; i++)
+        index /= numVlue;
+    return index % numVlue;
 }
 
 __host__ __device__

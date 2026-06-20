@@ -27,12 +27,18 @@ public:
     AMGXEigenSolver& operator=(const AMGXEigenSolver&) = delete;
 
     Eigen::VectorXd computeSmallestEigenvalues(const DeviceCSRMatrix& matrix,
+                                               int numEigenvalues);
+
+    Eigen::VectorXd computeSmallestEigenvalues(const GPUAssembler& assembler,
+                                               int numEigenvalues);
+
+    Eigen::VectorXd computeSmallestEigenvalues(const DeviceCSRMatrix& matrix,
                                                int numEigenvalues,
-                                               const Options& options = Options{});
+                                               const Options& options);
 
     Eigen::VectorXd computeSmallestEigenvalues(const GPUAssembler& assembler,
                                                int numEigenvalues,
-                                               const Options& options = Options{});
+                                               const Options& options);
 };
 
 #endif

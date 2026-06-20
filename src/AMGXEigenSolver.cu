@@ -197,6 +197,18 @@ AMGXEigenSolver::~AMGXEigenSolver()
 }
 
 Eigen::VectorXd AMGXEigenSolver::computeSmallestEigenvalues(const GPUAssembler& assembler,
+                                                            int numEigenvalues)
+{
+    return computeSmallestEigenvalues(assembler, numEigenvalues, Options{});
+}
+
+Eigen::VectorXd AMGXEigenSolver::computeSmallestEigenvalues(const DeviceCSRMatrix& matrix,
+                                                            int numEigenvalues)
+{
+    return computeSmallestEigenvalues(matrix, numEigenvalues, Options{});
+}
+
+Eigen::VectorXd AMGXEigenSolver::computeSmallestEigenvalues(const GPUAssembler& assembler,
                                                             int numEigenvalues,
                                                             const Options& options)
 {
