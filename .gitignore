@@ -21,3 +21,4 @@ pyscript/__pycache__/
 *.log
 *.out
 scripts/
+simulationResults/

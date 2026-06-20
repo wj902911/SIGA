@@ -8,9 +8,9 @@ surfaceElementThicknessRatio: 0.0125
 numDegElev: 3
 numPointsPerPatch: 10000
 outputPostfix: l10_300x40_c0.05_s0.0125
-outputGaussPointData: true
-outputControlPointLocations: true
-printTiming: false
+outputGaussPointData: false
+outputControlPointLocations: false
+printTiming: true
 
 # Loading
 followerMoment: -0.5

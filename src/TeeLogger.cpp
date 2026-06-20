@@ -67,7 +67,7 @@ int TeeLogger::duplicateToFd(int source, int target)
 #ifdef _WIN32
     return _dup2(source, target);
 #else
-    return dup2(source, target);
+    return dup2(source, target) < 0 ? -1 : 0;
 #endif
 }
 
