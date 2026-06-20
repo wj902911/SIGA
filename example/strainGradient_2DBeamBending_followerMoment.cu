@@ -714,7 +714,7 @@ int main(int argc, char* argv[])
             "Both centerElementThicknessRatio and surfaceElementThicknessRatio must be positive for graded H mesh.");
     }
 
-    const std::string rootFolder = "./strainGradient_2DBeamBending_followerMoment";
+    const std::string rootFolder = "./strainGradient_2DBeamBending_followerMoment_output";
     const std::string outputFolderName =
         "strainGradient_2DBeamBending_followerMoment_output_" + outputPostfix;
     const std::string filenameParaview = "sg_bend_fm_";

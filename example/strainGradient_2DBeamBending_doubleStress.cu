@@ -181,7 +181,7 @@ int main(int argc, char* argv[])
     if (maxNewtonIterations < 1)
         throw std::invalid_argument("maxNewtonIterations must be positive.");
 
-    const std::string rootFolder = "./strainGradient_2DBeamBending_doubleStress";
+    const std::string rootFolder = "./strainGradient_2DBeamBending_doubleStress_output";
     const std::string filenameParaview =
         "strainGradient_2DBeamBending_doubleStress_";
     const std::string outputFolder =

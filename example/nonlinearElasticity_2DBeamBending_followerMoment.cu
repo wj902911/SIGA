@@ -163,7 +163,7 @@ int main(int argc, char* argv[])
         throw std::invalid_argument("maxNewtonIterations must be positive.");
 
     const std::string rootFolder =
-        "./nonlinearElasticity_2DBeamBending_followerMoment";
+        "./nonlinearElasticity_2DBeamBending_followerMoment_output";
     const std::string filenameParaview =
         "nonlinearElasticity_2DBeamBending_followerMoment_";
     const std::string outputFolder =

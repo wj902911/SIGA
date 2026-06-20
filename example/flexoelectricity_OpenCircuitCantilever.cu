@@ -59,7 +59,7 @@ int main(int argc, char* argv[])
     if (materialLaw != 0 && materialLaw != 1)
         throw std::invalid_argument("materialLaw must be 0 (StVK) or 1 (neo-Hookean).");
 
-    const std::string rootFolder = "./flexoelectricity_OpenCircuitCantilever";
+    const std::string rootFolder = "./flexoelectricity_OpenCircuitCantilever_output";
     std::string outputFolder = rootFolder + "/output";
     for (int i = 1; i < argc; ++i)
         outputFolder += "_" + std::string(argv[i]);

@@ -849,7 +849,7 @@ int main(int argc, char* argv[])
                                   "electrodeBoundary");
 
     const std::string rootFolder =
-        "./flexoelectricity_2DBeamBending_followerMoment";
+        "./flexoelectricity_2DBeamBending_followerMoment_output";
     const std::string outputFolderName =
         "flexoelectricity_2DBeamBending_followerMoment_output_" +
         outputPostfix;

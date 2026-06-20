@@ -29,7 +29,7 @@ int main(int argc, char* argv[])
     if (initialLoadStep <= 0.0)
         throw std::invalid_argument("initialLoadStep must be positive.");
 
-    const std::string rootFolder = "./strainGradient_2DBeamBending_cornerPointLoad";
+    const std::string rootFolder = "./strainGradient_2DBeamBending_cornerPointLoad_output";
     std::string outputFolder = rootFolder + "/strainGradient_2DBeamBending_cornerPointLoad_output";
     for (int i = 1; i < argc; ++i)
         outputFolder += "_" + std::string(argv[i]);

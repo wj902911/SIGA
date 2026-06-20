@@ -54,7 +54,7 @@ int main(int argc, char* argv[])
 
     const double maxDisp = maxStrain * L;
 
-    const std::string rootFolder = "./nonlinearElasticity_2DBeamBuckling";
+    const std::string rootFolder = "./nonlinearElasticity_2DBeamBuckling_output";
     const std::string filenameParaview = "nonlinearElasticity_2DBeamBuckling_";
     std::string outputFolder = rootFolder + "/" + filenameParaview + "output";
     for (int i = 1; i < argc; ++i)

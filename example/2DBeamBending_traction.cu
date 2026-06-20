@@ -18,7 +18,7 @@ int main(int argc, char* argv[])
     const int numDegreeElevations = argc > 2 ? std::stoi(argv[2]) : 1;
     const double tractionY = argc > 3 ? std::stod(argv[3]) : -100.0;
 
-    const std::string rootFolder = "./2DBeamBending_traction";
+    const std::string rootFolder = "./2DBeamBending_traction_output";
     const std::string outputFolder = rootFolder + "/2DBeamBending_traction_output";
     std::filesystem::create_directories(outputFolder);
     TeeLogger log(outputFolder + "/log.txt");
