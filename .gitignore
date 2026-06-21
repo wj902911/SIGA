@@ -22,3 +22,4 @@ pyscript/__pycache__/
 *.out
 scripts/
 simulationResults/
+exacutable/
