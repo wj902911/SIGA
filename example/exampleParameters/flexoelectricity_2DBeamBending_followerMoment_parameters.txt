@@ -1,16 +1,16 @@
 # Geometry and mesh
 L: 150
 H: 10
-numEle_L: 750
-numEle_H: 50
-centerElementThicknessRatio: 0.02
-surfaceElementThicknessRatio: 0.02
+numEle_L: 1500
+numEle_H: 100
+centerElementThicknessRatio: 0.01
+surfaceElementThicknessRatio: 0.01
 numDegElev: 3
 numPointsPerPatch: 10000
-outputPostfix: l0_LxH150x10_ele750x50
+outputPostfix: l0_LxH150x10_ele1500x100
 outputGaussPointData: false
 outputControlPointLocations: false
-printTiming: false
+printTiming: true
 electrodeBoundary: north
 
 # Loading
