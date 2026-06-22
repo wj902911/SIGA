@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,11 @@ from pathlib import Path
 
 FLOAT_PATTERN = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
 FLOAT_RE = re.compile(FLOAT_PATTERN)
+LENGTH_SCALE_PATTERNS = [
+    re.compile(rf"\bLength\s+scale\s*[:=]\s*({FLOAT_PATTERN})", re.IGNORECASE),
+    re.compile(rf"\blengthScale\s*[:=]\s*({FLOAT_PATTERN})"),
+    re.compile(rf"\blength\s+scale\s*=\s*({FLOAT_PATTERN})", re.IGNORECASE),
+]
 NUM_ELEMENTS_RE = re.compile(
     r"\bNumber\s+of\s+elements\s*[:=]\s*(\d+)\s*x\s*(\d+)",
     re.IGNORECASE,
@@ -22,6 +28,7 @@ NUM_ELEMENTS_RE = re.compile(
 class PotentialPoint:
     x_value: int
     potential: float
+    length_scale: float
     num_elements_l: int
     num_elements_h: int
     total_elements: int
@@ -40,6 +47,15 @@ def parse_num_elements(log_path: Path) -> tuple[int, int]:
     if num_l <= 0 or num_h <= 0:
         raise ValueError(f"Invalid nonpositive element count in {log_path}: {num_l} x {num_h}")
     return num_l, num_h
+
+
+def parse_length_scale(log_path: Path) -> float:
+    text = log_path.read_text(encoding="utf-8", errors="replace")
+    for pattern in LENGTH_SCALE_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return float(match.group(1))
+    raise ValueError(f"Cannot find length scale in {log_path}")
 
 
 def parse_potential(path: Path) -> float:
@@ -83,10 +99,12 @@ def collect_points(root: Path, x_component: str) -> list[PotentialPoint]:
         log_path = nearest_log_path(potential_path, root)
         num_l, num_h = parse_num_elements(log_path)
         total = num_l * num_h
+        length_scale = parse_length_scale(log_path)
         points.append(
             PotentialPoint(
                 x_value=select_x_value(num_l, num_h, x_component),
                 potential=parse_potential(potential_path),
+                length_scale=length_scale,
                 num_elements_l=num_l,
                 num_elements_h=num_h,
                 total_elements=total,
@@ -118,6 +136,7 @@ def write_csv(points: list[PotentialPoint], output_path: Path) -> None:
             [
                 "x_value",
                 "electrode_electric_potential",
+                "length_scale",
                 "num_elements_L",
                 "num_elements_H",
                 "total_elements",
@@ -130,6 +149,7 @@ def write_csv(points: list[PotentialPoint], output_path: Path) -> None:
                 [
                     point.x_value,
                     point.potential,
+                    point.length_scale,
                     point.num_elements_l,
                     point.num_elements_h,
                     point.total_elements,
@@ -137,6 +157,22 @@ def write_csv(points: list[PotentialPoint], output_path: Path) -> None:
                     point.log_path,
                 ]
             )
+
+
+def format_number(value: float) -> str:
+    return f"{value:.6g}"
+
+
+def build_length_scale_annotation(points: list[PotentialPoint]) -> str:
+    values = [point.length_scale for point in points]
+    if not values:
+        return ""
+
+    if all(math.isclose(value, values[0], rel_tol=1e-9, abs_tol=1e-12) for value in values):
+        value_text = format_number(values[0])
+    else:
+        value_text = f"{format_number(min(values))} to {format_number(max(values))}"
+    return rf"Length scale: $\ell = {value_text}$"
 
 
 def plot_points(
@@ -167,6 +203,21 @@ def plot_points(
     ax.set_title("Electrode Potential vs Mesh Size")
     ax.grid(True, color="#d8d8d8", linewidth=0.7, alpha=0.8)
     ax.margins(x=0.08, y=0.12)
+    ax.text(
+        0.03,
+        0.96,
+        build_length_scale_annotation(points),
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=8.5,
+        bbox={
+            "boxstyle": "round,pad=0.35",
+            "facecolor": "white",
+            "edgecolor": "#b8b8b8",
+            "alpha": 0.94,
+        },
+    )
 
     fig.savefig(output_path, dpi=300)
     if show:
@@ -177,7 +228,7 @@ def plot_points(
 def print_table(points: list[PotentialPoint], root: Path, potential_unit: str) -> None:
     print(
         "x_value\telectrode_potential_"
-        f"{potential_unit}\tnumEle_L\tnumEle_H\ttotal_elements\tfile"
+        f"{potential_unit}\tlength_scale\tnumEle_L\tnumEle_H\ttotal_elements\tfile"
     )
     for point in points:
         try:
@@ -187,6 +238,7 @@ def print_table(points: list[PotentialPoint], root: Path, potential_unit: str) -
         print(
             f"{point.x_value}\t"
             f"{point.potential:.12g}\t"
+            f"{point.length_scale:.12g}\t"
             f"{point.num_elements_l}\t"
             f"{point.num_elements_h}\t"
             f"{point.total_elements}\t"
