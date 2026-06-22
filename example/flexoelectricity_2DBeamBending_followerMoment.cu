@@ -730,6 +730,7 @@ int main(int argc, char* argv[])
     int includeHbarFlexoCorrection = 0;
     bool outputGaussPointData = false;
     bool outputControlPointLocations = true;
+    bool outputMesh = true;
     bool printTiming = false;
     std::string outputPostfix = "default";
     std::string electrodeBoundary = "none";
@@ -780,6 +781,7 @@ int main(int argc, char* argv[])
         outputControlPointLocations =
             parameterBool(parameters, "outputControlPointLocations",
                           outputControlPointLocations);
+        outputMesh = parameterBool(parameters, "outputMesh", outputMesh);
         printTiming = parameterBool(parameters, "printTiming", printTiming);
         electrodeBoundary =
             parameterString(parameters, "electrodeBoundary", electrodeBoundary);
@@ -805,14 +807,15 @@ int main(int argc, char* argv[])
         if (argc > 15) outputControlPointLocations =
             parseBool(argv[15], "outputControlPointLocations");
         if (argc > 16) printTiming = parseBool(argv[16], "printTiming");
-        if (argc > 17) centerElementThicknessRatio = std::stod(argv[17]);
-        if (argc > 18) surfaceElementThicknessRatio = std::stod(argv[18]);
-        if (argc > 19) dielectricPermittivity = std::stod(argv[19]);
-        if (argc > 20) muL = std::stod(argv[20]);
-        if (argc > 21) muT = std::stod(argv[21]);
-        if (argc > 22) muS = std::stod(argv[22]);
-        if (argc > 23) includeHbarFlexoCorrection = std::stoi(argv[23]);
-        if (argc > 24) electrodeBoundary = argv[24];
+        if (argc > 17) outputMesh = parseBool(argv[17], "outputMesh");
+        if (argc > 18) centerElementThicknessRatio = std::stod(argv[18]);
+        if (argc > 19) surfaceElementThicknessRatio = std::stod(argv[19]);
+        if (argc > 20) dielectricPermittivity = std::stod(argv[20]);
+        if (argc > 21) muL = std::stod(argv[21]);
+        if (argc > 22) muT = std::stod(argv[22]);
+        if (argc > 23) muS = std::stod(argv[23]);
+        if (argc > 24) includeHbarFlexoCorrection = std::stoi(argv[24]);
+        if (argc > 25) electrodeBoundary = argv[25];
         outputPostfix = "manual";
         for (int i = 1; i < argc; ++i)
             outputPostfix += "_" + std::string(argv[i]);
@@ -908,6 +911,8 @@ int main(int argc, char* argv[])
               << (outputGaussPointData ? "on" : "off") << "\n";
     std::cout << "Control-point location output: "
               << (outputControlPointLocations ? "on" : "off") << "\n";
+    std::cout << "Mesh output: "
+              << (outputMesh ? "on" : "off") << "\n";
     std::cout << "Timing output: "
               << (printTiming ? "on" : "off") << "\n";
 
@@ -1054,7 +1059,7 @@ int main(int argc, char* argv[])
     ParaviewCollection collection(filePrefix);
 
     std::vector<int> numPointsPerPatch{numPointsPerPatchValue};
-    GPUPostProcessor postProcessor(assembler, numPointsPerPatch, true, 2);
+    GPUPostProcessor postProcessor(assembler, numPointsPerPatch, outputMesh, 2);
     postProcessor.addFunction("displacement", &displacementFunction);
     postProcessor.addFunction("stress_cauchy", &cauchyStressFunction);
     postProcessor.addFunction("electric_potential", &electricPotentialFunction);

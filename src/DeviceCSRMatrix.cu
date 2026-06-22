@@ -6,6 +6,8 @@
 #include <thrust/reduce.h>
 #include <thrust/unique.h>
 #include <thrust/iterator/zip_iterator.h>
+#include <thrust/device_ptr.h>
+#include <limits>
 #include <stdexcept>
 
 #define CHECK_CUDA(func)                                                       \
@@ -175,6 +177,69 @@ void DeviceCSRMatrix::setFromCOO(int numRows, int numCols,
         CUSPARSE_INDEX_BASE_ZERO));
 
     CHECK_CUSPARSE(cusparseDestroy(cH));
+}
+
+void DeviceCSRMatrix::setFromCOOInPlace(int numRows, int numCols,
+                                        DeviceVectorView<int> cooR,
+                                        DeviceVectorView<int> cooC)
+{
+    m_numCols = numCols;
+    const int nnz_coo = static_cast<int>(cooR.size());
+    thrust::device_ptr<int> R(cooR.data());
+    thrust::device_ptr<int> C(cooC.data());
+
+    auto keys_begin = thrust::make_zip_iterator(thrust::make_tuple(R, C));
+    auto keys_end = keys_begin + nnz_coo;
+
+    thrust::sort(keys_begin, keys_end);
+
+    auto new_end = thrust::unique(keys_begin, keys_end);
+    const int nnz = static_cast<int>(new_end - keys_begin);
+
+    m_rowPtr.resize(numRows + 1);
+    m_colInd.resize(nnz);
+    m_values.resize(nnz);
+
+    CHECK_CUDA(cudaMemcpy(m_colInd.data(),
+                          cooC.data(),
+                          nnz * sizeof(int),
+                          cudaMemcpyDeviceToDevice));
+
+    cusparseHandle_t cH = nullptr;
+    CHECK_CUSPARSE(cusparseCreate(&cH));
+
+    CHECK_CUSPARSE(cusparseXcoo2csr(
+        cH,
+        cooR.data(),
+        nnz,
+        numRows,
+        m_rowPtr.data(),
+        CUSPARSE_INDEX_BASE_ZERO));
+
+    CHECK_CUSPARSE(cusparseDestroy(cH));
+}
+
+void DeviceCSRMatrix::setFromHostCSR(int numRows, int numCols,
+                                     const std::vector<int>& rowPtr,
+                                     const std::vector<int>& colInd)
+{
+    if (numRows < 0 || numCols < 0)
+        throw std::runtime_error("DeviceCSRMatrix::setFromHostCSR received a negative matrix size.");
+    if (rowPtr.size() != static_cast<std::size_t>(numRows + 1))
+        throw std::runtime_error("DeviceCSRMatrix::setFromHostCSR row pointer size mismatch.");
+    if (!rowPtr.empty() && rowPtr.front() != 0)
+        throw std::runtime_error("DeviceCSRMatrix::setFromHostCSR row pointer must start at zero.");
+    if (!rowPtr.empty() &&
+        rowPtr.back() != static_cast<int>(colInd.size()))
+        throw std::runtime_error("DeviceCSRMatrix::setFromHostCSR row pointer does not match column count.");
+    if (colInd.size() >
+        static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        throw std::runtime_error("DeviceCSRMatrix::setFromHostCSR has too many nonzeros for DeviceArray indexing.");
+
+    m_numCols = numCols;
+    m_rowPtr = rowPtr;
+    m_colInd = colInd;
+    m_values.resize(static_cast<int>(colInd.size()));
 }
 
 Eigen::SparseMatrix<double, Eigen::RowMajor, int>

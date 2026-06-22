@@ -348,6 +348,18 @@ public:
     { m_sparseSystem.setCSRMatrixFromCOO(numRows, numCols, cooR, cooC); }
 
     __host__
+    void setCSRMatrixFromCOOInPlace(int numRows, int numCols,
+                                    DeviceVectorView<int> cooR,
+                                    DeviceVectorView<int> cooC)
+    { m_sparseSystem.setCSRMatrixFromCOOInPlace(numRows, numCols, cooR, cooC); }
+
+    __host__
+    void setCSRMatrixFromHostCSR(int numRows, int numCols,
+                                 const std::vector<int>& rowPtr,
+                                 const std::vector<int>& colInd)
+    { m_sparseSystem.setCSRMatrixFromHostCSR(numRows, numCols, rowPtr, colInd); }
+
+    __host__
     void computeCOO(DeviceVectorView<int> cooRows, 
                     DeviceVectorView<int> cooCols) const;
 

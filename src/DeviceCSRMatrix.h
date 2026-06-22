@@ -5,6 +5,7 @@
 #include <DeviceVectorView.h>
 #include <Eigen/Sparse>
 #include <DeviceMatrixView.h>
+#include <vector>
 
 class DeviceCSRMatrixView
 {
@@ -25,6 +26,18 @@ public:
                         DeviceVectorView<double> values)
     : m_numCols(numCols), m_rowPtr(rowPtr), m_colInd(colInd), m_values(values) 
     {}
+
+    __host__ __device__
+    int numCols() const { return m_numCols; }
+
+    __host__ __device__
+    DeviceVectorView<int> rowPtr() const { return m_rowPtr; }
+
+    __host__ __device__
+    DeviceVectorView<int> colInd() const { return m_colInd; }
+
+    __host__ __device__
+    DeviceVectorView<double> values() const { return m_values; }
 
     __device__
     double& operator()(int row, int col)
@@ -97,6 +110,16 @@ public:
     void setFromCOO(int numRows, int numCols,
                     DeviceVectorView<int> cooR, 
                     DeviceVectorView<int> cooC);
+
+    __host__
+    void setFromCOOInPlace(int numRows, int numCols,
+                           DeviceVectorView<int> cooR,
+                           DeviceVectorView<int> cooC);
+
+    __host__
+    void setFromHostCSR(int numRows, int numCols,
+                        const std::vector<int>& rowPtr,
+                        const std::vector<int>& colInd);
 
     __host__
     DeviceCSRMatrixView view() const

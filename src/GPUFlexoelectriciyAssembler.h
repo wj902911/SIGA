@@ -1,6 +1,9 @@
 #pragma once
 
 #include <GPUAssembler.h>
+#include <memory>
+
+struct GPUFlexoelectriciyAssemblyCache;
 
 class GPUFlexoelectriciyAssembler : public GPUAssembler
 {
@@ -14,6 +17,7 @@ private:
     DeviceArray<double> m_elecValuesAndDerss;
     DeviceArray<double> m_flexoGPData;
     DeviceArray<double> m_flexoBasisData;
+    std::unique_ptr<GPUFlexoelectriciyAssemblyCache> m_assemblyCache;
 
     __host__
     void constructElectricFieldFunctionFromPotential(
@@ -34,6 +38,9 @@ public:
                                 const MultiBasis& electricPotentialBasis,
                                 const BoundaryConditions& bc,
                                 const Eigen::VectorXd& bodyForce);
+
+    __host__
+    ~GPUFlexoelectriciyAssembler();
 
     __host__
     void setDefaultOptions();

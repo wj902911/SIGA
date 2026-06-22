@@ -150,6 +150,45 @@ public:
         m_perm_new2old.print();
     }
 
+    __host__ __device__
+    SparseSystemDeviceView withOutput(DeviceVectorView<double> rhs,
+                                      DeviceCSRMatrixView csrMatrix) const
+    {
+        return SparseSystemDeviceView(m_mappersData, m_row, m_col, m_rstr,
+                                      m_cstr, m_cvar, m_dims, rhs, csrMatrix,
+                                      m_perm_old2new, m_perm_new2old);
+    }
+
+    __host__ __device__
+    DeviceVectorView<int> mappersData() const { return m_mappersData; }
+
+    __host__ __device__
+    DeviceVectorView<int> rowBlocks() const { return m_row; }
+
+    __host__ __device__
+    DeviceVectorView<int> colBlocks() const { return m_col; }
+
+    __host__ __device__
+    DeviceVectorView<int> rowStrides() const { return m_rstr; }
+
+    __host__ __device__
+    DeviceVectorView<int> colStrides() const { return m_cstr; }
+
+    __host__ __device__
+    DeviceVectorView<int> colVars() const { return m_cvar; }
+
+    __host__ __device__
+    DeviceVectorView<int> dims() const { return m_dims; }
+
+    __host__ __device__
+    DeviceCSRMatrixView csrMatrix() const { return m_csrMatrix; }
+
+    __host__ __device__
+    DeviceVectorView<int> permOldToNew() const { return m_perm_old2new; }
+
+    __host__ __device__
+    DeviceVectorView<int> permNewToOld() const { return m_perm_new2old; }
+
     __device__
     int mapToGlobalColIndex(int active, int patchIndex, int c = 0) const
     {

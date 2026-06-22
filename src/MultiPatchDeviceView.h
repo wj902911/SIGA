@@ -152,8 +152,34 @@ public:
     __device__
     int* intDataPtr() const { return m_intData.data(); }
 
-    __device__
+    __host__ __device__
+    DeviceVectorView<int> patchIntDataOffsets() const
+    { return m_patchIntDataOffsets; }
+
+    __host__ __device__
+    DeviceVectorView<int> patchKnotsPoolOffsets() const
+    { return m_patchKnotsPoolOffsets; }
+
+    __host__ __device__
+    DeviceVectorView<int> patchControlPointsPoolOffsets() const
+    { return m_patchControlPointsPoolOffsets; }
+
+    __host__ __device__
+    DeviceVectorView<int> intData() const { return m_intData; }
+
+    __host__ __device__
     DeviceVectorView<double> knotsPools() const { return m_knotsPools; }
+
+    __host__ __device__
+    DeviceVectorView<double> controlPointsPools() const
+    { return m_controlPointsPools; }
+
+    __host__ __device__
+    DeviceNestedArrayView<int> multSumsOffsets() const
+    { return m_multSumsOffsets; }
+
+    __host__ __device__
+    DeviceNestedArrayView<int> multSums() const { return m_multSums; }
 
     __device__
     void print() const

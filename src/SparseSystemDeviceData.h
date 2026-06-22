@@ -251,6 +251,18 @@ public:
     { m_csrMatrix.setFromCOO(numRows, numCols, cooR, cooC); }
 
     __host__
+    void setCSRMatrixFromCOOInPlace(int numRows, int numCols,
+                                    DeviceVectorView<int> cooR,
+                                    DeviceVectorView<int> cooC)
+    { m_csrMatrix.setFromCOOInPlace(numRows, numCols, cooR, cooC); }
+
+    __host__
+    void setCSRMatrixFromHostCSR(int numRows, int numCols,
+                                 const std::vector<int>& rowPtr,
+                                 const std::vector<int>& colInd)
+    { m_csrMatrix.setFromHostCSR(numRows, numCols, rowPtr, colInd); }
+
+    __host__
     const DeviceCSRMatrix& csrMatrix() const { return m_csrMatrix; }
     __host__
     DeviceCSRMatrix& csrMatrix() { return m_csrMatrix; }

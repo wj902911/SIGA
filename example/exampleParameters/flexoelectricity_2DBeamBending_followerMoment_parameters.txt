@@ -10,6 +10,7 @@ numPointsPerPatch: 10000
 outputPostfix: l0_LxH150x10_ele1500x100
 outputGaussPointData: false
 outputControlPointLocations: false
+outputMesh: false
 printTiming: true
 electrodeBoundary: north
 

@@ -114,6 +114,10 @@ public:
     __host__
     DeviceVectorView<T> wholeView() const
     { return DeviceVectorView<T>(this->data(), DeviceArrayView<T>::size()); }
+
+    __host__ __device__
+    DeviceVectorView<int> offsetsView() const
+    { return DeviceVectorView<int>(m_offsets.data(), m_offsets.size()); }
 };
 
 template <typename T>
@@ -505,5 +509,4 @@ public:
                                         DeviceArray<T>::view()); 
     }
 };
-
 
