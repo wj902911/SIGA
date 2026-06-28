@@ -27,6 +27,7 @@ private:
     //DeviceVectorView<double> m_RHS_coo;
 
     DeviceCSRMatrixView m_csrMatrix;
+    int m_outputRowOffset = 0;
 
     DeviceVectorView<int> m_perm_old2new;
     DeviceVectorView<int> m_perm_new2old;
@@ -49,7 +50,8 @@ public:
                            DeviceVectorView<double> rhs,
                            DeviceCSRMatrixView csrMatrix,
                            DeviceVectorView<int> permOld2New,
-                           DeviceVectorView<int> permNew2Old)
+                           DeviceVectorView<int> permNew2Old,
+                           int outputRowOffset = 0)
                          : m_mappersData(mappersData),
                            m_row(row),
                            m_col(col),
@@ -64,6 +66,7 @@ public:
                            //m_values(values),
                            m_RHS(rhs),
                            m_csrMatrix(csrMatrix),
+                           m_outputRowOffset(outputRowOffset),
                            m_perm_old2new(permOld2New),
                            m_perm_new2old(permNew2Old)
     {
@@ -152,11 +155,13 @@ public:
 
     __host__ __device__
     SparseSystemDeviceView withOutput(DeviceVectorView<double> rhs,
-                                      DeviceCSRMatrixView csrMatrix) const
+                                      DeviceCSRMatrixView csrMatrix,
+                                      int outputRowOffset = 0) const
     {
         return SparseSystemDeviceView(m_mappersData, m_row, m_col, m_rstr,
                                       m_cstr, m_cvar, m_dims, rhs, csrMatrix,
-                                      m_perm_old2new, m_perm_new2old);
+                                      m_perm_old2new, m_perm_new2old,
+                                      outputRowOffset);
     }
 
     __host__ __device__
@@ -202,6 +207,24 @@ public:
     __device__
     int mapColIndex(int active, int patchIndex, int c = 0) const
     { return mapper(m_col(c)).globalIndex(active, patchIndex); }
+
+    __device__
+    int mapRowIndex(int active, int patchIndex, int r = 0) const
+    { return mapper(m_row(r)).globalIndex(active, patchIndex); }
+
+    __device__
+    bool isRowEntry(int activeRow, int r) const
+    { return mapper(m_row(r)).is_free_index(activeRow); }
+
+    __device__
+    int matrixRowIndex(int activeRow, int r) const
+    {
+        int ii = m_rstr(r) + activeRow;
+#if defined(USE_PERMUTATION)
+        ii = m_perm_old2new(ii);
+#endif
+        return ii;
+    }
 
 #if 0
     __device__
@@ -276,7 +299,7 @@ public:
             {
                 //printf("col is dead\n", activeRow, activeCol);
                 DeviceVectorView<double> eliminatedDofs_j = eliminatedDofs[c];
-                atomicAdd(&m_RHS(ii), -value * eliminatedDofs_j
+                atomicAdd(&m_RHS(ii - m_outputRowOffset), -value * eliminatedDofs_j
                     (colMap.global_to_bindex(activeCol)));
                 //printf("ii=%d, jj=%d\n", ii, jj);
             }
@@ -343,7 +366,7 @@ public:
 #endif
             //printf("pushing value=%f to m_RHS(%d):\n", value, ii);
             //printf("before atomicAdd, m_RHS(%d)=%f\n", ii, m_RHS(ii));
-            atomicAdd(&m_RHS(ii), value);
+            atomicAdd(&m_RHS(ii - m_outputRowOffset), value);
             //printf("after atomicAdd, m_RHS(%d)=%f\n", ii, m_RHS(ii));
         }
         else

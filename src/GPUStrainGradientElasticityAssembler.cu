@@ -1,13 +1,19 @@
 #include "GPUStrainGradientElasticityAssembler.h"
 
+#include <GPUAssemblySupport.h>
 #include <Utility_d.h>
 
+#include <algorithm>
+#include <chrono>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 #include <vector>
 
 // Implementation notes
@@ -620,7 +626,8 @@ double strainGradientResidualEntry(int dim, int di,
  */
 __global__
 void evaluateStrainGradientGPKernel(
-    int numDerivatives, int totalNumGPs, int stride,
+    int numDerivatives, int GPStartId, int inputGPStartId,
+    int numGPBatched, int stride,
     int materialLaw, double youngsModulus, double poissonsRatio,
     double lengthScale, double localStiffening,
     MultiPatchDeviceView displacement, MultiPatchDeviceView geometry,
@@ -629,9 +636,12 @@ void evaluateStrainGradientGPKernel(
     DeviceMatrixView<double> dispValuesAndDerss,
     DeviceVectorView<double> sgGPData)
 {
-    for (int GPIdx = blockIdx.x * blockDim.x + threadIdx.x; GPIdx < totalNumGPs;
-         GPIdx += blockDim.x * gridDim.x)
+    for (int localGPIdx = blockIdx.x * blockDim.x + threadIdx.x;
+         localGPIdx < numGPBatched;
+         localGPIdx += blockDim.x * gridDim.x)
     {
+        const int GPIdx = GPStartId + localGPIdx;
+        const int inputGPIdx = inputGPStartId + localGPIdx;
         const int dim = geometry.domainDim();
         const int dim2 = dim * dim;
         const int dim3 = dim2 * dim;
@@ -651,8 +661,8 @@ void evaluateStrainGradientGPKernel(
                                 P1Offset, P2Offset, dP1dFOffset,
                                 dP1dGradFOffset, dP2dGradFOffset);
 
-        double* gp = sgGPData.data() + GPIdx * stride;
-        DeviceVectorView<double> pt(pts.data() + GPIdx * dim, dim);
+        double* gp = sgGPData.data() + localGPIdx * stride;
+        DeviceVectorView<double> pt(pts.data() + inputGPIdx * dim, dim);
 
         int patchIdx = 0;
         displacement.threadPatch(GPIdx, patchIdx);
@@ -663,10 +673,10 @@ void evaluateStrainGradientGPKernel(
         const int geoP1 = geoPatch.basis().knotsOrder(0) + 1;
         const int dispP1 = dispBasis.knotsOrder(0) + 1;
         DeviceMatrixView<double> geoValuesAndDers(
-            geoValuesAndDerss.data() + GPIdx * geoP1 * (numDerivatives + 1) * dim,
+            geoValuesAndDerss.data() + inputGPIdx * geoP1 * (numDerivatives + 1) * dim,
             geoP1, (numDerivatives + 1) * dim);
         DeviceMatrixView<double> dispValuesAndDers(
-            dispValuesAndDerss.data() + GPIdx * dispP1 * (numDerivatives + 1) * dim,
+            dispValuesAndDerss.data() + inputGPIdx * dispP1 * (numDerivatives + 1) * dim,
             dispP1, (numDerivatives + 1) * dim);
 
         DeviceMatrixView<double> geoJacobianInv(gp + geoInvOffset, dim, dim);
@@ -675,8 +685,8 @@ void evaluateStrainGradientGPKernel(
         geoPatch.jacobian(pt, geoValuesAndDers, numDerivatives, geoJacobian);
         geoJacobian.inverse(geoJacobianInv);
         const double measure = geoJacobian.determinant();
-        gp[weightForceOffset] = wts[GPIdx] * measure;
-        gp[weightBodyOffset] = wts[GPIdx] * pow(measure, -localStiffening) * measure;
+        gp[weightForceOffset] = wts[inputGPIdx] * measure;
+        gp[weightBodyOffset] = wts[inputGPIdx] * pow(measure, -localStiffening) * measure;
 
         double* geoHessians = gp + geoHessOffset;
         for (int a = 0; a < dim; ++a)
@@ -761,7 +771,8 @@ std::string gaussPointStepFilename(int outputStep)
  */
 __global__
 void assembleStrainGradientMatrixKernel(
-    int numDerivatives, int numElements, int N_D, int stride,
+    int numDerivatives, int elementStart, int inputGPStartId,
+    int numElementsBatched, int N_D, int stride,
     MultiPatchDeviceView displacement, MultiPatchDeviceView geometry,
     SparseSystemDeviceView system, DeviceNestedArrayView<double> eliminatedDofs,
     DeviceMatrixView<double> pts, DeviceMatrixView<double> dispValuesAndDerss,
@@ -777,9 +788,10 @@ void assembleStrainGradientMatrixKernel(
     int blockId = blockIdx.x;
     const int j = blockId % N_D; blockId /= N_D;
     const int i = blockId % N_D; blockId /= N_D;
-    const int elementGlobal = blockId;
-    if (elementGlobal >= numElements)
+    const int elementLocal = blockId;
+    if (elementLocal >= numElementsBatched)
         return;
+    const int elementGlobal = elementStart + elementLocal;
 
     for (int idx = threadId; idx < dim * dim; idx += blockDim.x)
         localMatrix[idx] = 0.0;
@@ -808,12 +820,13 @@ void assembleStrainGradientMatrixKernel(
 
     for (int q = threadId; q < numGPsInElement; q += blockDim.x)
     {
-        const int GPIdx = elementGlobal * numGPsInElement + q;
-        double* gp = sgGPData.data() + GPIdx * stride;
+        const int localGPIdx = elementLocal * numGPsInElement + q;
+        const int inputGPIdx = inputGPStartId + localGPIdx;
+        double* gp = sgGPData.data() + localGPIdx * stride;
         DeviceMatrixView<double> geoJacobianInv(gp + geoInvOffset, dim, dim);
         double* geoHessians = gp + geoHessOffset;
         DeviceMatrixView<double> dispValuesAndDers(
-            dispValuesAndDerss.data() + GPIdx * P1 * (numDerivatives + 1) * dim,
+            dispValuesAndDerss.data() + inputGPIdx * P1 * (numDerivatives + 1) * dim,
             P1, (numDerivatives + 1) * dim);
 
         double* ParP1ParF = gp + dP1dFOffset;
@@ -847,7 +860,7 @@ void assembleStrainGradientMatrixKernel(
     double ptForIndexData[3] = {0.0};
     DeviceVectorView<double> ptForIndex(ptForIndexData, dim);
     for (int a = 0; a < dim; ++a)
-        ptForIndex[a] = pts(a, elementGlobal * numGPsInElement);
+        ptForIndex[a] = pts(a, inputGPStartId + elementLocal * numGPsInElement);
 
     for (int localEntry = threadId; localEntry < dim * dim; localEntry += blockDim.x)
     {
@@ -866,7 +879,8 @@ void assembleStrainGradientMatrixKernel(
 // displacement components into shared memory before pushing the dim entries.
 __global__
 void assembleStrainGradientRHSKernel(
-    int numDerivatives, int numElements, int N_D, int stride,
+    int numDerivatives, int elementStart, int inputGPStartId,
+    int numElementsBatched, int N_D, int stride,
     double forceScaling,
     MultiPatchDeviceView displacement, MultiPatchDeviceView geometry,
     SparseSystemDeviceView system, DeviceMatrixView<double> pts,
@@ -882,9 +896,10 @@ void assembleStrainGradientRHSKernel(
 
     int blockId = blockIdx.x;
     const int i = blockId % N_D;
-    const int elementGlobal = blockId / N_D;
-    if (elementGlobal >= numElements)
+    const int elementLocal = blockId / N_D;
+    if (elementLocal >= numElementsBatched)
         return;
+    const int elementGlobal = elementStart + elementLocal;
 
     for (int idx = threadId; idx < dim; idx += blockDim.x)
         localRHS[idx] = 0.0;
@@ -913,12 +928,13 @@ void assembleStrainGradientRHSKernel(
 
     for (int q = threadId; q < numGPsInElement; q += blockDim.x)
     {
-        const int GPIdx = elementGlobal * numGPsInElement + q;
-        double* gp = sgGPData.data() + GPIdx * stride;
+        const int localGPIdx = elementLocal * numGPsInElement + q;
+        const int inputGPIdx = inputGPStartId + localGPIdx;
+        double* gp = sgGPData.data() + localGPIdx * stride;
         DeviceMatrixView<double> geoJacobianInv(gp + geoInvOffset, dim, dim);
         double* geoHessians = gp + geoHessOffset;
         DeviceMatrixView<double> dispValuesAndDers(
-            dispValuesAndDerss.data() + GPIdx * P1 * (numDerivatives + 1) * dim,
+            dispValuesAndDerss.data() + inputGPIdx * P1 * (numDerivatives + 1) * dim,
             P1, (numDerivatives + 1) * dim);
 
         double* P1Vec = gp + P1Offset;
@@ -945,7 +961,7 @@ void assembleStrainGradientRHSKernel(
     double ptForIndexData[3] = {0.0};
     DeviceVectorView<double> ptForIndex(ptForIndexData, dim);
     for (int a = 0; a < dim; ++a)
-        ptForIndex[a] = pts(a, elementGlobal * numGPsInElement);
+        ptForIndex[a] = pts(a, inputGPStartId + elementLocal * numGPsInElement);
 
     for (int di = threadId; di < dim; di += blockDim.x)
     {
@@ -1304,8 +1320,9 @@ void GPUStrainGradientElasticityAssembler::constructStrainGradientStressFunction
         evaluateStrainGradientGPKernel, 0, numGPs());
     gridSize = (numGPs() + blockSize - 1) / blockSize;
     evaluateStrainGradientGPKernel<<<gridSize, blockSize>>>(
-        numDerivatives(), numGPs(), sgStride, materialLaw, youngsModulus,
-        poissonsRatio, lengthScale, localStiffening, displacementView,
+        numDerivatives(), 0, 0, numGPs(), sgStride, materialLaw,
+        youngsModulus, poissonsRatio, lengthScale, localStiffening,
+        displacementView,
         geometryView(), gpTable(), wts().vectorView(), geoValuesAndDerssView(),
         dispValuesAndDerssView(), m_sgGPData.vectorView());
     err = cudaDeviceSynchronize();
@@ -1418,8 +1435,9 @@ void GPUStrainGradientElasticityAssembler::writeGaussPointKinematicsTSV(
         evaluateStrainGradientGPKernel, 0, totalGPs);
     const int gridSize = (totalGPs + blockSize - 1) / blockSize;
     evaluateStrainGradientGPKernel<<<gridSize, blockSize>>>(
-        numDerivatives(), totalGPs, sgStride, materialLaw, youngsModulus,
-        poissonsRatio, lengthScale, localStiffening, displacementView,
+        numDerivatives(), 0, 0, totalGPs, sgStride, materialLaw,
+        youngsModulus, poissonsRatio, lengthScale, localStiffening,
+        displacementView,
         geometryView(), gpTable(), wts().vectorView(), geoValuesAndDerssView(),
         dispValuesAndDerssView(), m_sgGPData.vectorView());
     cudaError_t err = cudaGetLastError();
@@ -1643,6 +1661,736 @@ void GPUStrainGradientElasticityAssembler::assemble(
     const int materialLaw = options().getInt("material_law");
 
     const int sgStride = strainGradientDoublesPerGP(domainDim());
+    const bool enableMultiGPU =
+        siga::gpuasm::envFlag("SIGA_MULTIGPU_ASSEMBLY", false);
+    const bool enableStreamingAssembly = siga::gpuasm::envFlag(
+        "SIGA_SG_STREAMING_ASSEMBLY",
+        siga::gpuasm::envFlag("SIGA_GPU_STREAMING_ASSEMBLY", enableMultiGPU));
+    if (enableStreamingAssembly)
+    {
+        if (m_sgGPData.size() != 0)
+            m_sgGPData.resize(0);
+
+        const bool reportMemory = siga::gpuasm::envFlag(
+            "SIGA_SG_MEMORY_REPORT",
+            siga::gpuasm::envFlag("SIGA_GPU_MEMORY_REPORT", true));
+        const bool replicateSecondaryInputs = siga::gpuasm::envFlag(
+            "SIGA_SG_REPLICATE_INPUTS",
+            siga::gpuasm::envFlag("SIGA_GPU_REPLICATE_INPUTS", true));
+        const bool useLocalCSRAssembly = siga::gpuasm::envFlag(
+            "SIGA_SG_LOCAL_CSR_ASSEMBLY",
+            siga::gpuasm::envFlag("SIGA_GPU_LOCAL_CSR_ASSEMBLY", true));
+        const bool printTiming = siga::gpuasm::envFlag(
+            "SIGA_SG_MATRIX_TIMING",
+            siga::gpuasm::envFlag("SIGA_GPU_MATRIX_TIMING", false));
+
+        int primaryDevice = 0;
+        cudaError_t err = cudaGetDevice(&primaryDevice);
+        if (err != cudaSuccess)
+            throw std::runtime_error(
+                "cudaGetDevice failed before strain-gradient assembly");
+
+        std::vector<int> assemblyDevices =
+            siga::gpuasm::usableAssemblyDevices(enableMultiGPU);
+        siga::gpuasm::printDeviceSelection("Strain-gradient assembly",
+                                           assemblyDevices,
+                                           enableMultiGPU);
+        const int numAssemblyDevices =
+            static_cast<int>(assemblyDevices.size());
+        if (numElements() <= 0 || numGPs() % numElements() != 0)
+            throw std::runtime_error(
+                "Strain-gradient streaming assembly requires a uniform positive Gauss-point count per element");
+        const int gpsPerElement = numGPs() / numElements();
+        const int matrixValuesSize = csrMatrix().numNonZeros();
+        const int rhsSize = numDofs();
+        const int numFields = targetDim();
+
+        const SparseSystemDeviceView primarySystemView =
+            sparseSystemDeviceView();
+        const MultiPatchDeviceView primaryGeometryView = geometryView();
+        const MultiPatchDeviceView primaryDisplacementView =
+            displacementView();
+        const DeviceMatrixView<double> primaryGPTableView = gpTable();
+        const DeviceVectorView<double> primaryWeightsView =
+            wts().vectorView();
+        const DeviceMatrixView<double> primaryGeoValuesView =
+            geoValuesAndDerssView();
+        const DeviceMatrixView<double> primaryDispValuesView =
+            dispValuesAndDerssView();
+        const DeviceVectorView<double> primaryBodyForceView =
+            bodyForce().vectorView();
+
+        const int oneShotChunkElements =
+            (numElements() + numAssemblyDevices - 1) / numAssemblyDevices;
+        int requestedChunkElementLimit = siga::gpuasm::envInt(
+            "SIGA_SG_CHUNK_ELEMENTS",
+            siga::gpuasm::envInt("SIGA_GPU_CHUNK_ELEMENTS",
+                                 oneShotChunkElements));
+        if (requestedChunkElementLimit <= 0)
+            requestedChunkElementLimit = oneShotChunkElements;
+        requestedChunkElementLimit =
+            std::min(numElements(),
+                     std::max(1, requestedChunkElementLimit));
+        double memorySafetyFraction = siga::gpuasm::envDouble(
+            "SIGA_SG_MEMORY_FRACTION",
+            siga::gpuasm::envDouble("SIGA_GPU_MEMORY_FRACTION", 0.90));
+        memorySafetyFraction =
+            std::min(1.0, std::max(0.10, memorySafetyFraction));
+
+        auto staticInputBytes = [&](int gpCount)
+        {
+            unsigned long long bytes =
+                siga::gpuasm::multiPatchReplicaBytes(primaryGeometryView) +
+                siga::gpuasm::multiPatchReplicaBytes(primaryDisplacementView) +
+                siga::gpuasm::bytesForCount(
+                    static_cast<long long>(gpCount) *
+                        primaryGPTableView.rows(),
+                    sizeof(double)) +
+                siga::gpuasm::bytesForCount(gpCount, sizeof(double)) +
+                siga::gpuasm::vectorBytes(primaryBodyForceView);
+
+            if (numGPs() > 0)
+            {
+                bytes += siga::gpuasm::bytesForCount(
+                    static_cast<long long>(gpCount) *
+                        primaryGeoValuesView.size() / numGPs(),
+                    sizeof(double));
+                bytes += siga::gpuasm::bytesForCount(
+                    static_cast<long long>(gpCount) *
+                        primaryDispValuesView.size() / numGPs(),
+                    sizeof(double));
+            }
+            return bytes;
+        };
+
+        auto requiredBytesForDevice =
+            [&](int idx, int maxGPCount, int maxRowCount,
+                int maxMatrixValueCount,
+                std::vector<std::pair<std::string, unsigned long long>>* parts)
+        {
+            const unsigned long long matrixOutputBytes =
+                idx == 0 ? 0
+                         : siga::gpuasm::bytesForCount(maxMatrixValueCount,
+                                                       sizeof(double));
+            const unsigned long long rhsOutputBytes =
+                idx == 0 ? 0
+                         : siga::gpuasm::bytesForCount(maxRowCount,
+                                                       sizeof(double));
+            const unsigned long long sgGPDataBytes =
+                siga::gpuasm::bytesForCount(
+                    static_cast<long long>(sgStride) * maxGPCount,
+                    sizeof(double));
+            unsigned long long sparseBytes = 0;
+            unsigned long long staticBytes = 0;
+            unsigned long long fixedDofsBytes = 0;
+            if (idx != 0)
+            {
+                sparseBytes = siga::gpuasm::sparseMetadataBytes(
+                    primarySystemView, maxRowCount + 1,
+                    maxMatrixValueCount);
+                if (replicateSecondaryInputs)
+                {
+                    staticBytes = staticInputBytes(maxGPCount);
+                    fixedDofsBytes =
+                        siga::gpuasm::nestedArrayBytes(fixedDofsAssemble);
+                }
+            }
+            if (parts)
+            {
+                *parts = {
+                    {"matrix output buffer", matrixOutputBytes},
+                    {"RHS output buffer", rhsOutputBytes},
+                    {"strain-gradient GP data", sgGPDataBytes},
+                    {"sparse metadata and local CSR", sparseBytes},
+                    {"replicated static input data", staticBytes},
+                    {"fixed dofs replica", fixedDofsBytes}
+                };
+            }
+            return matrixOutputBytes + rhsOutputBytes + sgGPDataBytes +
+                   sparseBytes + staticBytes + fixedDofsBytes;
+        };
+
+        siga::gpuasm::AssemblySchedule schedule;
+        int chunkElementLimit = requestedChunkElementLimit;
+        bool scheduleFitsMemory = false;
+        for (int attempt = 0; attempt < 32; ++attempt)
+        {
+            cudaSetDevice(primaryDevice);
+            schedule = siga::gpuasm::buildAssemblySchedule(
+                chunkElementLimit, numElements(), gpsPerElement,
+                numAssemblyDevices, N_D(), numFields, rhsSize,
+                matrixValuesSize,
+                useLocalCSRAssembly && numAssemblyDevices > 1,
+                primarySystemView, primaryDisplacementView,
+                primaryDisplacementView, primaryGPTableView);
+
+            bool fitsMemory = true;
+            double worstRatio = 1.0;
+            int worstDeviceIdx = -1;
+            unsigned long long worstRequired = 0;
+            unsigned long long worstAvailable = 0;
+            for (int idx = 0; idx < numAssemblyDevices; ++idx)
+            {
+                schedule.requiredBytes[idx] = requiredBytesForDevice(
+                    idx, schedule.maxGPCounts[idx],
+                    schedule.maxRowCounts[idx],
+                    schedule.maxMatrixValueCounts[idx], nullptr);
+                cudaSetDevice(assemblyDevices[idx]);
+                size_t freeMem = 0;
+                size_t totalMem = 0;
+                err = cudaMemGetInfo(&freeMem, &totalMem);
+                if (err != cudaSuccess)
+                    throw std::runtime_error(
+                        std::string("cudaMemGetInfo failed while sizing strain-gradient assembly chunks: ") +
+                        cudaGetErrorString(err));
+
+                const unsigned long long available =
+                    static_cast<unsigned long long>(
+                        static_cast<double>(freeMem) * memorySafetyFraction);
+                const unsigned long long required =
+                    schedule.requiredBytes[idx];
+                if (required > available && chunkElementLimit > 1)
+                {
+                    fitsMemory = false;
+                    const double ratio =
+                        static_cast<double>(available) /
+                        static_cast<double>(std::max(1ULL, required));
+                    if (ratio < worstRatio)
+                    {
+                        worstRatio = ratio;
+                        worstDeviceIdx = idx;
+                        worstRequired = required;
+                        worstAvailable = available;
+                    }
+                }
+                else if (required > available)
+                {
+                    throw std::runtime_error(
+                        "Strain-gradient assembly cannot fit even a one-element chunk on CUDA device " +
+                        std::to_string(assemblyDevices[idx]) +
+                        ". Required " + siga::gpuasm::gibString(required) +
+                        ", available with safety margin " +
+                        siga::gpuasm::gibString(available) + ".");
+                }
+            }
+            cudaSetDevice(primaryDevice);
+
+            if (fitsMemory)
+            {
+                scheduleFitsMemory = true;
+                break;
+            }
+
+            int nextChunkElementLimit = static_cast<int>(
+                std::floor(chunkElementLimit * worstRatio * 0.95));
+            if (nextChunkElementLimit >= chunkElementLimit)
+                nextChunkElementLimit = chunkElementLimit - 1;
+            if (nextChunkElementLimit < 1)
+                nextChunkElementLimit = 1;
+            if (reportMemory)
+            {
+                std::cout << "Strain-gradient adaptive assembly chunking: chunk limit "
+                          << chunkElementLimit << " elements needs "
+                          << siga::gpuasm::gibString(worstRequired)
+                          << " on device " << assemblyDevices[worstDeviceIdx]
+                          << ", memory target "
+                          << siga::gpuasm::gibString(worstAvailable)
+                          << "; reducing to " << nextChunkElementLimit
+                          << " elements/chunk\n";
+            }
+            chunkElementLimit = nextChunkElementLimit;
+        }
+        if (!scheduleFitsMemory)
+            throw std::runtime_error(
+                "Strain-gradient adaptive assembly chunking could not find a memory-fitting chunk size.");
+
+        if (reportMemory)
+        {
+            int totalChunks = 0;
+            for (const auto& chunks : schedule.chunksByDevice)
+                totalChunks += static_cast<int>(chunks.size());
+            std::cout << "Strain-gradient adaptive assembly schedule: "
+                      << totalChunks << " chunks, " << schedule.rounds
+                      << " rounds, max " << schedule.chunkElementLimit
+                      << " elements/chunk";
+            if (schedule.chunkElementLimit < oneShotChunkElements)
+                std::cout << " (streaming enabled)";
+            std::cout << "\n";
+        }
+
+        struct StrainGradientAssemblyDeviceBuffer
+        {
+            siga::gpuasm::SparseOutputBuffer output;
+            DeviceArray<double> sgGPData;
+            siga::gpuasm::MultiPatchReplica geometry;
+            siga::gpuasm::MultiPatchReplica displacement;
+            DeviceArray<double> gpTable;
+            DeviceArray<double> weights;
+            DeviceArray<double> geoValuesAndDerss;
+            DeviceArray<double> dispValuesAndDerss;
+            DeviceArray<double> bodyForce;
+            siga::gpuasm::NestedArrayReplica<double> fixedDofs;
+
+            StrainGradientAssemblyDeviceBuffer(int matrixSize, int rhsSize,
+                                               int sgGPDataSize)
+                : output(matrixSize, rhsSize), sgGPData(sgGPDataSize)
+            {
+            }
+
+            void copyStaticModelData(MultiPatchDeviceView geometryView,
+                                     MultiPatchDeviceView displacementView,
+                                     DeviceVectorView<double> bodyForceView,
+                                     int sourceDevice, int targetDevice)
+            {
+                geometry.updateStaticData(geometryView, sourceDevice,
+                                          targetDevice, "geometry");
+                displacement.updateStaticData(displacementView, sourceDevice,
+                                              targetDevice, "displacement");
+                siga::gpuasm::peerCopyInto(bodyForce, bodyForceView,
+                                           sourceDevice, targetDevice,
+                                           "body force");
+            }
+
+            void copyStaticChunkInputData(
+                DeviceMatrixView<double> gpTableView,
+                DeviceVectorView<double> weightsView,
+                DeviceMatrixView<double> geoValuesView,
+                DeviceMatrixView<double> dispValuesView, int totalGPCount,
+                int gpStart, int gpCount, int sourceDevice, int targetDevice)
+            {
+                const int gpTableStride = gpTableView.rows();
+                siga::gpuasm::peerCopySliceInto(
+                    gpTable, gpTableView.data() + gpStart * gpTableStride,
+                    gpCount * gpTableStride, sourceDevice, targetDevice,
+                    "local Gauss-point table");
+                siga::gpuasm::peerCopySliceInto(
+                    weights, weightsView.data() + gpStart, gpCount,
+                    sourceDevice, targetDevice, "local Gauss weights");
+                const int geoStride = geoValuesView.size() / totalGPCount;
+                const int dispStride = dispValuesView.size() / totalGPCount;
+                siga::gpuasm::peerCopySliceInto(
+                    geoValuesAndDerss,
+                    geoValuesView.data() + gpStart * geoStride,
+                    gpCount * geoStride, sourceDevice, targetDevice,
+                    "local geometry values and derivatives");
+                siga::gpuasm::peerCopySliceInto(
+                    dispValuesAndDerss,
+                    dispValuesView.data() + gpStart * dispStride,
+                    gpCount * dispStride, sourceDevice, targetDevice,
+                    "local displacement values and derivatives");
+            }
+
+            void updateDynamicInputData(
+                MultiPatchDeviceView displacementView,
+                DeviceNestedArrayView<double> fixedDofsView,
+                int sourceDevice, int targetDevice)
+            {
+                displacement.updateControlPoints(displacementView,
+                                                 sourceDevice, targetDevice,
+                                                 "displacement");
+                fixedDofs.update(fixedDofsView, sourceDevice, targetDevice,
+                                 "fixed dofs");
+            }
+        };
+
+        std::vector<std::unique_ptr<StrainGradientAssemblyDeviceBuffer>>
+            buffers(numAssemblyDevices);
+        for (int idx = 0; idx < numAssemblyDevices; ++idx)
+        {
+            cudaSetDevice(assemblyDevices[idx]);
+            const int localMatrixValuesSize =
+                idx == 0 ? 0 : schedule.maxMatrixValueCounts[idx];
+            const int localRhsSize =
+                idx == 0 ? 0 : schedule.maxRowCounts[idx];
+            const int localSGDataSize = sgStride * schedule.maxGPCounts[idx];
+
+            std::vector<std::pair<std::string, unsigned long long>> parts;
+            const unsigned long long requiredBytes = requiredBytesForDevice(
+                idx, schedule.maxGPCounts[idx],
+                schedule.maxRowCounts[idx],
+                schedule.maxMatrixValueCounts[idx], &parts);
+            std::ostringstream label;
+            label << "strain-gradient assembly streaming buffer for GPU "
+                  << idx << " (max elements "
+                  << schedule.maxElementCounts[idx] << ", max GP "
+                  << schedule.maxGPCounts[idx] << ")";
+            siga::gpuasm::printCudaMemoryReport(label.str(), requiredBytes,
+                                                reportMemory, parts);
+
+            buffers[idx] =
+                std::make_unique<StrainGradientAssemblyDeviceBuffer>(
+                    localMatrixValuesSize, localRhsSize, localSGDataSize);
+            if (idx != 0)
+            {
+                buffers[idx]->output.copySparseBaseMetadata(
+                    primarySystemView, primaryDevice, assemblyDevices[idx]);
+                if (replicateSecondaryInputs)
+                    buffers[idx]->copyStaticModelData(
+                        primaryGeometryView, primaryDisplacementView,
+                        primaryBodyForceView, primaryDevice,
+                        assemblyDevices[idx]);
+            }
+        }
+
+        const auto inputRefreshStartTime =
+            std::chrono::high_resolution_clock::now();
+        if (replicateSecondaryInputs)
+        {
+            for (int idx = 1; idx < numAssemblyDevices; ++idx)
+            {
+                cudaSetDevice(assemblyDevices[idx]);
+                buffers[idx]->updateDynamicInputData(
+                    primaryDisplacementView, fixedDofsAssemble,
+                    primaryDevice, assemblyDevices[idx]);
+            }
+        }
+        const auto inputRefreshEndTime =
+            std::chrono::high_resolution_clock::now();
+        cudaSetDevice(primaryDevice);
+
+        const int gpTableColsPerGP = primaryGPTableView.cols() / numGPs();
+        const int geoValuesColsPerGP =
+            primaryGeoValuesView.cols() / numGPs();
+        const int dispValuesColsPerGP =
+            primaryDispValuesView.cols() / numGPs();
+
+        auto inputGPStartForDevice =
+            [&](int idx, const siga::gpuasm::AssemblyChunk& chunk)
+        {
+            return (idx != 0 && replicateSecondaryInputs) ? 0
+                                                          : chunk.gpStart;
+        };
+
+        auto systemViewForDevice = [&](int idx)
+        {
+            if (idx == 0)
+                return primarySystemView;
+            return buffers[idx]->output.sparseSystemView(primarySystemView);
+        };
+
+        auto geometryViewForDevice = [&](int idx)
+        {
+            if (idx == 0 || !replicateSecondaryInputs)
+                return primaryGeometryView;
+            return buffers[idx]->geometry.view();
+        };
+
+        auto displacementViewForDevice = [&](int idx)
+        {
+            if (idx == 0 || !replicateSecondaryInputs)
+                return primaryDisplacementView;
+            return buffers[idx]->displacement.view();
+        };
+
+        auto gpTableViewForDevice =
+            [&](int idx, const siga::gpuasm::AssemblyChunk& chunk)
+        {
+            if (idx == 0 || !replicateSecondaryInputs)
+                return primaryGPTableView;
+            return DeviceMatrixView<double>(
+                buffers[idx]->gpTable.data(), primaryGPTableView.rows(),
+                chunk.gpCount * gpTableColsPerGP);
+        };
+
+        auto weightsViewForDevice = [&](int idx)
+        {
+            if (idx == 0 || !replicateSecondaryInputs)
+                return primaryWeightsView;
+            return buffers[idx]->weights.vectorView();
+        };
+
+        auto geoValuesViewForDevice =
+            [&](int idx, const siga::gpuasm::AssemblyChunk& chunk)
+        {
+            if (idx == 0 || !replicateSecondaryInputs)
+                return primaryGeoValuesView;
+            return DeviceMatrixView<double>(
+                buffers[idx]->geoValuesAndDerss.data(),
+                primaryGeoValuesView.rows(),
+                chunk.gpCount * geoValuesColsPerGP);
+        };
+
+        auto dispValuesViewForDevice =
+            [&](int idx, const siga::gpuasm::AssemblyChunk& chunk)
+        {
+            if (idx == 0 || !replicateSecondaryInputs)
+                return primaryDispValuesView;
+            return DeviceMatrixView<double>(
+                buffers[idx]->dispValuesAndDerss.data(),
+                primaryDispValuesView.rows(),
+                chunk.gpCount * dispValuesColsPerGP);
+        };
+
+        auto bodyForceViewForDevice = [&](int idx)
+        {
+            if (idx == 0 || !replicateSecondaryInputs)
+                return primaryBodyForceView;
+            return buffers[idx]->bodyForce.vectorView();
+        };
+
+        auto fixedDofsViewForDevice = [&](int idx)
+        {
+            if (idx == 0 || !replicateSecondaryInputs)
+                return fixedDofsAssemble;
+            return buffers[idx]->fixedDofs.view();
+        };
+
+        auto prepareChunkForDevice =
+            [&](int idx, const siga::gpuasm::AssemblyChunk& chunk)
+        {
+            cudaSetDevice(assemblyDevices[idx]);
+            if (idx == 0)
+                return;
+
+            StrainGradientAssemblyDeviceBuffer& buffer = *buffers[idx];
+            buffer.output.updateLocalSparseWindow(
+                primarySystemView, chunk.rowPtrHost, chunk.rowStart,
+                chunk.matrixValueStart, primaryDevice, assemblyDevices[idx]);
+            buffer.output.clearActiveOutput();
+            if (replicateSecondaryInputs)
+                buffer.copyStaticChunkInputData(
+                    primaryGPTableView, primaryWeightsView,
+                    primaryGeoValuesView, primaryDispValuesView, numGPs(),
+                    chunk.gpStart, chunk.gpCount, primaryDevice,
+                    assemblyDevices[idx]);
+        };
+
+        auto runChunkGroup = [&](int round, const auto& launcher)
+        {
+            if (numAssemblyDevices == 1)
+            {
+                cudaSetDevice(primaryDevice);
+                if (round < static_cast<int>(schedule.chunksByDevice[0].size()))
+                {
+                    const siga::gpuasm::AssemblyChunk& chunk =
+                        schedule.chunksByDevice[0][round];
+                    launcher(0, chunk, primarySystemView);
+                }
+                return;
+            }
+
+            std::vector<std::thread> workers;
+            std::vector<std::exception_ptr> errors(numAssemblyDevices);
+            workers.reserve(numAssemblyDevices);
+            for (int idx = 0; idx < numAssemblyDevices; ++idx)
+            {
+                if (round >=
+                    static_cast<int>(schedule.chunksByDevice[idx].size()))
+                    continue;
+
+                const int device = assemblyDevices[idx];
+                const siga::gpuasm::AssemblyChunk chunk =
+                    schedule.chunksByDevice[idx][round];
+                const SparseSystemDeviceView systemView =
+                    systemViewForDevice(idx);
+                workers.emplace_back([&, idx, device, chunk, systemView]()
+                {
+                    try
+                    {
+                        cudaSetDevice(device);
+                        launcher(idx, chunk, systemView);
+                    }
+                    catch (...)
+                    {
+                        errors[idx] = std::current_exception();
+                    }
+                });
+            }
+
+            for (auto& worker : workers)
+                worker.join();
+            cudaSetDevice(primaryDevice);
+
+            for (const auto& error : errors)
+                if (error)
+                    std::rethrow_exception(error);
+        };
+
+        const auto launchPrecomputeChunk =
+            [&](int idx, const siga::gpuasm::AssemblyChunk& chunk,
+                SparseSystemDeviceView)
+        {
+            if (chunk.elementCount <= 0)
+                return;
+
+            StrainGradientAssemblyDeviceBuffer& buffer = *buffers[idx];
+            int localMinGrid = 0;
+            int localBlockSize = 0;
+            cudaOccupancyMaxPotentialBlockSize(
+                &localMinGrid, &localBlockSize,
+                evaluateStrainGradientGPKernel, 0, chunk.gpCount);
+            const int localGridSize =
+                (chunk.gpCount + localBlockSize - 1) / localBlockSize;
+            evaluateStrainGradientGPKernel<<<localGridSize, localBlockSize>>>(
+                numDerivatives(), chunk.gpStart,
+                inputGPStartForDevice(idx, chunk), chunk.gpCount, sgStride,
+                materialLaw, youngsModulus, poissonsRatio, lengthScale,
+                localStiffening, displacementViewForDevice(idx),
+                geometryViewForDevice(idx), gpTableViewForDevice(idx, chunk),
+                weightsViewForDevice(idx), geoValuesViewForDevice(idx, chunk),
+                dispValuesViewForDevice(idx, chunk),
+                buffer.sgGPData.vectorView());
+            cudaError_t syncErr = cudaDeviceSynchronize();
+            if (syncErr != cudaSuccess)
+                throw std::runtime_error(
+                    "CUDA synchronize failed in chunk-local strain-gradient GP evaluation");
+        };
+
+        const int blockSizeAssembleMatrix = N_D();
+        const int localMatrixEntries = domainDim() * domainDim();
+        const size_t matrixSharedBytes =
+            localMatrixEntries * sizeof(double);
+        const auto launchMatrixChunk =
+            [&](int idx, const siga::gpuasm::AssemblyChunk& chunk,
+                SparseSystemDeviceView systemView)
+        {
+            if (chunk.elementCount <= 0)
+                return;
+
+            StrainGradientAssemblyDeviceBuffer& buffer = *buffers[idx];
+            const int chunkGridSize =
+                N_D() * N_D() * chunk.elementCount;
+            assembleStrainGradientMatrixKernel<<<
+                chunkGridSize, blockSizeAssembleMatrix,
+                matrixSharedBytes>>>(
+                numDerivatives(), chunk.elementStart,
+                inputGPStartForDevice(idx, chunk), chunk.elementCount,
+                N_D(), sgStride, displacementViewForDevice(idx),
+                geometryViewForDevice(idx), systemView,
+                fixedDofsViewForDevice(idx),
+                gpTableViewForDevice(idx, chunk),
+                dispValuesViewForDevice(idx, chunk),
+                buffer.sgGPData.vectorView());
+            cudaError_t syncErr = cudaDeviceSynchronize();
+            if (syncErr != cudaSuccess)
+                throw std::runtime_error(
+                    "CUDA synchronize failed in chunk-local strain-gradient matrix assembly");
+        };
+
+        const int blockSizeAssembleRHS = N_D();
+        const int localRHSEntries = domainDim();
+        const size_t rhsSharedBytes = localRHSEntries * sizeof(double);
+        const auto launchRHSChunk =
+            [&](int idx, const siga::gpuasm::AssemblyChunk& chunk,
+                SparseSystemDeviceView systemView)
+        {
+            if (chunk.elementCount <= 0)
+                return;
+
+            StrainGradientAssemblyDeviceBuffer& buffer = *buffers[idx];
+            const int chunkGridSize = N_D() * chunk.elementCount;
+            assembleStrainGradientRHSKernel<<<
+                chunkGridSize, blockSizeAssembleRHS, rhsSharedBytes>>>(
+                numDerivatives(), chunk.elementStart,
+                inputGPStartForDevice(idx, chunk), chunk.elementCount,
+                N_D(), sgStride, forceScaling,
+                displacementViewForDevice(idx), geometryViewForDevice(idx),
+                systemView, gpTableViewForDevice(idx, chunk),
+                dispValuesViewForDevice(idx, chunk),
+                bodyForceViewForDevice(idx), buffer.sgGPData.vectorView());
+            cudaError_t syncErr = cudaDeviceSynchronize();
+            if (syncErr != cudaSuccess)
+                throw std::runtime_error(
+                    "CUDA synchronize failed in chunk-local strain-gradient RHS assembly");
+        };
+
+        auto reduceChunkGroup = [&](int round)
+        {
+            cudaSetDevice(primaryDevice);
+            for (int idx = 1; idx < numAssemblyDevices; ++idx)
+            {
+                if (round >=
+                    static_cast<int>(schedule.chunksByDevice[idx].size()))
+                    continue;
+                siga::gpuasm::reduceSparseOutputBuffer(
+                    csrMatrix().values(), rhs(), buffers[idx]->output);
+            }
+            cudaSetDevice(primaryDevice);
+        };
+
+        std::chrono::duration<double, std::milli> chunkInputMilliseconds(0.0);
+        std::chrono::duration<double, std::milli> precomputeMilliseconds(0.0);
+        std::chrono::duration<double, std::milli> matrixMilliseconds(0.0);
+        std::chrono::duration<double, std::milli> rhsMilliseconds(0.0);
+        std::chrono::duration<double, std::milli> reductionMilliseconds(0.0);
+
+        for (int round = 0; round < schedule.rounds; ++round)
+        {
+            const auto chunkInputStartTime =
+                std::chrono::high_resolution_clock::now();
+            for (int idx = 0; idx < numAssemblyDevices; ++idx)
+            {
+                if (round >=
+                    static_cast<int>(schedule.chunksByDevice[idx].size()))
+                    continue;
+                prepareChunkForDevice(idx,
+                                      schedule.chunksByDevice[idx][round]);
+            }
+            cudaSetDevice(primaryDevice);
+            const auto chunkInputEndTime =
+                std::chrono::high_resolution_clock::now();
+            chunkInputMilliseconds += chunkInputEndTime - chunkInputStartTime;
+
+            const auto precomputeStartTime =
+                std::chrono::high_resolution_clock::now();
+            runChunkGroup(round, launchPrecomputeChunk);
+            const auto precomputeEndTime =
+                std::chrono::high_resolution_clock::now();
+            precomputeMilliseconds += precomputeEndTime - precomputeStartTime;
+
+            const auto matrixStartTime =
+                std::chrono::high_resolution_clock::now();
+            runChunkGroup(round, launchMatrixChunk);
+            const auto matrixEndTime =
+                std::chrono::high_resolution_clock::now();
+            matrixMilliseconds += matrixEndTime - matrixStartTime;
+
+            const auto rhsStartTime = std::chrono::high_resolution_clock::now();
+            runChunkGroup(round, launchRHSChunk);
+            const auto rhsEndTime = std::chrono::high_resolution_clock::now();
+            rhsMilliseconds += rhsEndTime - rhsStartTime;
+
+            const auto reductionStartTime =
+                std::chrono::high_resolution_clock::now();
+            reduceChunkGroup(round);
+            const auto reductionEndTime =
+                std::chrono::high_resolution_clock::now();
+            reductionMilliseconds += reductionEndTime - reductionStartTime;
+        }
+
+        if (printTiming)
+        {
+            const std::chrono::duration<double, std::milli>
+                inputMilliseconds =
+                    (inputRefreshEndTime - inputRefreshStartTime) +
+                    chunkInputMilliseconds;
+            std::cout << "Strain-gradient assembly path: GPUs "
+                      << numAssemblyDevices << ", replicated inputs: "
+                      << (replicateSecondaryInputs ? "on" : "off")
+                      << ", local CSR: "
+                      << (useLocalCSRAssembly && numAssemblyDevices > 1
+                              ? "on"
+                              : "off")
+                      << ", chunk limit: " << schedule.chunkElementLimit
+                      << ", rounds: " << schedule.rounds
+                      << ", matrix wall time: "
+                      << matrixMilliseconds.count() << " ms\n";
+            std::cout << "Strain-gradient assembly phases: input refresh "
+                      << inputMilliseconds.count() << " ms, precompute "
+                      << precomputeMilliseconds.count() << " ms, matrix "
+                      << matrixMilliseconds.count() << " ms, RHS "
+                      << rhsMilliseconds.count() << " ms, reduction "
+                      << reductionMilliseconds.count() << " ms\n";
+        }
+
+        cudaSetDevice(primaryDevice);
+        assembleNeumannBoundaryCondition();
+        assembleDoubleStressBoundaryCondition();
+        assembleFollowerMomentBoundaryCondition(fixedDofsAssemble);
+        assembleNeumannCornerPointLoads();
+        return;
+    }
+
     const int sgDataSize = sgStride * numGPs();
     if (m_sgGPData.size() != sgDataSize)
         m_sgGPData.resize(sgDataSize);
@@ -1655,8 +2403,9 @@ void GPUStrainGradientElasticityAssembler::assemble(
         evaluateStrainGradientGPKernel, 0, numGPs());
     int gridSize = (numGPs() + blockSize - 1) / blockSize;
     evaluateStrainGradientGPKernel<<<gridSize, blockSize>>>(
-        numDerivatives(), numGPs(), sgStride, materialLaw, youngsModulus,
-        poissonsRatio, lengthScale, localStiffening, displacementView(),
+        numDerivatives(), 0, 0, numGPs(), sgStride, materialLaw,
+        youngsModulus, poissonsRatio, lengthScale, localStiffening,
+        displacementView(),
         geometryView(), gpTable(), wts().vectorView(), geoValuesAndDerssView(),
         dispValuesAndDerssView(), m_sgGPData.vectorView());
     cudaError_t err = cudaGetLastError();
@@ -1673,9 +2422,10 @@ void GPUStrainGradientElasticityAssembler::assemble(
     const size_t matrixSharedBytes = localMatrixEntries * sizeof(double);
     const int gridSize_assembleMatrix = N_D() * N_D() * numElements();
     assembleStrainGradientMatrixKernel<<<gridSize_assembleMatrix, blockSize_assembleMatrix, matrixSharedBytes>>>(
-        numDerivatives(), numElements(), N_D(), sgStride, displacementView(),
-        geometryView(), sparseSystemDeviceView(), fixedDofsAssemble, gpTable(),
-        dispValuesAndDerssView(), m_sgGPData.vectorView());
+        numDerivatives(), 0, 0, numElements(), N_D(), sgStride,
+        displacementView(), geometryView(), sparseSystemDeviceView(),
+        fixedDofsAssemble, gpTable(), dispValuesAndDerssView(),
+        m_sgGPData.vectorView());
     err = cudaGetLastError();
     if (err != cudaSuccess)
         std::cerr << "Error after assembleStrainGradientMatrixKernel launch: "
@@ -1690,9 +2440,10 @@ void GPUStrainGradientElasticityAssembler::assemble(
     const size_t rhsSharedBytes = localRHSEntries * sizeof(double);
     const int gridSize_assembleRHS = N_D() * numElements();
     assembleStrainGradientRHSKernel<<<gridSize_assembleRHS, blockSize_assembleRHS, rhsSharedBytes>>>(
-        numDerivatives(), numElements(), N_D(), sgStride, forceScaling,
-        displacementView(), geometryView(), sparseSystemDeviceView(), gpTable(),
-        dispValuesAndDerssView(), bodyForce().vectorView(), m_sgGPData.vectorView());
+        numDerivatives(), 0, 0, numElements(), N_D(), sgStride,
+        forceScaling, displacementView(), geometryView(),
+        sparseSystemDeviceView(), gpTable(), dispValuesAndDerssView(),
+        bodyForce().vectorView(), m_sgGPData.vectorView());
     err = cudaGetLastError();
     if (err != cudaSuccess)
         std::cerr << "Error after assembleStrainGradientRHSKernel launch: "
