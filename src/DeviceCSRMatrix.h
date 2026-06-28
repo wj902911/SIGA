@@ -11,6 +11,7 @@ class DeviceCSRMatrixView
 {
 private:
     int m_numCols = 0;
+    int m_rowOffset = 0;
     DeviceVectorView<int> m_rowPtr;
     DeviceVectorView<int> m_colInd;
     DeviceVectorView<double> m_values;
@@ -27,8 +28,20 @@ public:
     : m_numCols(numCols), m_rowPtr(rowPtr), m_colInd(colInd), m_values(values) 
     {}
 
+    __host__
+    DeviceCSRMatrixView(int numCols, int rowOffset,
+                        DeviceVectorView<int> rowPtr,
+                        DeviceVectorView<int> colInd,
+                        DeviceVectorView<double> values)
+    : m_numCols(numCols), m_rowOffset(rowOffset), m_rowPtr(rowPtr),
+      m_colInd(colInd), m_values(values)
+    {}
+
     __host__ __device__
     int numCols() const { return m_numCols; }
+
+    __host__ __device__
+    int rowOffset() const { return m_rowOffset; }
 
     __host__ __device__
     DeviceVectorView<int> rowPtr() const { return m_rowPtr; }
@@ -42,8 +55,15 @@ public:
     __device__
     double& operator()(int row, int col)
     {
-        const int start = m_rowPtr[row];
-        const int end   = m_rowPtr[row + 1];
+        const int localRow = row - m_rowOffset;
+        if (localRow < 0 || localRow + 1 >= m_rowPtr.size())
+        {
+            static double zero = 0.0;
+            return zero;
+        }
+
+        const int start = m_rowPtr[localRow];
+        const int end   = m_rowPtr[localRow + 1];
         
         int lo = start;
         int hi = end - 1;
@@ -65,8 +85,12 @@ public:
     __device__
     double operator()(int row, int col) const
     {
-        const int start = m_rowPtr[row];
-        const int end   = m_rowPtr[row + 1];
+        const int localRow = row - m_rowOffset;
+        if (localRow < 0 || localRow + 1 >= m_rowPtr.size())
+            return 0.0;
+
+        const int start = m_rowPtr[localRow];
+        const int end   = m_rowPtr[localRow + 1];
         
         int lo = start;
         int hi = end - 1;

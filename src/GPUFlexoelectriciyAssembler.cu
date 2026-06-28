@@ -30,6 +30,34 @@ bool flexoEnvFlag(const char* name, bool defaultValue)
            value[0] != 'n' && value[0] != 'N';
 }
 
+int flexoEnvInt(const char* name, int defaultValue)
+{
+    const char* value = std::getenv(name);
+    if (!value || value[0] == '\0')
+        return defaultValue;
+    char* end = nullptr;
+    const long parsed = std::strtol(value, &end, 10);
+    if (end == value)
+        return defaultValue;
+    if (parsed < std::numeric_limits<int>::min())
+        return std::numeric_limits<int>::min();
+    if (parsed > std::numeric_limits<int>::max())
+        return std::numeric_limits<int>::max();
+    return static_cast<int>(parsed);
+}
+
+double flexoEnvDouble(const char* name, double defaultValue)
+{
+    const char* value = std::getenv(name);
+    if (!value || value[0] == '\0')
+        return defaultValue;
+    char* end = nullptr;
+    const double parsed = std::strtod(value, &end);
+    if (end == value || !std::isfinite(parsed))
+        return defaultValue;
+    return parsed;
+}
+
 std::string flexoGiBString(unsigned long long bytes)
 {
     std::ostringstream out;
@@ -37,6 +65,88 @@ std::string flexoGiBString(unsigned long long bytes)
         << static_cast<double>(bytes) / (1024.0 * 1024.0 * 1024.0)
         << " GiB";
     return out.str();
+}
+
+bool flexoMemoryReportEnabled()
+{
+    return flexoEnvFlag("SIGA_FLEXO_MEMORY_REPORT", true);
+}
+
+unsigned long long flexoBytesForCount(long long count,
+                                      unsigned long long elementSize)
+{
+    if (count <= 0)
+        return 0;
+    return static_cast<unsigned long long>(count) * elementSize;
+}
+
+template <typename T>
+unsigned long long flexoVectorBytes(DeviceVectorView<T> view)
+{
+    return flexoBytesForCount(view.size(), sizeof(T));
+}
+
+template <typename T>
+unsigned long long flexoNestedArrayBytes(DeviceNestedArrayView<T> view)
+{
+    return flexoVectorBytes(view.offsetsView()) +
+           flexoVectorBytes(view.wholeView());
+}
+
+void flexoPrintCudaMemoryReport(
+    const std::string& label,
+    unsigned long long requiredBytes,
+    const std::vector<std::pair<std::string, unsigned long long>>& parts = {})
+{
+    if (!flexoMemoryReportEnabled())
+        return;
+
+    int device = -1;
+    cudaError_t err = cudaGetDevice(&device);
+    if (err != cudaSuccess)
+    {
+        std::cout << "Flexo memory report [" << label
+                  << "]: cudaGetDevice failed: " << cudaGetErrorString(err)
+                  << ", required " << flexoGiBString(requiredBytes)
+                  << " (" << requiredBytes << " bytes)\n";
+        return;
+    }
+
+    size_t freeMem = 0;
+    size_t totalMem = 0;
+    err = cudaMemGetInfo(&freeMem, &totalMem);
+    if (err != cudaSuccess)
+    {
+        std::cout << "Flexo memory report [" << label << "] device "
+                  << device << ": cudaMemGetInfo failed: "
+                  << cudaGetErrorString(err) << ", required "
+                  << flexoGiBString(requiredBytes) << " (" << requiredBytes
+                  << " bytes)\n";
+        return;
+    }
+
+    const unsigned long long freeBytes =
+        static_cast<unsigned long long>(freeMem);
+    const unsigned long long totalBytes =
+        static_cast<unsigned long long>(totalMem);
+    std::cout << "Flexo memory report [" << label << "] device " << device
+              << ": required " << flexoGiBString(requiredBytes)
+              << " (" << requiredBytes << " bytes), available/free "
+              << flexoGiBString(freeBytes) << " (" << freeBytes
+              << " bytes), total " << flexoGiBString(totalBytes)
+              << " (" << totalBytes << " bytes)";
+    if (requiredBytes > freeBytes)
+        std::cout << " -- required exceeds currently available memory";
+    std::cout << "\n";
+
+    for (const auto& part : parts)
+    {
+        if (part.second == 0)
+            continue;
+        std::cout << "  " << part.first << ": "
+                  << flexoGiBString(part.second) << " (" << part.second
+                  << " bytes)\n";
+    }
 }
 
 struct FlexoStructuredCSRPattern
@@ -477,22 +587,43 @@ void flexoPeerCopyInto(DeviceArray<T>& target, DeviceVectorView<T> source,
                                  label + ": " + cudaGetErrorString(err));
 }
 
-__global__
-void addFlexoAssemblyBufferKernel(DeviceVectorView<double> dstMatrixValues,
-                                  DeviceVectorView<double> srcMatrixValues,
-                                  DeviceVectorView<double> dstRHS,
-                                  DeviceVectorView<double> srcRHS)
+template <typename T>
+void flexoPeerCopySliceInto(DeviceArray<T>& target, const T* sourceData,
+                            int sourceSize, int sourceDevice,
+                            int targetDevice, const char* label)
 {
-    const int matrixSize = dstMatrixValues.size();
-    const int rhsSize = dstRHS.size();
+    if (target.size() != sourceSize)
+        target.resize(sourceSize);
+    if (sourceSize == 0)
+        return;
+
+    cudaError_t err = cudaMemcpyPeer(target.data(), targetDevice, sourceData,
+                                     sourceDevice,
+                                     static_cast<std::size_t>(sourceSize) *
+                                         sizeof(T));
+    if (err != cudaSuccess)
+        throw std::runtime_error(std::string("cudaMemcpyPeer failed for ") +
+                                 label + ": " + cudaGetErrorString(err));
+}
+
+__global__
+void addFlexoLocalAssemblyBufferKernel(DeviceVectorView<double> dstMatrixValues,
+                                       DeviceVectorView<double> srcMatrixValues,
+                                       DeviceVectorView<double> dstRHS,
+                                       DeviceVectorView<double> srcRHS,
+                                       int matrixValueStart,
+                                       int rowStart)
+{
+    const int matrixSize = srcMatrixValues.size();
+    const int rhsSize = srcRHS.size();
     const int totalSize = matrixSize > rhsSize ? matrixSize : rhsSize;
     for (int idx = blockIdx.x * blockDim.x + threadIdx.x; idx < totalSize;
          idx += blockDim.x * gridDim.x)
     {
         if (idx < matrixSize)
-            dstMatrixValues[idx] += srcMatrixValues[idx];
+            dstMatrixValues[matrixValueStart + idx] += srcMatrixValues[idx];
         if (idx < rhsSize)
-            dstRHS[idx] += srcRHS[idx];
+            dstRHS[rowStart + idx] += srcRHS[idx];
     }
 }
 
@@ -581,9 +712,180 @@ struct FlexoMultiPatchReplica
     }
 };
 
+unsigned long long flexoMultiPatchStaticReplicaBytes(MultiPatchDeviceView view)
+{
+    return flexoVectorBytes(view.patchIntDataOffsets()) +
+           flexoVectorBytes(view.patchKnotsPoolOffsets()) +
+           flexoVectorBytes(view.patchControlPointsPoolOffsets()) +
+           flexoVectorBytes(view.intData()) +
+           flexoVectorBytes(view.knotsPools()) +
+           flexoVectorBytes(view.controlPointsPools()) +
+           flexoNestedArrayBytes(view.multSumsOffsets()) +
+           flexoNestedArrayBytes(view.multSums());
+}
+
+unsigned long long flexoSparseMetadataBytes(
+    const SparseSystemDeviceView& system,
+    int localRowPtrSize,
+    int localNnz)
+{
+    return flexoVectorBytes(system.mappersData()) +
+           flexoVectorBytes(system.rowBlocks()) +
+           flexoVectorBytes(system.colBlocks()) +
+           flexoVectorBytes(system.rowStrides()) +
+           flexoVectorBytes(system.colStrides()) +
+           flexoVectorBytes(system.colVars()) +
+           flexoVectorBytes(system.dims()) +
+           flexoVectorBytes(system.permOldToNew()) +
+           flexoVectorBytes(system.permNewToOld()) +
+           flexoBytesForCount(localRowPtrSize, sizeof(int)) +
+           flexoBytesForCount(localNnz, sizeof(int));
+}
+
+unsigned long long flexoStaticInputBytes(MultiPatchDeviceView geometryView,
+                                         MultiPatchDeviceView displacementView,
+                                         MultiPatchDeviceView electricView,
+                                         DeviceMatrixView<double> gpTableView,
+                                         DeviceVectorView<double> weightsView,
+                                         DeviceMatrixView<double> geoValuesView,
+                                         DeviceMatrixView<double> dispValuesView,
+                                         DeviceMatrixView<double> elecValuesView,
+                                         DeviceVectorView<double> bodyForceView,
+                                         int totalGPCount, int gpCount)
+{
+    unsigned long long bytes =
+        flexoMultiPatchStaticReplicaBytes(geometryView) +
+        flexoMultiPatchStaticReplicaBytes(displacementView) +
+        flexoMultiPatchStaticReplicaBytes(electricView) +
+        flexoBytesForCount(
+            static_cast<long long>(gpCount) * gpTableView.rows(),
+            sizeof(double)) +
+        flexoBytesForCount(gpCount, sizeof(double)) +
+        flexoVectorBytes(bodyForceView);
+
+    if (totalGPCount > 0)
+    {
+        bytes += flexoBytesForCount(
+            static_cast<long long>(gpCount) * geoValuesView.size() /
+                totalGPCount,
+            sizeof(double));
+        bytes += flexoBytesForCount(
+            static_cast<long long>(gpCount) * dispValuesView.size() /
+                totalGPCount,
+            sizeof(double));
+        bytes += flexoBytesForCount(
+            static_cast<long long>(gpCount) * elecValuesView.size() /
+                totalGPCount,
+            sizeof(double));
+    }
+
+    return bytes;
+}
+
+struct FlexoAssemblyChunk
+{
+    int sequence = 0;
+    int elementStart = 0;
+    int elementCount = 0;
+    int gpStart = 0;
+    int gpCount = 0;
+    int rowStart = 0;
+    int rowCount = 0;
+    int matrixValueStart = 0;
+    int matrixValueCount = 0;
+    std::vector<int> rowPtrHost;
+};
+
+struct FlexoAssemblySchedule
+{
+    int chunkElementLimit = 0;
+    int rounds = 0;
+    std::vector<std::vector<FlexoAssemblyChunk>> chunksByDevice;
+    std::vector<int> maxElementCounts;
+    std::vector<int> maxGPCounts;
+    std::vector<int> maxRowCounts;
+    std::vector<int> maxMatrixValueCounts;
+    std::vector<unsigned long long> requiredBytes;
+};
+
+unsigned long long flexoAssemblyBufferBytesForDevice(
+    int idx, int materialParameterSize, int stride, int basisStride,
+    int numBasisFunctions, bool replicateSecondaryInputs,
+    const SparseSystemDeviceView& primarySystemView,
+    MultiPatchDeviceView primaryGeometryView,
+    MultiPatchDeviceView primaryDisplacementView,
+    MultiPatchDeviceView primaryElectricPotentialView,
+    DeviceMatrixView<double> primaryGPTableView,
+    DeviceVectorView<double> primaryWeightsView,
+    DeviceMatrixView<double> primaryGeoValuesView,
+    DeviceMatrixView<double> primaryDispValuesView,
+    DeviceMatrixView<double> primaryElecValuesView,
+    DeviceVectorView<double> primaryBodyForceView,
+    DeviceNestedArrayView<double> fixedDofsAssemble,
+    int totalGPCount, int maxGPCount, int maxRowCount,
+    int maxMatrixValueCount,
+    std::vector<std::pair<std::string, unsigned long long>>* parts = nullptr)
+{
+    const unsigned long long matrixOutputBytes =
+        idx == 0 ? 0 : flexoBytesForCount(maxMatrixValueCount, sizeof(double));
+    const unsigned long long rhsOutputBytes =
+        idx == 0 ? 0 : flexoBytesForCount(maxRowCount, sizeof(double));
+    const unsigned long long materialBytes =
+        flexoBytesForCount(materialParameterSize, sizeof(double));
+    const unsigned long long gpDataBytes =
+        flexoBytesForCount(static_cast<long long>(stride) * maxGPCount,
+                           sizeof(double));
+    const unsigned long long basisDataBytes =
+        flexoBytesForCount(
+            static_cast<long long>(basisStride) * maxGPCount *
+                numBasisFunctions,
+            sizeof(double));
+
+    unsigned long long sparseMetadataBytes = 0;
+    unsigned long long staticInputBytes = 0;
+    unsigned long long fixedDofsBytes = 0;
+    if (idx != 0)
+    {
+        sparseMetadataBytes = flexoSparseMetadataBytes(
+            primarySystemView, maxRowCount + 1, maxMatrixValueCount);
+        if (replicateSecondaryInputs)
+        {
+            staticInputBytes = flexoStaticInputBytes(
+                primaryGeometryView, primaryDisplacementView,
+                primaryElectricPotentialView, primaryGPTableView,
+                primaryWeightsView, primaryGeoValuesView,
+                primaryDispValuesView, primaryElecValuesView,
+                primaryBodyForceView, totalGPCount, maxGPCount);
+            fixedDofsBytes = flexoNestedArrayBytes(fixedDofsAssemble);
+        }
+    }
+
+    if (parts)
+    {
+        *parts = {
+            {"matrix output buffer", matrixOutputBytes},
+            {"RHS output buffer", rhsOutputBytes},
+            {"material parameters", materialBytes},
+            {"flexo GP data", gpDataBytes},
+            {"flexo basis data", basisDataBytes},
+            {"sparse metadata and local CSR", sparseMetadataBytes},
+            {"replicated static input data", staticInputBytes},
+            {"fixed dofs replica", fixedDofsBytes}
+        };
+    }
+
+    return matrixOutputBytes + rhsOutputBytes + materialBytes + gpDataBytes +
+           basisDataBytes + sparseMetadataBytes + staticInputBytes +
+           fixedDofsBytes;
+}
+
 struct FlexoAssemblyDeviceBuffer
 {
     int device = -1;
+    int outputRowStart = 0;
+    int outputRowCount = 0;
+    int matrixValueStart = 0;
+    int matrixValueCount = 0;
     DeviceArray<double> matrixValues;
     DeviceArray<double> rhs;
     DeviceArray<double> materialParameters;
@@ -614,8 +916,14 @@ struct FlexoAssemblyDeviceBuffer
     FlexoAssemblyDeviceBuffer(int device_, int matrixSize, int rhsSize,
                               int gpDataSize, int basisDataSize,
                               const std::vector<double>& materialParametersHost,
-                              bool allocateOutput)
+                              bool allocateOutput,
+                              int outputRowStart_ = 0,
+                              int matrixValueStart_ = 0)
         : device(device_),
+          outputRowStart(outputRowStart_),
+          outputRowCount(0),
+          matrixValueStart(matrixValueStart_),
+          matrixValueCount(0),
           matrixValues(allocateOutput ? matrixSize : 0),
           rhs(allocateOutput ? rhsSize : 0),
           materialParameters(materialParametersHost),
@@ -624,8 +932,8 @@ struct FlexoAssemblyDeviceBuffer
     {
     }
 
-    void copySparseMetadata(const SparseSystemDeviceView& system,
-                            int sourceDevice, int targetDevice)
+    void copySparseBaseMetadata(const SparseSystemDeviceView& system,
+                                int sourceDevice, int targetDevice)
     {
         sparseMappersData = flexoPeerCopy(system.mappersData(), sourceDevice,
                                           targetDevice, "sparse mappers");
@@ -645,20 +953,32 @@ struct FlexoAssemblyDeviceBuffer
                                           targetDevice, "sparse old-to-new permutation");
         sparsePermNew2Old = flexoPeerCopy(system.permNewToOld(), sourceDevice,
                                           targetDevice, "sparse new-to-old permutation");
-        csrRowPtr = flexoPeerCopy(system.csrMatrix().rowPtr(), sourceDevice,
-                                  targetDevice, "CSR row pointer");
-        csrColInd = flexoPeerCopy(system.csrMatrix().colInd(), sourceDevice,
-                                  targetDevice, "CSR column indices");
     }
 
-    void copyStaticInputData(MultiPatchDeviceView geometryView,
+    void updateLocalSparseWindow(const SparseSystemDeviceView& system,
+                                 const std::vector<int>& localRowPtrHost,
+                                 int localRowStart,
+                                 int localMatrixValueStart,
+                                 int sourceDevice, int targetDevice)
+    {
+        outputRowStart = localRowStart;
+        outputRowCount = static_cast<int>(localRowPtrHost.size()) - 1;
+        matrixValueStart = localMatrixValueStart;
+        csrRowPtr = localRowPtrHost;
+        matrixValueCount = localRowPtrHost.empty() ? 0 : localRowPtrHost.back();
+        if (matrixValueCount > matrixValues.size() ||
+            outputRowCount > rhs.size())
+            throw std::runtime_error(
+                "Flexoelectric local CSR window exceeds the allocated streaming output buffer.");
+        flexoPeerCopySliceInto(
+            csrColInd, system.csrMatrix().colInd().data() + localMatrixValueStart,
+            matrixValueCount, sourceDevice, targetDevice,
+            "local CSR column indices");
+    }
+
+    void copyStaticModelData(MultiPatchDeviceView geometryView,
                              MultiPatchDeviceView displacementView,
                              MultiPatchDeviceView electricPotentialView,
-                             DeviceMatrixView<double> gpTableView,
-                             DeviceVectorView<double> weightsView,
-                             DeviceMatrixView<double> geoValuesView,
-                             DeviceMatrixView<double> dispValuesView,
-                             DeviceMatrixView<double> elecValuesView,
                              DeviceVectorView<double> bodyForceView,
                              int sourceDevice, int targetDevice)
     {
@@ -668,29 +988,42 @@ struct FlexoAssemblyDeviceBuffer
                                       targetDevice, "displacement");
         electricPotential.updateStaticData(electricPotentialView, sourceDevice,
                                            targetDevice, "electric potential");
-        flexoPeerCopyInto(gpTable,
-                          DeviceVectorView<double>(gpTableView.data(),
-                                                   gpTableView.size()),
-                          sourceDevice, targetDevice, "Gauss-point table");
-        flexoPeerCopyInto(weights, weightsView, sourceDevice, targetDevice,
-                          "Gauss weights");
-        flexoPeerCopyInto(geoValuesAndDerss,
-                          DeviceVectorView<double>(geoValuesView.data(),
-                                                   geoValuesView.size()),
-                          sourceDevice, targetDevice,
-                          "geometry values and derivatives");
-        flexoPeerCopyInto(dispValuesAndDerss,
-                          DeviceVectorView<double>(dispValuesView.data(),
-                                                   dispValuesView.size()),
-                          sourceDevice, targetDevice,
-                          "displacement values and derivatives");
-        flexoPeerCopyInto(elecValuesAndDerss,
-                          DeviceVectorView<double>(elecValuesView.data(),
-                                                   elecValuesView.size()),
-                          sourceDevice, targetDevice,
-                          "electric values and derivatives");
         flexoPeerCopyInto(bodyForce, bodyForceView, sourceDevice, targetDevice,
                           "body force");
+    }
+
+    void copyStaticChunkInputData(DeviceMatrixView<double> gpTableView,
+                                  DeviceVectorView<double> weightsView,
+                                  DeviceMatrixView<double> geoValuesView,
+                                  DeviceMatrixView<double> dispValuesView,
+                                  DeviceMatrixView<double> elecValuesView,
+                                  int totalGPCount, int gpStart, int gpCount,
+                                  int sourceDevice, int targetDevice)
+    {
+        const int gpTableStride = gpTableView.rows();
+        flexoPeerCopySliceInto(
+            gpTable, gpTableView.data() + gpStart * gpTableStride,
+            gpCount * gpTableStride, sourceDevice, targetDevice,
+            "local Gauss-point table");
+        flexoPeerCopySliceInto(
+            weights, weightsView.data() + gpStart, gpCount, sourceDevice,
+            targetDevice, "local Gauss weights");
+
+        const int geoStride = geoValuesView.size() / totalGPCount;
+        const int dispStride = dispValuesView.size() / totalGPCount;
+        const int elecStride = elecValuesView.size() / totalGPCount;
+        flexoPeerCopySliceInto(
+            geoValuesAndDerss, geoValuesView.data() + gpStart * geoStride,
+            gpCount * geoStride, sourceDevice, targetDevice,
+            "local geometry values and derivatives");
+        flexoPeerCopySliceInto(
+            dispValuesAndDerss, dispValuesView.data() + gpStart * dispStride,
+            gpCount * dispStride, sourceDevice, targetDevice,
+            "local displacement values and derivatives");
+        flexoPeerCopySliceInto(
+            elecValuesAndDerss, elecValuesView.data() + gpStart * elecStride,
+            gpCount * elecStride, sourceDevice, targetDevice,
+            "local electric values and derivatives");
     }
 
     void updateDynamicInputData(MultiPatchDeviceView displacementView,
@@ -707,6 +1040,28 @@ struct FlexoAssemblyDeviceBuffer
                          "fixed dofs");
     }
 
+    void clearActiveOutput()
+    {
+        if (matrixValues.data() && matrixValueCount > 0)
+        {
+            cudaError_t err = cudaMemset(matrixValues.data(), 0,
+                                         static_cast<std::size_t>(matrixValueCount) *
+                                             sizeof(double));
+            if (err != cudaSuccess)
+                throw std::runtime_error(std::string("CUDA memset failed for active matrix output: ") +
+                                         cudaGetErrorString(err));
+        }
+        if (rhs.data() && outputRowCount > 0)
+        {
+            cudaError_t err = cudaMemset(rhs.data(), 0,
+                                         static_cast<std::size_t>(outputRowCount) *
+                                             sizeof(double));
+            if (err != cudaSuccess)
+                throw std::runtime_error(std::string("CUDA memset failed for active RHS output: ") +
+                                         cudaGetErrorString(err));
+        }
+    }
+
     bool hasLocalSparseMetadata() const
     {
         return sparseMappersData.size() != 0;
@@ -719,16 +1074,18 @@ struct FlexoAssemblyDeviceBuffer
             return primarySystemView;
 
         DeviceCSRMatrixView localCSR(
-            primarySystemView.csrMatrix().numCols(),
+            primarySystemView.csrMatrix().numCols(), outputRowStart,
             csrRowPtr.vectorView(),
             csrColInd.vectorView(),
-            matrixValues.vectorView());
+            DeviceVectorView<double>(matrixValues.data(), matrixValueCount));
         return SparseSystemDeviceView(
             sparseMappersData.vectorView(), sparseRow.vectorView(),
             sparseCol.vectorView(), sparseRstr.vectorView(),
             sparseCstr.vectorView(), sparseCvar.vectorView(),
-            sparseDims.vectorView(), rhs.vectorView(), localCSR,
-            sparsePermOld2New.vectorView(), sparsePermNew2Old.vectorView());
+            sparseDims.vectorView(),
+            DeviceVectorView<double>(rhs.data(), outputRowCount), localCSR,
+            sparsePermOld2New.vectorView(), sparsePermNew2Old.vectorView(),
+            outputRowStart);
     }
 
     FlexoAssemblyDeviceBuffer(FlexoAssemblyDeviceBuffer&&) noexcept = default;
@@ -2564,7 +2921,8 @@ void recoverFlexoelectricCauchyStressAtNodesKernel(
 }
 
 __global__
-void evaluateFlexoGPKernel(int numDerivatives, int gpStart, int numGPs, int stride,
+void evaluateFlexoGPKernel(int numDerivatives, int gpStart, int inputGPStart,
+                           int numGPs, int stride,
                            DeviceVectorView<double> materialParameters,
                            double localStiffening,
                            MultiPatchDeviceView displacement,
@@ -2581,13 +2939,14 @@ void evaluateFlexoGPKernel(int numDerivatives, int gpStart, int numGPs, int stri
          localGPIdx += blockDim.x * gridDim.x)
     {
         const int GPIdx = gpStart + localGPIdx;
+        const int inputGPIdx = GPIdx - inputGPStart;
         const int dim = geometry.domainDim();
         const int dim2 = dim * dim;
 
         const FlexoGPOffsets offsets = flexoMakeGPOffsets(dim);
 
         double* gp = flexoGPData.data() + localGPIdx * stride;
-        DeviceVectorView<double> pt(pts.data() + GPIdx * dim, dim);
+        DeviceVectorView<double> pt(pts.data() + inputGPIdx * dim, dim);
 
         int patchIdx = 0;
         displacement.threadPatch(GPIdx, patchIdx);
@@ -2614,13 +2973,13 @@ void evaluateFlexoGPKernel(int numDerivatives, int gpStart, int numGPs, int stri
         const int dispP1 = dispBasis.knotsOrder(0) + 1;
         const int elecP1 = elecBasis.knotsOrder(0) + 1;
         DeviceMatrixView<double> geoValuesAndDers(
-            geoValuesAndDerss.data() + GPIdx * geoP1 * (numDerivatives + 1) * dim,
+            geoValuesAndDerss.data() + inputGPIdx * geoP1 * (numDerivatives + 1) * dim,
             geoP1, (numDerivatives + 1) * dim);
         DeviceMatrixView<double> dispValuesAndDers(
-            dispValuesAndDerss.data() + GPIdx * dispP1 * (numDerivatives + 1) * dim,
+            dispValuesAndDerss.data() + inputGPIdx * dispP1 * (numDerivatives + 1) * dim,
             dispP1, (numDerivatives + 1) * dim);
         DeviceMatrixView<double> elecValuesAndDers(
-            elecValuesAndDerss.data() + GPIdx * elecP1 * (numDerivatives + 1) * dim,
+            elecValuesAndDerss.data() + inputGPIdx * elecP1 * (numDerivatives + 1) * dim,
             elecP1, (numDerivatives + 1) * dim);
 
         DeviceMatrixView<double> geoJacobianInv(gp + offsets.geoInvOffset, dim, dim);
@@ -2629,8 +2988,8 @@ void evaluateFlexoGPKernel(int numDerivatives, int gpStart, int numGPs, int stri
         geoPatch.jacobian(pt, geoValuesAndDers, numDerivatives, geoJacobian);
         geoJacobian.inverse(geoJacobianInv);
         const double measure = geoJacobian.determinant();
-        gp[offsets.weightForceOffset] = wts[GPIdx] * measure;
-        gp[offsets.weightBodyOffset] = wts[GPIdx] * pow(measure, -localStiffening) * measure;
+        gp[offsets.weightForceOffset] = wts[inputGPIdx] * measure;
+        gp[offsets.weightBodyOffset] = wts[inputGPIdx] * pow(measure, -localStiffening) * measure;
 
         double* geoHessians = gp + offsets.geoHessOffset;
         for (int a = 0; a < dim; ++a)
@@ -2679,8 +3038,8 @@ void evaluateFlexoGPKernel(int numDerivatives, int gpStart, int numGPs, int stri
 }
 
 __global__
-void evaluateFlexoBasisDataKernel(int numDerivatives, int gpStart, int numGPs,
-                                  int N_D,
+void evaluateFlexoBasisDataKernel(int numDerivatives, int gpStart,
+                                  int inputGPStart, int numGPs, int N_D,
                                   int gpStride, int basisStride,
                                   MultiPatchDeviceView displacement,
                                   MultiPatchDeviceView electricPotential,
@@ -2696,6 +3055,7 @@ void evaluateFlexoBasisDataKernel(int numDerivatives, int gpStart, int numGPs,
         const int basisIndex = idx % N_D;
         const int localGPIdx = idx / N_D;
         const int GPIdx = gpStart + localGPIdx;
+        const int inputGPIdx = GPIdx - inputGPStart;
         const int dim = displacement.domainDim();
 
         int patchIdx = 0;
@@ -2706,10 +3066,10 @@ void evaluateFlexoBasisDataKernel(int numDerivatives, int gpStart, int numGPs,
         const int elecP1 = elecBasis.knotsOrder(0) + 1;
 
         DeviceMatrixView<double> dispValuesAndDers(
-            dispValuesAndDerss.data() + GPIdx * dispP1 * (numDerivatives + 1) * dim,
+            dispValuesAndDerss.data() + inputGPIdx * dispP1 * (numDerivatives + 1) * dim,
             dispP1, (numDerivatives + 1) * dim);
         DeviceMatrixView<double> elecValuesAndDers(
-            elecValuesAndDerss.data() + GPIdx * elecP1 * (numDerivatives + 1) * dim,
+            elecValuesAndDerss.data() + inputGPIdx * elecP1 * (numDerivatives + 1) * dim,
             elecP1, (numDerivatives + 1) * dim);
 
         const FlexoGPOffsets gpOffsets = flexoMakeGPOffsets(dim);
@@ -2735,8 +3095,9 @@ void evaluateFlexoBasisDataKernel(int numDerivatives, int gpStart, int numGPs,
 
 __global__
 void assembleFlexoMatrixKernel(int numDerivatives, int elementStart,
-                               int gpStart, int numElements, int N_D, int stride,
-                               int basisStride, int materialLaw,
+                               int gpStart, int inputGPStart, int numElements,
+                               int N_D, int stride, int basisStride,
+                               int materialLaw,
                                double youngsModulus, double poissonsRatio,
                                double lengthScale,
                                double dielectricPermittivity,
@@ -2969,7 +3330,7 @@ void assembleFlexoMatrixKernel(int numDerivatives, int elementStart,
     double ptForIndexData[3] = {0.0};
     DeviceVectorView<double> ptForIndex(ptForIndexData, dim);
     for (int a = 0; a < dim; ++a)
-        ptForIndex[a] = pts(a, elementGlobal * numGPsInElement);
+        ptForIndex[a] = pts(a, elementGlobal * numGPsInElement - inputGPStart);
 
     for (int localEntry = threadId; localEntry < numFields * numFields;
          localEntry += blockDim.x)
@@ -2990,8 +3351,8 @@ void assembleFlexoMatrixKernel(int numDerivatives, int elementStart,
 }
 
 __global__
-void assembleFlexoMatrixUUKernel(int elementStart, int gpStart, int numElements,
-                                 int N_D, int stride, int basisStride,
+void assembleFlexoMatrixUUKernel(int elementStart, int gpStart, int inputGPStart,
+                                 int numElements, int N_D, int stride, int basisStride,
                                  MultiPatchDeviceView displacement,
                                  MultiPatchDeviceView electricPotential,
                                  SparseSystemDeviceView system,
@@ -3126,7 +3487,7 @@ void assembleFlexoMatrixUUKernel(int elementStart, int gpStart, int numElements,
     double ptForIndexData[3] = {0.0};
     DeviceVectorView<double> ptForIndex(ptForIndexData, dim);
     for (int a = 0; a < dim; ++a)
-        ptForIndex[a] = pts(a, elementGlobal * numGPsInElement);
+        ptForIndex[a] = pts(a, elementGlobal * numGPsInElement - inputGPStart);
     const int activeIndexI = dispBasis.activeIndex(ptForIndex, i);
     const int activeIndexJ = dispBasis.activeIndex(ptForIndex, j);
     const int globalIndexI = system.mapColIndex(activeIndexI, patchIdx, row);
@@ -3137,7 +3498,8 @@ void assembleFlexoMatrixUUKernel(int elementStart, int gpStart, int numElements,
 }
 
 __global__
-void assembleFlexoMatrixUPhiKernel(int elementStart, int gpStart, int numElements,
+void assembleFlexoMatrixUPhiKernel(int elementStart, int gpStart,
+                                   int inputGPStart, int numElements,
                                    int N_D, int stride, int basisStride,
                                    MultiPatchDeviceView displacement,
                                    MultiPatchDeviceView electricPotential,
@@ -3224,7 +3586,7 @@ void assembleFlexoMatrixUPhiKernel(int elementStart, int gpStart, int numElement
     double ptForIndexData[3] = {0.0};
     DeviceVectorView<double> ptForIndex(ptForIndexData, dim);
     for (int a = 0; a < dim; ++a)
-        ptForIndex[a] = pts(a, elementGlobal * numGPsInElement);
+        ptForIndex[a] = pts(a, elementGlobal * numGPsInElement - inputGPStart);
     const int activeIndexI = dispBasis.activeIndex(ptForIndex, i);
     const int activeIndexJ = elecBasis.activeIndex(ptForIndex, j);
     const int globalIndexI = system.mapColIndex(activeIndexI, patchIdx, row);
@@ -3235,7 +3597,8 @@ void assembleFlexoMatrixUPhiKernel(int elementStart, int gpStart, int numElement
 }
 
 __global__
-void assembleFlexoMatrixPhiUKernel(int elementStart, int gpStart, int numElements,
+void assembleFlexoMatrixPhiUKernel(int elementStart, int gpStart,
+                                   int inputGPStart, int numElements,
                                    int N_D, int stride, int basisStride,
                                    MultiPatchDeviceView displacement,
                                    MultiPatchDeviceView electricPotential,
@@ -3324,7 +3687,7 @@ void assembleFlexoMatrixPhiUKernel(int elementStart, int gpStart, int numElement
     double ptForIndexData[3] = {0.0};
     DeviceVectorView<double> ptForIndex(ptForIndexData, dim);
     for (int a = 0; a < dim; ++a)
-        ptForIndex[a] = pts(a, elementGlobal * numGPsInElement);
+        ptForIndex[a] = pts(a, elementGlobal * numGPsInElement - inputGPStart);
     const int activeIndexI = elecBasis.activeIndex(ptForIndex, i);
     const int activeIndexJ = dispBasis.activeIndex(ptForIndex, j);
     const int globalIndexI = system.mapColIndex(activeIndexI, patchIdx, dim);
@@ -3336,7 +3699,7 @@ void assembleFlexoMatrixPhiUKernel(int elementStart, int gpStart, int numElement
 
 __global__
 void assembleFlexoMatrixPhiPhiKernel(int elementStart, int gpStart,
-                                     int numElements, int N_D,
+                                     int inputGPStart, int numElements, int N_D,
                                      int stride, int basisStride,
                                      MultiPatchDeviceView displacement,
                                      MultiPatchDeviceView electricPotential,
@@ -3397,7 +3760,7 @@ void assembleFlexoMatrixPhiPhiKernel(int elementStart, int gpStart,
     double ptForIndexData[3] = {0.0};
     DeviceVectorView<double> ptForIndex(ptForIndexData, dim);
     for (int a = 0; a < dim; ++a)
-        ptForIndex[a] = pts(a, elementGlobal * numGPsInElement);
+        ptForIndex[a] = pts(a, elementGlobal * numGPsInElement - inputGPStart);
     const int activeIndexI = elecBasis.activeIndex(ptForIndex, i);
     const int activeIndexJ = elecBasis.activeIndex(ptForIndex, j);
     const int globalIndexI = system.mapColIndex(activeIndexI, patchIdx, dim);
@@ -3409,8 +3772,9 @@ void assembleFlexoMatrixPhiPhiKernel(int elementStart, int gpStart,
 
 __global__
 void assembleFlexoRHSKernel(int numDerivatives, int elementStart,
-                            int gpStart, int numElements, int N_D, int stride,
-                            int basisStride, int materialLaw, double youngsModulus,
+                            int gpStart, int inputGPStart, int numElements,
+                            int N_D, int stride, int basisStride,
+                            int materialLaw, double youngsModulus,
                             double poissonsRatio, double lengthScale,
                             double dielectricPermittivity,
                             double vacuumPermittivity,
@@ -3459,11 +3823,12 @@ void assembleFlexoRHSKernel(int numDerivatives, int elementStart,
     {
         const int GPIdx = elementGlobal * numGPsInElement + q;
         const int localGPIdx = GPIdx - gpStart;
+        const int inputGPIdx = GPIdx - inputGPStart;
         if (localGPIdx < 0 || localGPIdx >= flexoGPData.size() / stride)
             continue;
         double* gp = flexoGPData.data() + localGPIdx * stride;
         DeviceMatrixView<double> dispValuesAndDers(
-            dispValuesAndDerss.data() + GPIdx * dispP1 * (numDerivatives + 1) * dim,
+            dispValuesAndDerss.data() + inputGPIdx * dispP1 * (numDerivatives + 1) * dim,
             dispP1, (numDerivatives + 1) * dim);
 
         const double* basisI =
@@ -3504,7 +3869,7 @@ void assembleFlexoRHSKernel(int numDerivatives, int elementStart,
     double ptForIndexData[3] = {0.0};
     DeviceVectorView<double> ptForIndex(ptForIndexData, dim);
     for (int a = 0; a < dim; ++a)
-        ptForIndex[a] = pts(a, elementGlobal * numGPsInElement);
+        ptForIndex[a] = pts(a, elementGlobal * numGPsInElement - inputGPStart);
 
     for (int row = threadId; row < dim + 1; row += blockDim.x)
     {
@@ -3621,6 +3986,246 @@ void computeFlexoCOOKernel(int numElements, int N_D,
     }
 }
 
+__global__
+void flexoChunkRowBoundsKernel(int elementStart, int numElements, int N_D,
+                               MultiPatchDeviceView displacement,
+                               MultiPatchDeviceView electricPotential,
+                               SparseSystemDeviceView system,
+                               DeviceMatrixView<double> pts,
+                               int* bounds)
+{
+    const int dim = displacement.domainDim();
+    const int numFields = dim + 1;
+    const int totalEntries = numElements * N_D * numFields;
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; idx < totalEntries;
+         idx += blockDim.x * gridDim.x)
+    {
+        int entry = idx;
+        const int row = entry % numFields; entry /= numFields;
+        const int i = entry % N_D; entry /= N_D;
+        const int elementGlobal = elementStart + entry;
+
+        int patchIdx = 0;
+        displacement.threadPatch_element(elementGlobal, patchIdx);
+        TensorBsplineBasisDeviceView dispBasis = displacement.basis(patchIdx);
+        TensorBsplineBasisDeviceView elecBasis = electricPotential.basis(patchIdx);
+        const int numGPsInElement = dispBasis.numGPsInElement();
+
+        double ptForIndexData[3] = {0.0};
+        DeviceVectorView<double> ptForIndex(ptForIndexData, dim);
+        for (int a = 0; a < dim; ++a)
+            ptForIndex[a] = pts(a, elementGlobal * numGPsInElement);
+
+        const int activeIndex = row < dim
+            ? dispBasis.activeIndex(ptForIndex, i)
+            : elecBasis.activeIndex(ptForIndex, i);
+        const int mappedRow = system.mapRowIndex(activeIndex, patchIdx, row);
+        if (system.isRowEntry(mappedRow, row))
+        {
+            const int matrixRow = system.matrixRowIndex(mappedRow, row);
+            atomicMin(bounds, matrixRow);
+            atomicMax(bounds + 1, matrixRow);
+        }
+    }
+}
+
+std::pair<int, int> flexoChunkRowRange(int elementStart, int elementCount,
+                                       int N_D,
+                                       MultiPatchDeviceView displacement,
+                                       MultiPatchDeviceView electricPotential,
+                                       SparseSystemDeviceView system,
+                                       DeviceMatrixView<double> pts)
+{
+    if (elementCount <= 0)
+        return {0, 0};
+
+    const long long totalEntriesLong =
+        static_cast<long long>(elementCount) * N_D *
+        (displacement.domainDim() + 1);
+    if (totalEntriesLong > std::numeric_limits<int>::max())
+        throw std::runtime_error(
+            "Flexoelectric chunk row scan is too large for 32-bit CUDA indexing.");
+    const int totalEntries = static_cast<int>(totalEntriesLong);
+
+    if (flexoEnvFlag("SIGA_FLEXO_INIT_MEMORY", false))
+        flexoPrintCudaMemoryReport(
+            "chunk row-bounds scan allocation",
+            flexoBytesForCount(2, sizeof(int)),
+            {{"row bounds", flexoBytesForCount(2, sizeof(int))}});
+    int* boundsDevice = nullptr;
+    cudaError_t err = cudaMalloc(reinterpret_cast<void**>(&boundsDevice),
+                                 2 * sizeof(int));
+    if (err != cudaSuccess)
+        throw std::runtime_error(std::string("CUDA malloc failed for flexoelectric chunk row bounds: ") +
+                                 cudaGetErrorString(err));
+
+    const int boundsHostInit[2] = {
+        std::numeric_limits<int>::max(),
+        -1
+    };
+    err = cudaMemcpy(boundsDevice, boundsHostInit, 2 * sizeof(int),
+                     cudaMemcpyHostToDevice);
+    if (err != cudaSuccess)
+    {
+        cudaFree(boundsDevice);
+        throw std::runtime_error(std::string("CUDA memcpy failed while initializing flexoelectric chunk row bounds: ") +
+                                 cudaGetErrorString(err));
+    }
+
+    int minGrid = 0;
+    int blockSize = 0;
+    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize,
+        flexoChunkRowBoundsKernel, 0, totalEntries);
+    if (blockSize <= 0)
+        blockSize = 128;
+    const int gridSize = (totalEntries + blockSize - 1) / blockSize;
+    flexoChunkRowBoundsKernel<<<gridSize, blockSize>>>(
+        elementStart, elementCount, N_D, displacement, electricPotential,
+        system, pts, boundsDevice);
+    err = cudaGetLastError();
+    if (err != cudaSuccess)
+    {
+        cudaFree(boundsDevice);
+        throw std::runtime_error(std::string("CUDA launch failed during flexoelectric chunk row scan: ") +
+                                 cudaGetErrorString(err));
+    }
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess)
+    {
+        cudaFree(boundsDevice);
+        throw std::runtime_error(std::string("CUDA synchronize failed during flexoelectric chunk row scan: ") +
+                                 cudaGetErrorString(err));
+    }
+
+    int boundsHost[2] = {0, -1};
+    err = cudaMemcpy(boundsHost, boundsDevice, 2 * sizeof(int),
+                     cudaMemcpyDeviceToHost);
+    cudaFree(boundsDevice);
+    if (err != cudaSuccess)
+        throw std::runtime_error(std::string("CUDA memcpy failed while reading flexoelectric chunk row bounds: ") +
+                                 cudaGetErrorString(err));
+
+    if (boundsHost[1] < boundsHost[0])
+        return {0, 0};
+    return {boundsHost[0], boundsHost[1] + 1};
+}
+
+std::vector<int> flexoCopyRowPtrWindow(DeviceVectorView<int> rowPtr,
+                                       int rowStart, int rowCount,
+                                       int& matrixValueStart,
+                                       const char* label)
+{
+    std::vector<int> host(static_cast<std::size_t>(rowCount) + 1);
+    if (host.empty())
+    {
+        matrixValueStart = 0;
+        return host;
+    }
+    cudaError_t err = cudaMemcpy(host.data(), rowPtr.data() + rowStart,
+                                 host.size() * sizeof(int),
+                                 cudaMemcpyDeviceToHost);
+    if (err != cudaSuccess)
+        throw std::runtime_error(std::string("CUDA memcpy failed for ") +
+                                 label + ": " + cudaGetErrorString(err));
+    const int start = host.front();
+    matrixValueStart = start;
+    for (int& value : host)
+        value -= start;
+    return host;
+}
+
+FlexoAssemblySchedule flexoBuildAssemblySchedule(
+    int chunkElementLimit, int numElements, int gpsPerElement,
+    int numAssemblyDevices, int numBasisFunctions, int rhsSize,
+    int matrixValuesSize, bool useLocalCSRAssembly,
+    const SparseSystemDeviceView& primarySystemView,
+    MultiPatchDeviceView primaryDisplacementView,
+    MultiPatchDeviceView primaryElectricPotentialView,
+    DeviceMatrixView<double> primaryGPTableView)
+{
+    FlexoAssemblySchedule schedule;
+    schedule.chunkElementLimit = std::max(1, chunkElementLimit);
+    schedule.chunksByDevice.resize(numAssemblyDevices);
+    schedule.maxElementCounts.assign(numAssemblyDevices, 0);
+    schedule.maxGPCounts.assign(numAssemblyDevices, 0);
+    schedule.maxRowCounts.assign(numAssemblyDevices, 0);
+    schedule.maxMatrixValueCounts.assign(numAssemblyDevices, 0);
+    schedule.requiredBytes.assign(numAssemblyDevices, 0);
+
+    std::vector<int> fullRowPtrHost;
+    int fullMatrixValueStart = 0;
+    if (!useLocalCSRAssembly && numAssemblyDevices > 1)
+    {
+        fullRowPtrHost = flexoCopyRowPtrWindow(
+            primarySystemView.csrMatrix().rowPtr(), 0, rhsSize,
+            fullMatrixValueStart, "full flexoelectric CSR row pointer");
+    }
+
+    int sequence = 0;
+    for (int elementStart = 0; elementStart < numElements;
+         elementStart += schedule.chunkElementLimit, ++sequence)
+    {
+        FlexoAssemblyChunk chunk;
+        chunk.sequence = sequence;
+        chunk.elementStart = elementStart;
+        chunk.elementCount =
+            std::min(schedule.chunkElementLimit, numElements - elementStart);
+        chunk.gpStart = elementStart * gpsPerElement;
+        chunk.gpCount = chunk.elementCount * gpsPerElement;
+
+        const int idx = sequence % numAssemblyDevices;
+        if (idx == 0)
+        {
+            chunk.rowStart = 0;
+            chunk.rowCount = rhsSize;
+            chunk.matrixValueStart = 0;
+            chunk.matrixValueCount = matrixValuesSize;
+        }
+        else if (useLocalCSRAssembly)
+        {
+            const auto rowRange = flexoChunkRowRange(
+                chunk.elementStart, chunk.elementCount,
+                numBasisFunctions,
+                primaryDisplacementView, primaryElectricPotentialView,
+                primarySystemView, primaryGPTableView);
+            chunk.rowStart = rowRange.first;
+            chunk.rowCount = rowRange.second - rowRange.first;
+            chunk.rowPtrHost = flexoCopyRowPtrWindow(
+                primarySystemView.csrMatrix().rowPtr(), chunk.rowStart,
+                chunk.rowCount, chunk.matrixValueStart,
+                "local flexoelectric CSR row pointer");
+            chunk.matrixValueCount =
+                chunk.rowPtrHost.empty() ? 0 : chunk.rowPtrHost.back();
+        }
+        else
+        {
+            chunk.rowStart = 0;
+            chunk.rowCount = rhsSize;
+            chunk.matrixValueStart = fullMatrixValueStart;
+            chunk.matrixValueCount =
+                fullRowPtrHost.empty() ? 0 : fullRowPtrHost.back();
+            chunk.rowPtrHost = fullRowPtrHost;
+        }
+
+        schedule.maxElementCounts[idx] =
+            std::max(schedule.maxElementCounts[idx], chunk.elementCount);
+        schedule.maxGPCounts[idx] =
+            std::max(schedule.maxGPCounts[idx], chunk.gpCount);
+        schedule.maxRowCounts[idx] =
+            std::max(schedule.maxRowCounts[idx], chunk.rowCount);
+        schedule.maxMatrixValueCounts[idx] =
+            std::max(schedule.maxMatrixValueCounts[idx],
+                     chunk.matrixValueCount);
+        schedule.chunksByDevice[idx].push_back(std::move(chunk));
+    }
+
+    for (const auto& chunks : schedule.chunksByDevice)
+        schedule.rounds =
+            std::max(schedule.rounds, static_cast<int>(chunks.size()));
+
+    return schedule;
+}
+
 } // namespace
 
 struct GPUFlexoelectriciyAssemblyCache
@@ -3628,6 +4233,15 @@ struct GPUFlexoelectriciyAssemblyCache
     std::vector<int> devices;
     std::vector<int> chunkCounts;
     std::vector<int> chunkGPCounts;
+    std::vector<int> chunkRowCounts;
+    std::vector<int> chunkMatrixValueCounts;
+    std::vector<std::vector<FlexoAssemblyChunk>> chunksByDevice;
+    int requestedChunkElementLimit = 0;
+    int chunkElementLimit = 0;
+    int chunkRounds = 0;
+    int numElements = 0;
+    int gpsPerElement = 0;
+    int memorySafetyPermille = 0;
     std::vector<std::unique_ptr<FlexoAssemblyDeviceBuffer>> deviceBuffers;
     int primaryDevice = -1;
     int stride = 0;
@@ -3637,19 +4251,21 @@ struct GPUFlexoelectriciyAssemblyCache
     int numBasisFunctions = 0;
     int materialParameterSize = 0;
     bool replicateInputData = false;
+    bool localCSRAssembly = false;
 
     bool matches(const std::vector<int>& newDevices,
-                 const std::vector<int>& newChunkCounts,
-                 const std::vector<int>& newChunkGPCounts,
                  int newPrimaryDevice, int newStride, int newBasisStride,
                  int newMatrixValuesSize, int newRhsSize,
                  int newNumBasisFunctions,
                  int newMaterialParameterSize,
-                 bool newReplicateInputData) const
+                 bool newReplicateInputData,
+                 bool newLocalCSRAssembly,
+                 int newChunkElementLimit,
+                 int newNumElements,
+                 int newGpsPerElement,
+                 int newMemorySafetyPermille) const
     {
         return devices == newDevices &&
-               chunkCounts == newChunkCounts &&
-               chunkGPCounts == newChunkGPCounts &&
                primaryDevice == newPrimaryDevice &&
                stride == newStride &&
                basisStride == newBasisStride &&
@@ -3658,6 +4274,11 @@ struct GPUFlexoelectriciyAssemblyCache
                numBasisFunctions == newNumBasisFunctions &&
                materialParameterSize == newMaterialParameterSize &&
                replicateInputData == newReplicateInputData &&
+               localCSRAssembly == newLocalCSRAssembly &&
+               requestedChunkElementLimit == newChunkElementLimit &&
+               numElements == newNumElements &&
+               gpsPerElement == newGpsPerElement &&
+               memorySafetyPermille == newMemorySafetyPermille &&
                deviceBuffers.size() == devices.size();
     }
 
@@ -3729,6 +4350,18 @@ GPUFlexoelectriciyAssembler::GPUFlexoelectriciyAssembler(
 
     setBasisPatches();
     setElecBasisPatches();
+    const unsigned long long gpTableBytes =
+        flexoBytesForCount(
+            static_cast<long long>(numGPs()) * domainDim(), sizeof(double));
+    const unsigned long long gpWeightBytes =
+        flexoBytesForCount(numGPs(), sizeof(double));
+    flexoPrintCudaMemoryReport(
+        "Gauss table allocation",
+        gpTableBytes + gpWeightBytes,
+        {
+            {"Gauss-point table", gpTableBytes},
+            {"Gauss weights", gpWeightBytes}
+        });
     computeGPTable();
 
     bool csrPatternBuilt = false;
@@ -3742,6 +4375,26 @@ GPUFlexoelectriciyAssembler::GPUFlexoelectriciyAssembler(
             m_electricPotentialTargetDim, structuredPattern, fallbackReason);
         if (csrPatternBuilt)
         {
+            const unsigned long long rowPtrBytes =
+                flexoBytesForCount(
+                    static_cast<long long>(structuredPattern.rowPtr.size()),
+                    sizeof(int));
+            const unsigned long long colIndBytes =
+                flexoBytesForCount(
+                    static_cast<long long>(structuredPattern.colInd.size()),
+                    sizeof(int));
+            const unsigned long long valuesBytes =
+                flexoBytesForCount(
+                    static_cast<long long>(structuredPattern.colInd.size()),
+                    sizeof(double));
+            flexoPrintCudaMemoryReport(
+                "structured CSR device allocation",
+                rowPtrBytes + colIndBytes + valuesBytes,
+                {
+                    {"CSR rowPtr", rowPtrBytes},
+                    {"CSR colInd", colIndBytes},
+                    {"CSR values", valuesBytes}
+                });
             setCSRMatrixFromHostCSR(sparseSystem.matrixRows(),
                                     sparseSystem.matrixCols(),
                                     structuredPattern.rowPtr,
@@ -3850,6 +4503,14 @@ GPUFlexoelectriciyAssembler::GPUFlexoelectriciyAssembler(
                 const unsigned long long inPlaceSortScratchEstimate = cooBytes;
                 const unsigned long long estimatedPeak =
                     cooBytes + inPlaceSortScratchEstimate;
+                flexoPrintCudaMemoryReport(
+                    "COO sparse pattern device allocation/sort scratch",
+                    estimatedPeak,
+                    {
+                        {"COO rows/cols", cooBytes},
+                        {"estimated in-place sort scratch",
+                         inPlaceSortScratchEstimate}
+                    });
                 if (estimatedPeak > static_cast<unsigned long long>(freeMem))
                 {
                     cudaFree(entryCounter);
@@ -3935,8 +4596,52 @@ GPUFlexoelectriciyAssembler::GPUFlexoelectriciyAssembler(
         }
     }
 
+    const int geoP1 = multiPatch.knotOrder() + 1;
+    const int dispP1 = displacementBasis.knotOrder() + 1;
+    const long long basisCols =
+        static_cast<long long>(numGPs()) * (numDerivatives() + 1) *
+        domainDim();
+    const unsigned long long geoValuesBytes =
+        flexoBytesForCount(static_cast<long long>(geoP1) * basisCols,
+                           sizeof(double));
+    const unsigned long long dispValuesBytes =
+        flexoBytesForCount(static_cast<long long>(dispP1) * basisCols,
+                           sizeof(double));
+    flexoPrintCudaMemoryReport(
+        "geometry/displacement basis values allocation",
+        geoValuesBytes + dispValuesBytes,
+        {
+            {"geometry values and derivatives", geoValuesBytes},
+            {"displacement values and derivatives", dispValuesBytes}
+        });
     evaluateBasisValuesAndDerivativesAtGPs();
+
+    const unsigned long long elecValuesBytes =
+        flexoBytesForCount(
+            static_cast<long long>(m_elePotentialP1) * basisCols,
+            sizeof(double));
+    const unsigned long long elecWorkspaceBytes =
+        flexoBytesForCount(
+            static_cast<long long>(numGPs()) * m_elePotentialP1 *
+                (m_elePotentialP1 + 4) * domainDim(),
+            sizeof(double));
+    flexoPrintCudaMemoryReport(
+        "electric-potential basis values allocation",
+        elecValuesBytes + elecWorkspaceBytes,
+        {
+            {"electric values and derivatives", elecValuesBytes},
+            {"temporary electric basis workspace", elecWorkspaceBytes}
+        });
     evaluateElecBasisValuesAndDerivativesAtGPs();
+
+    const unsigned long long gpDataBytes =
+        flexoBytesForCount(
+            static_cast<long long>(numDoublesPerGP()) * numGPs(),
+            sizeof(double));
+    flexoPrintCudaMemoryReport(
+        "base GP data allocation",
+        gpDataBytes,
+        {{"base GP data", gpDataBytes}});
     allocateGPData();
     setDefaultOptions();
 }
@@ -4269,7 +4974,7 @@ void GPUFlexoelectriciyAssembler::constructFlexoelectricStressFunctions(
         evaluateFlexoGPKernel, 0, numGPs());
     gridSize = (numGPs() + blockSize - 1) / blockSize;
     evaluateFlexoGPKernel<<<gridSize, blockSize>>>(
-        numDerivatives(), 0, numGPs(), stride,
+        numDerivatives(), 0, 0, numGPs(), stride,
         materialParameterValues.vectorView(),
         localStiffening, displacementView, electricPotentialView,
         geometryView(), gpTable(), wts().vectorView(), geoValuesAndDerssView(),
@@ -4498,6 +5203,8 @@ void GPUFlexoelectriciyAssembler::assemble(
         flexoEnvFlag("SIGA_FLEXO_MATRIX_TIMING", false);
     const bool replicateSecondaryInputs =
         flexoEnvFlag("SIGA_FLEXO_REPLICATE_INPUTS", true);
+    const bool preferLocalCSRAssembly =
+        flexoEnvFlag("SIGA_FLEXO_LOCAL_CSR_ASSEMBLY", true);
 
     int primaryDevice = 0;
     err = cudaGetDevice(&primaryDevice);
@@ -4581,38 +5288,153 @@ void GPUFlexoelectriciyAssembler::assemble(
         throw std::runtime_error(
             "Flexoelectric chunk assembly requires a uniform positive Gauss-point count per element");
     const int gpsPerElement = numGPs() / numElements();
-    const int baseElementsPerDevice = numElements() / numAssemblyDevices;
-    const int remainderElements = numElements() % numAssemblyDevices;
-    std::vector<int> chunkStarts(numAssemblyDevices, 0);
-    std::vector<int> chunkCounts(numAssemblyDevices, 0);
-    std::vector<int> chunkGPStarts(numAssemblyDevices, 0);
-    std::vector<int> chunkGPCounts(numAssemblyDevices, 0);
-    int nextElement = 0;
-    for (int idx = 0; idx < numAssemblyDevices; ++idx)
-    {
-        chunkStarts[idx] = nextElement;
-        chunkCounts[idx] = baseElementsPerDevice + (idx < remainderElements ? 1 : 0);
-        chunkGPStarts[idx] = chunkStarts[idx] * gpsPerElement;
-        chunkGPCounts[idx] = chunkCounts[idx] * gpsPerElement;
-        nextElement += chunkCounts[idx];
-    }
 
     const int matrixValuesSize = csrMatrix().numNonZeros();
     const int rhsSize = numDofs();
     const int materialParameterSize =
         static_cast<int>(flexoMaterialParameters.size());
+    const bool useLocalCSRAssembly =
+        preferLocalCSRAssembly && numAssemblyDevices > 1;
+    const int oneShotChunkElements =
+        (numElements() + numAssemblyDevices - 1) / numAssemblyDevices;
+    int requestedChunkElementLimit =
+        flexoEnvInt("SIGA_FLEXO_CHUNK_ELEMENTS", oneShotChunkElements);
+    if (requestedChunkElementLimit <= 0)
+        requestedChunkElementLimit = oneShotChunkElements;
+    requestedChunkElementLimit =
+        std::min(numElements(), std::max(1, requestedChunkElementLimit));
+    double memorySafetyFraction =
+        flexoEnvDouble("SIGA_FLEXO_MEMORY_FRACTION", 0.90);
+    memorySafetyFraction =
+        std::min(1.0, std::max(0.10, memorySafetyFraction));
+    const int memorySafetyPermille =
+        static_cast<int>(std::lround(memorySafetyFraction * 1000.0));
+
     if (!m_assemblyCache)
         m_assemblyCache = std::make_unique<GPUFlexoelectriciyAssemblyCache>();
     GPUFlexoelectriciyAssemblyCache& cache = *m_assemblyCache;
-    if (!cache.matches(assemblyDevices, chunkCounts, chunkGPCounts,
-                       primaryDevice, stride, basisStride, matrixValuesSize,
-                       rhsSize, N_D(), materialParameterSize,
-                       replicateSecondaryInputs))
+    const bool rebuildAssemblyCache =
+        !cache.matches(assemblyDevices, primaryDevice, stride, basisStride,
+                       matrixValuesSize, rhsSize, N_D(),
+                       materialParameterSize, replicateSecondaryInputs,
+                       useLocalCSRAssembly, requestedChunkElementLimit,
+                       numElements(), gpsPerElement, memorySafetyPermille);
+
+    if (rebuildAssemblyCache)
     {
         cache.release();
+        FlexoAssemblySchedule schedule;
+        int chunkElementLimit = requestedChunkElementLimit;
+        bool scheduleFitsMemory = false;
+        for (int attempt = 0; attempt < 32; ++attempt)
+        {
+            cudaSetDevice(primaryDevice);
+            schedule = flexoBuildAssemblySchedule(
+                chunkElementLimit, numElements(), gpsPerElement,
+                numAssemblyDevices, N_D(), rhsSize, matrixValuesSize,
+                useLocalCSRAssembly, primarySystemView,
+                primaryDisplacementView, primaryElectricPotentialView,
+                primaryGPTableView);
+
+            bool fitsMemory = true;
+            double worstRatio = 1.0;
+            int worstDeviceIdx = -1;
+            unsigned long long worstRequired = 0;
+            unsigned long long worstAvailable = 0;
+            for (int idx = 0; idx < numAssemblyDevices; ++idx)
+            {
+                schedule.requiredBytes[idx] =
+                    flexoAssemblyBufferBytesForDevice(
+                        idx, materialParameterSize, stride, basisStride,
+                        N_D(), replicateSecondaryInputs, primarySystemView,
+                        primaryGeometryView, primaryDisplacementView,
+                        primaryElectricPotentialView, primaryGPTableView,
+                        primaryWeightsView, primaryGeoValuesView,
+                        primaryDispValuesView, primaryElecValuesView,
+                        primaryBodyForceView, fixedDofsAssemble, numGPs(),
+                        schedule.maxGPCounts[idx],
+                        schedule.maxRowCounts[idx],
+                        schedule.maxMatrixValueCounts[idx]);
+
+                cudaSetDevice(assemblyDevices[idx]);
+                size_t freeMem = 0;
+                size_t totalMem = 0;
+                err = cudaMemGetInfo(&freeMem, &totalMem);
+                if (err != cudaSuccess)
+                    throw std::runtime_error(std::string("cudaMemGetInfo failed while sizing flexoelectric assembly chunks: ") +
+                                             cudaGetErrorString(err));
+
+                const unsigned long long available =
+                    static_cast<unsigned long long>(
+                        static_cast<double>(freeMem) * memorySafetyFraction);
+                const unsigned long long required =
+                    schedule.requiredBytes[idx];
+                if (required > available && chunkElementLimit > 1)
+                {
+                    fitsMemory = false;
+                    const double ratio =
+                        static_cast<double>(available) /
+                        static_cast<double>(std::max(1ULL, required));
+                    if (ratio < worstRatio)
+                    {
+                        worstRatio = ratio;
+                        worstDeviceIdx = idx;
+                        worstRequired = required;
+                        worstAvailable = available;
+                    }
+                }
+                else if (required > available)
+                {
+                    throw std::runtime_error(
+                        "Flexoelectric assembly cannot fit even a one-element chunk on CUDA device " +
+                        std::to_string(assemblyDevices[idx]) + ". Required " +
+                        flexoGiBString(required) + ", available with safety margin " +
+                        flexoGiBString(available) + ".");
+                }
+            }
+            cudaSetDevice(primaryDevice);
+
+            if (fitsMemory)
+            {
+                scheduleFitsMemory = true;
+                break;
+            }
+
+            int nextChunkElementLimit = static_cast<int>(
+                std::floor(chunkElementLimit * worstRatio * 0.95));
+            if (nextChunkElementLimit >= chunkElementLimit)
+                nextChunkElementLimit = chunkElementLimit - 1;
+            if (nextChunkElementLimit < 1)
+                nextChunkElementLimit = 1;
+            if (flexoMemoryReportEnabled())
+            {
+                std::cout << "Flexo adaptive assembly chunking: chunk limit "
+                          << chunkElementLimit << " elements needs "
+                          << flexoGiBString(worstRequired) << " on device "
+                          << assemblyDevices[worstDeviceIdx]
+                          << ", memory target "
+                          << flexoGiBString(worstAvailable)
+                          << "; reducing to "
+                          << nextChunkElementLimit << " elements/chunk\n";
+            }
+            chunkElementLimit = nextChunkElementLimit;
+        }
+        if (!scheduleFitsMemory)
+            throw std::runtime_error(
+                "Flexoelectric adaptive assembly chunking could not find a memory-fitting chunk size.");
+
         cache.devices = assemblyDevices;
-        cache.chunkCounts = chunkCounts;
-        cache.chunkGPCounts = chunkGPCounts;
+        cache.chunkCounts = schedule.maxElementCounts;
+        cache.chunkGPCounts = schedule.maxGPCounts;
+        cache.chunkRowCounts = schedule.maxRowCounts;
+        cache.chunkMatrixValueCounts = schedule.maxMatrixValueCounts;
+        cache.chunksByDevice = std::move(schedule.chunksByDevice);
+        cache.requestedChunkElementLimit = requestedChunkElementLimit;
+        cache.chunkElementLimit = schedule.chunkElementLimit;
+        cache.chunkRounds = schedule.rounds;
+        cache.numElements = numElements();
+        cache.gpsPerElement = gpsPerElement;
+        cache.memorySafetyPermille = memorySafetyPermille;
         cache.primaryDevice = primaryDevice;
         cache.stride = stride;
         cache.basisStride = basisStride;
@@ -4621,28 +5443,67 @@ void GPUFlexoelectriciyAssembler::assemble(
         cache.numBasisFunctions = N_D();
         cache.materialParameterSize = materialParameterSize;
         cache.replicateInputData = replicateSecondaryInputs;
+        cache.localCSRAssembly = useLocalCSRAssembly;
         cache.deviceBuffers.resize(numAssemblyDevices);
+
+        if (flexoMemoryReportEnabled())
+        {
+            int totalChunks = 0;
+            for (const auto& chunks : cache.chunksByDevice)
+                totalChunks += static_cast<int>(chunks.size());
+            std::cout << "Flexo adaptive assembly schedule: "
+                      << totalChunks << " chunks, " << cache.chunkRounds
+                      << " rounds, max " << cache.chunkElementLimit
+                      << " elements/chunk";
+            if (cache.chunkElementLimit < oneShotChunkElements)
+                std::cout << " (streaming enabled)";
+            std::cout << "\n";
+        }
+
         for (int idx = 0; idx < numAssemblyDevices; ++idx)
         {
             cudaSetDevice(assemblyDevices[idx]);
+            const int localMatrixValuesSize =
+                idx == 0 ? 0 : cache.chunkMatrixValueCounts[idx];
+            const int localRhsSize =
+                idx == 0 ? 0 : cache.chunkRowCounts[idx];
+            const int localGPDataSize = stride * cache.chunkGPCounts[idx];
+            const int localBasisDataSize =
+                basisStride * cache.chunkGPCounts[idx] * N_D();
+
+            std::vector<std::pair<std::string, unsigned long long>> parts;
+            const unsigned long long requiredBytes =
+                flexoAssemblyBufferBytesForDevice(
+                    idx, materialParameterSize, stride, basisStride,
+                    N_D(), replicateSecondaryInputs, primarySystemView,
+                    primaryGeometryView, primaryDisplacementView,
+                    primaryElectricPotentialView, primaryGPTableView,
+                    primaryWeightsView, primaryGeoValuesView,
+                    primaryDispValuesView, primaryElecValuesView,
+                    primaryBodyForceView, fixedDofsAssemble, numGPs(),
+                    cache.chunkGPCounts[idx], cache.chunkRowCounts[idx],
+                    cache.chunkMatrixValueCounts[idx], &parts);
+            std::ostringstream label;
+            label << "assembly cache allocation for GPU " << idx
+                  << " streaming buffer (max elements "
+                  << cache.chunkCounts[idx] << ", max GP "
+                  << cache.chunkGPCounts[idx] << ")";
+            flexoPrintCudaMemoryReport(label.str(), requiredBytes, parts);
+
             cache.deviceBuffers[idx] =
                 std::make_unique<FlexoAssemblyDeviceBuffer>(
-                    assemblyDevices[idx], matrixValuesSize, rhsSize,
-                    stride * chunkGPCounts[idx],
-                    basisStride * chunkGPCounts[idx] * N_D(),
+                    assemblyDevices[idx], localMatrixValuesSize, localRhsSize,
+                    localGPDataSize, localBasisDataSize,
                     flexoMaterialParameters, idx != 0);
             if (idx != 0)
             {
-                cache.deviceBuffers[idx]->copySparseMetadata(
+                cache.deviceBuffers[idx]->copySparseBaseMetadata(
                     primarySystemView, primaryDevice, assemblyDevices[idx]);
                 if (replicateSecondaryInputs)
-                    cache.deviceBuffers[idx]->copyStaticInputData(
+                    cache.deviceBuffers[idx]->copyStaticModelData(
                         primaryGeometryView, primaryDisplacementView,
-                        primaryElectricPotentialView, primaryGPTableView,
-                        primaryWeightsView, primaryGeoValuesView,
-                        primaryDispValuesView, primaryElecValuesView,
-                        primaryBodyForceView, primaryDevice,
-                        assemblyDevices[idx]);
+                        primaryElectricPotentialView, primaryBodyForceView,
+                        primaryDevice, assemblyDevices[idx]);
             }
         }
     }
@@ -4654,11 +5515,6 @@ void GPUFlexoelectriciyAssembler::assemble(
             FlexoAssemblyDeviceBuffer& buffer = *cache.deviceBuffers[idx];
             buffer.materialParameters.updateFromHost(
                 flexoMaterialParameters.data());
-            if (idx != 0)
-            {
-                buffer.matrixValues.setZero();
-                buffer.rhs.setZero();
-            }
         }
     }
 
@@ -4678,6 +5534,16 @@ void GPUFlexoelectriciyAssembler::assemble(
     const auto inputRefreshEndTime =
         std::chrono::high_resolution_clock::now();
     cudaSetDevice(primaryDevice);
+
+    const int gpTableColsPerGP = primaryGPTableView.cols() / numGPs();
+    const int geoValuesColsPerGP = primaryGeoValuesView.cols() / numGPs();
+    const int dispValuesColsPerGP = primaryDispValuesView.cols() / numGPs();
+    const int elecValuesColsPerGP = primaryElecValuesView.cols() / numGPs();
+
+    auto inputGPStartForDevice = [&](int idx, const FlexoAssemblyChunk& chunk)
+    {
+        return (idx != 0 && replicateSecondaryInputs) ? chunk.gpStart : 0;
+    };
 
     auto systemViewForDevice = [&](int idx)
     {
@@ -4707,13 +5573,13 @@ void GPUFlexoelectriciyAssembler::assemble(
         return deviceBuffers[idx]->electricPotential.view();
     };
 
-    auto gpTableViewForDevice = [&](int idx)
+    auto gpTableViewForDevice = [&](int idx, const FlexoAssemblyChunk& chunk)
     {
         if (idx == 0 || !replicateSecondaryInputs)
             return primaryGPTableView;
         return DeviceMatrixView<double>(
             deviceBuffers[idx]->gpTable.data(), primaryGPTableView.rows(),
-            primaryGPTableView.cols());
+            chunk.gpCount * gpTableColsPerGP);
     };
 
     auto weightsViewForDevice = [&](int idx)
@@ -4723,31 +5589,34 @@ void GPUFlexoelectriciyAssembler::assemble(
         return deviceBuffers[idx]->weights.vectorView();
     };
 
-    auto geoValuesViewForDevice = [&](int idx)
+    auto geoValuesViewForDevice = [&](int idx, const FlexoAssemblyChunk& chunk)
     {
         if (idx == 0 || !replicateSecondaryInputs)
             return primaryGeoValuesView;
         return DeviceMatrixView<double>(
             deviceBuffers[idx]->geoValuesAndDerss.data(),
-            primaryGeoValuesView.rows(), primaryGeoValuesView.cols());
+            primaryGeoValuesView.rows(),
+            chunk.gpCount * geoValuesColsPerGP);
     };
 
-    auto dispValuesViewForDevice = [&](int idx)
+    auto dispValuesViewForDevice = [&](int idx, const FlexoAssemblyChunk& chunk)
     {
         if (idx == 0 || !replicateSecondaryInputs)
             return primaryDispValuesView;
         return DeviceMatrixView<double>(
             deviceBuffers[idx]->dispValuesAndDerss.data(),
-            primaryDispValuesView.rows(), primaryDispValuesView.cols());
+            primaryDispValuesView.rows(),
+            chunk.gpCount * dispValuesColsPerGP);
     };
 
-    auto elecValuesViewForDevice = [&](int idx)
+    auto elecValuesViewForDevice = [&](int idx, const FlexoAssemblyChunk& chunk)
     {
         if (idx == 0 || !replicateSecondaryInputs)
             return primaryElecValuesView;
         return DeviceMatrixView<double>(
             deviceBuffers[idx]->elecValuesAndDerss.data(),
-            primaryElecValuesView.rows(), primaryElecValuesView.cols());
+            primaryElecValuesView.rows(),
+            chunk.gpCount * elecValuesColsPerGP);
     };
 
     auto bodyForceViewForDevice = [&](int idx)
@@ -4764,12 +5633,37 @@ void GPUFlexoelectriciyAssembler::assemble(
         return deviceBuffers[idx]->fixedDofs.view();
     };
 
-    auto runChunkGroup = [&](const auto& launcher)
+    auto prepareChunkForDevice =
+        [&](int idx, const FlexoAssemblyChunk& chunk)
+    {
+        cudaSetDevice(assemblyDevices[idx]);
+        if (idx == 0)
+            return;
+
+        FlexoAssemblyDeviceBuffer& buffer = *deviceBuffers[idx];
+        buffer.updateLocalSparseWindow(
+            primarySystemView, chunk.rowPtrHost, chunk.rowStart,
+            chunk.matrixValueStart, primaryDevice, assemblyDevices[idx]);
+        buffer.clearActiveOutput();
+        if (replicateSecondaryInputs)
+            buffer.copyStaticChunkInputData(
+                primaryGPTableView, primaryWeightsView, primaryGeoValuesView,
+                primaryDispValuesView, primaryElecValuesView, numGPs(),
+                chunk.gpStart, chunk.gpCount, primaryDevice,
+                assemblyDevices[idx]);
+    };
+
+    auto runChunkGroup = [&](int round, const auto& launcher)
     {
         if (numAssemblyDevices == 1)
         {
             cudaSetDevice(primaryDevice);
-            launcher(0, chunkStarts[0], chunkCounts[0], primarySystemView);
+            if (round < static_cast<int>(cache.chunksByDevice[0].size()))
+            {
+                const FlexoAssemblyChunk& chunk =
+                    cache.chunksByDevice[0][round];
+                launcher(0, chunk, primarySystemView);
+            }
             return;
         }
 
@@ -4778,17 +5672,18 @@ void GPUFlexoelectriciyAssembler::assemble(
         workers.reserve(numAssemblyDevices);
         for (int idx = 0; idx < numAssemblyDevices; ++idx)
         {
+            if (round >= static_cast<int>(cache.chunksByDevice[idx].size()))
+                continue;
+
             const int device = assemblyDevices[idx];
-            const int elementStart = chunkStarts[idx];
-            const int elementCount = chunkCounts[idx];
+            const FlexoAssemblyChunk chunk = cache.chunksByDevice[idx][round];
             const SparseSystemDeviceView systemView = systemViewForDevice(idx);
-            workers.emplace_back([&, idx, device, elementStart, elementCount,
-                                  systemView]()
+            workers.emplace_back([&, idx, device, chunk, systemView]()
             {
                 try
                 {
                     cudaSetDevice(device);
-                    launcher(idx, elementStart, elementCount, systemView);
+                    launcher(idx, chunk, systemView);
                 }
                 catch (...)
                 {
@@ -4808,14 +5703,14 @@ void GPUFlexoelectriciyAssembler::assemble(
 
     const int matrixBlockSize = N_D();
     const auto launchPrecomputeChunk =
-        [&](int idx, int elementStart, int elementCount,
+        [&](int idx, const FlexoAssemblyChunk& chunk,
             SparseSystemDeviceView)
     {
-        if (elementCount <= 0)
+        if (chunk.elementCount <= 0)
             return;
 
-        const int gpStart = chunkGPStarts[idx];
-        const int gpCount = chunkGPCounts[idx];
+        const int gpStart = chunk.gpStart;
+        const int gpCount = chunk.gpCount;
         FlexoAssemblyDeviceBuffer& buffer = *deviceBuffers[idx];
 
         int minGrid = 0;
@@ -4824,12 +5719,15 @@ void GPUFlexoelectriciyAssembler::assemble(
             evaluateFlexoGPKernel, 0, gpCount);
         int gridSize = (gpCount + blockSize - 1) / blockSize;
         evaluateFlexoGPKernel<<<gridSize, blockSize>>>(
-            numDerivatives(), gpStart, gpCount, stride,
+            numDerivatives(), gpStart, inputGPStartForDevice(idx, chunk),
+            gpCount,
+            stride,
             buffer.materialParameters.vectorView(), localStiffening,
             displacementViewForDevice(idx), electricPotentialViewForDevice(idx),
-            geometryViewForDevice(idx), gpTableViewForDevice(idx),
-            weightsViewForDevice(idx), geoValuesViewForDevice(idx),
-            dispValuesViewForDevice(idx), elecValuesViewForDevice(idx),
+            geometryViewForDevice(idx), gpTableViewForDevice(idx, chunk),
+            weightsViewForDevice(idx), geoValuesViewForDevice(idx, chunk),
+            dispValuesViewForDevice(idx, chunk),
+            elecValuesViewForDevice(idx, chunk),
             buffer.flexoGPData.vectorView());
         cudaError_t syncErr = cudaDeviceSynchronize();
         if (syncErr != cudaSuccess)
@@ -4839,9 +5737,11 @@ void GPUFlexoelectriciyAssembler::assemble(
             evaluateFlexoBasisDataKernel, 0, gpCount * N_D());
         gridSize = (gpCount * N_D() + blockSize - 1) / blockSize;
         evaluateFlexoBasisDataKernel<<<gridSize, blockSize>>>(
-            numDerivatives(), gpStart, gpCount, N_D(), stride, basisStride,
+            numDerivatives(), gpStart, inputGPStartForDevice(idx, chunk),
+            gpCount, N_D(), stride, basisStride,
             displacementViewForDevice(idx), electricPotentialViewForDevice(idx),
-            dispValuesViewForDevice(idx), elecValuesViewForDevice(idx),
+            dispValuesViewForDevice(idx, chunk),
+            elecValuesViewForDevice(idx, chunk),
             buffer.flexoGPData.vectorView(), buffer.flexoBasisData.vectorView());
         syncErr = cudaDeviceSynchronize();
         if (syncErr != cudaSuccess)
@@ -4849,13 +5749,15 @@ void GPUFlexoelectriciyAssembler::assemble(
     };
 
     const auto launchMatrixChunk =
-        [&](int idx, int elementStart, int elementCount,
+        [&](int idx, const FlexoAssemblyChunk& chunk,
             SparseSystemDeviceView systemView)
     {
-        if (elementCount <= 0)
+        if (chunk.elementCount <= 0)
             return;
 
-        const int gpStart = chunkGPStarts[idx];
+        const int elementStart = chunk.elementStart;
+        const int elementCount = chunk.elementCount;
+        const int gpStart = chunk.gpStart;
         FlexoAssemblyDeviceBuffer& buffer = *deviceBuffers[idx];
         if (useSplitMatrixKernels)
         {
@@ -4864,38 +5766,42 @@ void GPUFlexoelectriciyAssembler::assemble(
                 N_D() * N_D() * elementCount * domainDim() * domainDim();
             assembleFlexoMatrixUUKernel<<<chunkGridSize, matrixBlockSize,
                 matrixSharedBytes>>>(
-                elementStart, gpStart, elementCount, N_D(), stride,
+                elementStart, gpStart, inputGPStartForDevice(idx, chunk),
+                elementCount, N_D(), stride,
                 basisStride, displacementViewForDevice(idx),
                 electricPotentialViewForDevice(idx), systemView,
-                fixedDofsViewForDevice(idx), gpTableViewForDevice(idx),
+                fixedDofsViewForDevice(idx), gpTableViewForDevice(idx, chunk),
                 buffer.flexoGPData.vectorView(),
                 buffer.flexoBasisData.vectorView());
 
             chunkGridSize = N_D() * N_D() * elementCount * domainDim();
             assembleFlexoMatrixUPhiKernel<<<chunkGridSize, matrixBlockSize,
                 matrixSharedBytes>>>(
-                elementStart, gpStart, elementCount, N_D(), stride,
+                elementStart, gpStart, inputGPStartForDevice(idx, chunk),
+                elementCount, N_D(), stride,
                 basisStride, displacementViewForDevice(idx),
                 electricPotentialViewForDevice(idx), systemView,
-                fixedDofsViewForDevice(idx), gpTableViewForDevice(idx),
+                fixedDofsViewForDevice(idx), gpTableViewForDevice(idx, chunk),
                 buffer.flexoGPData.vectorView(),
                 buffer.flexoBasisData.vectorView());
             assembleFlexoMatrixPhiUKernel<<<chunkGridSize, matrixBlockSize,
                 matrixSharedBytes>>>(
-                elementStart, gpStart, elementCount, N_D(), stride,
+                elementStart, gpStart, inputGPStartForDevice(idx, chunk),
+                elementCount, N_D(), stride,
                 basisStride, displacementViewForDevice(idx),
                 electricPotentialViewForDevice(idx), systemView,
-                fixedDofsViewForDevice(idx), gpTableViewForDevice(idx),
+                fixedDofsViewForDevice(idx), gpTableViewForDevice(idx, chunk),
                 buffer.flexoGPData.vectorView(),
                 buffer.flexoBasisData.vectorView());
 
             chunkGridSize = N_D() * N_D() * elementCount;
             assembleFlexoMatrixPhiPhiKernel<<<chunkGridSize, matrixBlockSize,
                 matrixSharedBytes>>>(
-                elementStart, gpStart, elementCount, N_D(), stride,
+                elementStart, gpStart, inputGPStartForDevice(idx, chunk),
+                elementCount, N_D(), stride,
                 basisStride, displacementViewForDevice(idx),
                 electricPotentialViewForDevice(idx), systemView,
-                fixedDofsViewForDevice(idx), gpTableViewForDevice(idx),
+                fixedDofsViewForDevice(idx), gpTableViewForDevice(idx, chunk),
                 buffer.flexoGPData.vectorView(),
                 buffer.flexoBasisData.vectorView());
         }
@@ -4906,13 +5812,15 @@ void GPUFlexoelectriciyAssembler::assemble(
                 (domainDim() + 1) * (domainDim() + 1) * sizeof(double);
             assembleFlexoMatrixKernel<<<chunkGridSize, matrixBlockSize,
                 matrixSharedBytes>>>(
-                numDerivatives(), elementStart, gpStart, elementCount, N_D(),
-                stride, basisStride, materialLaw, youngsModulus, poissonsRatio,
+                numDerivatives(), elementStart, gpStart,
+                inputGPStartForDevice(idx, chunk), elementCount, N_D(), stride,
+                basisStride, materialLaw, youngsModulus, poissonsRatio,
                 lengthScale, dielectricPermittivity, vacuumPermittivity, muL,
                 muT, muS, displacementViewForDevice(idx),
                 electricPotentialViewForDevice(idx), systemView,
-                fixedDofsViewForDevice(idx), gpTableViewForDevice(idx),
-                dispValuesViewForDevice(idx), elecValuesViewForDevice(idx),
+                fixedDofsViewForDevice(idx), gpTableViewForDevice(idx, chunk),
+                dispValuesViewForDevice(idx, chunk),
+                elecValuesViewForDevice(idx, chunk),
                 buffer.flexoGPData.vectorView(),
                 buffer.flexoBasisData.vectorView());
         }
@@ -4923,24 +5831,28 @@ void GPUFlexoelectriciyAssembler::assemble(
     };
 
     const auto launchRHSChunk =
-        [&](int idx, int elementStart, int elementCount,
+        [&](int idx, const FlexoAssemblyChunk& chunk,
             SparseSystemDeviceView systemView)
     {
-        if (elementCount <= 0)
+        if (chunk.elementCount <= 0)
             return;
 
-        const int gpStart = chunkGPStarts[idx];
+        const int elementStart = chunk.elementStart;
+        const int elementCount = chunk.elementCount;
+        const int gpStart = chunk.gpStart;
         FlexoAssemblyDeviceBuffer& buffer = *deviceBuffers[idx];
         const int rhsGridSize = N_D() * elementCount;
         const size_t rhsSharedBytes = (domainDim() + 1) * sizeof(double);
         assembleFlexoRHSKernel<<<rhsGridSize, matrixBlockSize, rhsSharedBytes>>>(
-            numDerivatives(), elementStart, gpStart, elementCount, N_D(),
-            stride, basisStride, materialLaw, youngsModulus, poissonsRatio,
+            numDerivatives(), elementStart, gpStart,
+            inputGPStartForDevice(idx, chunk), elementCount, N_D(), stride,
+            basisStride, materialLaw, youngsModulus, poissonsRatio,
             lengthScale, dielectricPermittivity, vacuumPermittivity, muL, muT,
             muS, forceScaling, displacementViewForDevice(idx),
             electricPotentialViewForDevice(idx), systemView,
-            gpTableViewForDevice(idx), dispValuesViewForDevice(idx),
-            elecValuesViewForDevice(idx), bodyForceViewForDevice(idx),
+            gpTableViewForDevice(idx, chunk),
+            dispValuesViewForDevice(idx, chunk),
+            elecValuesViewForDevice(idx, chunk), bodyForceViewForDevice(idx),
             buffer.flexoGPData.vectorView(),
             buffer.flexoBasisData.vectorView());
 
@@ -4949,51 +5861,100 @@ void GPUFlexoelectriciyAssembler::assemble(
             throw std::runtime_error("CUDA synchronize failed in assembleFlexoRHSKernel");
     };
 
-    const auto precomputeStartTime = std::chrono::high_resolution_clock::now();
-    runChunkGroup(launchPrecomputeChunk);
-    const auto precomputeEndTime = std::chrono::high_resolution_clock::now();
-
-    const auto matrixStartTime = std::chrono::high_resolution_clock::now();
-    runChunkGroup(launchMatrixChunk);
-    const auto matrixEndTime = std::chrono::high_resolution_clock::now();
-
-    const auto rhsStartTime = std::chrono::high_resolution_clock::now();
-    runChunkGroup(launchRHSChunk);
-    const auto rhsEndTime = std::chrono::high_resolution_clock::now();
-
-    const auto reductionStartTime = std::chrono::high_resolution_clock::now();
-    for (int idx = 1; idx < numAssemblyDevices; ++idx)
+    auto reduceChunkGroup = [&](int round)
     {
-        const int threadsPerBlock = 256;
-        const int totalSize = std::max(matrixValuesSize, rhsSize);
-        const int blocksPerGrid = (totalSize + threadsPerBlock - 1) / threadsPerBlock;
-        addFlexoAssemblyBufferKernel<<<blocksPerGrid, threadsPerBlock>>>(
-            csrMatrix().values(), deviceBuffers[idx]->matrixValues.vectorView(),
-            rhs(), deviceBuffers[idx]->rhs.vectorView());
-        err = cudaDeviceSynchronize();
-        if (err != cudaSuccess)
-            throw std::runtime_error("CUDA synchronize failed while reducing multi-GPU flexoelectric assembly buffers");
+        cudaSetDevice(primaryDevice);
+        for (int idx = 1; idx < numAssemblyDevices; ++idx)
+        {
+            if (round >= static_cast<int>(cache.chunksByDevice[idx].size()))
+                continue;
+
+            const int threadsPerBlock = 256;
+            FlexoAssemblyDeviceBuffer& buffer = *deviceBuffers[idx];
+            const int totalSize =
+                std::max(buffer.matrixValueCount, buffer.outputRowCount);
+            const int blocksPerGrid =
+                (totalSize + threadsPerBlock - 1) / threadsPerBlock;
+            if (totalSize <= 0)
+                continue;
+            addFlexoLocalAssemblyBufferKernel<<<blocksPerGrid, threadsPerBlock>>>(
+                csrMatrix().values(),
+                DeviceVectorView<double>(buffer.matrixValues.data(),
+                                         buffer.matrixValueCount),
+                rhs(),
+                DeviceVectorView<double>(buffer.rhs.data(),
+                                         buffer.outputRowCount),
+                buffer.matrixValueStart,
+                buffer.outputRowStart);
+            err = cudaDeviceSynchronize();
+            if (err != cudaSuccess)
+                throw std::runtime_error("CUDA synchronize failed while reducing multi-GPU flexoelectric assembly buffers");
+        }
+        cudaSetDevice(primaryDevice);
+    };
+
+    std::chrono::duration<double, std::milli> chunkInputMilliseconds(0.0);
+    std::chrono::duration<double, std::milli> precomputeMilliseconds(0.0);
+    std::chrono::duration<double, std::milli> matrixMilliseconds(0.0);
+    std::chrono::duration<double, std::milli> rhsMilliseconds(0.0);
+    std::chrono::duration<double, std::milli> reductionMilliseconds(0.0);
+
+    for (int round = 0; round < cache.chunkRounds; ++round)
+    {
+        const auto chunkInputStartTime =
+            std::chrono::high_resolution_clock::now();
+        for (int idx = 0; idx < numAssemblyDevices; ++idx)
+        {
+            if (round >= static_cast<int>(cache.chunksByDevice[idx].size()))
+                continue;
+            prepareChunkForDevice(idx, cache.chunksByDevice[idx][round]);
+        }
+        cudaSetDevice(primaryDevice);
+        const auto chunkInputEndTime =
+            std::chrono::high_resolution_clock::now();
+        chunkInputMilliseconds += chunkInputEndTime - chunkInputStartTime;
+
+        const auto precomputeStartTime =
+            std::chrono::high_resolution_clock::now();
+        runChunkGroup(round, launchPrecomputeChunk);
+        const auto precomputeEndTime =
+            std::chrono::high_resolution_clock::now();
+        precomputeMilliseconds += precomputeEndTime - precomputeStartTime;
+
+        const auto matrixStartTime =
+            std::chrono::high_resolution_clock::now();
+        runChunkGroup(round, launchMatrixChunk);
+        const auto matrixEndTime =
+            std::chrono::high_resolution_clock::now();
+        matrixMilliseconds += matrixEndTime - matrixStartTime;
+
+        const auto rhsStartTime = std::chrono::high_resolution_clock::now();
+        runChunkGroup(round, launchRHSChunk);
+        const auto rhsEndTime = std::chrono::high_resolution_clock::now();
+        rhsMilliseconds += rhsEndTime - rhsStartTime;
+
+        const auto reductionStartTime =
+            std::chrono::high_resolution_clock::now();
+        reduceChunkGroup(round);
+        const auto reductionEndTime =
+            std::chrono::high_resolution_clock::now();
+        reductionMilliseconds += reductionEndTime - reductionStartTime;
     }
-    cudaSetDevice(primaryDevice);
-    const auto reductionEndTime = std::chrono::high_resolution_clock::now();
 
     if (printMatrixTiming)
     {
         const std::chrono::duration<double, std::milli> inputMilliseconds =
-            inputRefreshEndTime - inputRefreshStartTime;
-        const std::chrono::duration<double, std::milli> precomputeMilliseconds =
-            precomputeEndTime - precomputeStartTime;
-        const std::chrono::duration<double, std::milli> matrixMilliseconds =
-            matrixEndTime - matrixStartTime;
-        const std::chrono::duration<double, std::milli> rhsMilliseconds =
-            rhsEndTime - rhsStartTime;
-        const std::chrono::duration<double, std::milli> reductionMilliseconds =
-            reductionEndTime - reductionStartTime;
+            (inputRefreshEndTime - inputRefreshStartTime) +
+            chunkInputMilliseconds;
         std::cout << "Flexo matrix assembly path: "
                   << (useSplitMatrixKernels ? "split4" : "single")
                   << ", GPUs: " << numAssemblyDevices
                   << ", replicated inputs: "
                   << (replicateSecondaryInputs ? "on" : "off")
+                  << ", local CSR: "
+                  << (useLocalCSRAssembly ? "on" : "off")
+                  << ", chunk limit: " << cache.chunkElementLimit
+                  << ", rounds: " << cache.chunkRounds
                   << ", wall time: " << matrixMilliseconds.count() << " ms\n";
         std::cout << "Flexo assembly phases: input refresh "
                   << inputMilliseconds.count() << " ms, precompute "
