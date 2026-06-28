@@ -200,7 +200,7 @@ def plot_points(
     ax.xaxis.set_major_formatter(ScalarFormatter())
     ax.set_xlabel(x_axis_label(x_component))
     ax.set_ylabel(f"Electrode electric potential ({potential_unit})")
-    ax.set_title("Electrode Potential vs Mesh Size")
+    ax.set_title("Electrode Potential vs Element Number")
     ax.grid(True, color="#d8d8d8", linewidth=0.7, alpha=0.8)
     ax.margins(x=0.08, y=0.12)
     ax.text(
