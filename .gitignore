@@ -24,3 +24,4 @@ scripts/
 simulationResults/
 exacutable/
 parameters/
+tmp/

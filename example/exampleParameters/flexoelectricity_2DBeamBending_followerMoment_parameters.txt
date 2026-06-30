@@ -12,7 +12,7 @@ outputGaussPointData: false
 outputControlPointLocations: false
 outputMesh: false
 printTiming: true
-electrodeBoundary: north
+useTopElectrode: true
 
 # Loading
 followerMoment: -0.5

@@ -734,6 +734,8 @@ int main(int argc, char* argv[])
     bool printTiming = false;
     std::string outputPostfix = "default";
     std::string electrodeBoundary = "none";
+    bool useTopElectrode = false;
+    bool useTopElectrodeOptionSet = false;
 
     const bool useParameterFile = argc == 2 &&
         std::filesystem::path(argv[1]).extension() == ".txt";
@@ -785,6 +787,13 @@ int main(int argc, char* argv[])
         printTiming = parameterBool(parameters, "printTiming", printTiming);
         electrodeBoundary =
             parameterString(parameters, "electrodeBoundary", electrodeBoundary);
+        const auto useTopElectrodeIt = parameters.find("useTopElectrode");
+        if (useTopElectrodeIt != parameters.end())
+        {
+            useTopElectrodeOptionSet = true;
+            useTopElectrode =
+                parameterBool(parameters, "useTopElectrode", useTopElectrode);
+        }
         outputPostfix = parameterString(parameters, "outputPostfix", outputPostfix);
     }
     else
@@ -816,10 +825,18 @@ int main(int argc, char* argv[])
         if (argc > 23) muS = std::stod(argv[23]);
         if (argc > 24) includeHbarFlexoCorrection = std::stoi(argv[24]);
         if (argc > 25) electrodeBoundary = argv[25];
+        if (argc > 26)
+        {
+            useTopElectrodeOptionSet = true;
+            useTopElectrode = parseBool(argv[26], "useTopElectrode");
+        }
         outputPostfix = "manual";
         for (int i = 1; i < argc; ++i)
             outputPostfix += "_" + std::string(argv[i]);
     }
+
+    if (useTopElectrodeOptionSet)
+        electrodeBoundary = useTopElectrode ? "north" : "none";
 
     if (L <= 0.0 || H <= 0.0)
         throw std::invalid_argument("L and H must be positive.");
