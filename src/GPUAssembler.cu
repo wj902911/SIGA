@@ -800,7 +800,7 @@ void appendFollowerMomentCOOPattern(
 
 __global__
 void evaluateBasisValuesAndDerivativesAtGPsKernel(int numDerivatives, 
-                            int totalNumGPs, int dim,
+                            int GPStartId, int numGPBatched, int dim,
                             MultiPatchDeviceView displacement,
                             MultiPatchDeviceView multiPatch,
                             DeviceMatrixView<double> pts,
@@ -809,20 +809,21 @@ void evaluateBasisValuesAndDerivativesAtGPsKernel(int numDerivatives,
                             DeviceMatrixView<double> geoValuesAndDerss,
                             DeviceMatrixView<double> dispValuesAndDerss)
 {
-    for (int tidx = blockIdx.x * blockDim.x + threadIdx.x; tidx < totalNumGPs * dim; tidx += blockDim.x * gridDim.x) {
-        int GPIdx = tidx / dim;
+    for (int tidx = blockIdx.x * blockDim.x + threadIdx.x; tidx < numGPBatched * dim; tidx += blockDim.x * gridDim.x) {
+        int localGPIdx = tidx / dim;
+        int GPIdx = GPStartId + localGPIdx;
         int d = tidx % dim;
         int patch_idx(0);
         displacement.threadPatch(GPIdx, patch_idx);
         DeviceVectorView<double> pt(pts.data() + GPIdx * dim, dim);
         PatchDeviceView geoPatch = multiPatch.patch(patch_idx);
         int geoP1 = geoPatch.basis().knotsOrder(0) + 1;
-        double* geoWorkingSpace = geoWorkingSpaces.data() + GPIdx * geoP1 * (geoP1 + 4) * dim;
+        double* geoWorkingSpace = geoWorkingSpaces.data() + localGPIdx * geoP1 * (geoP1 + 4) * dim;
         DeviceMatrixView<double> geoValuesAndDers(geoValuesAndDerss.data() + GPIdx * geoP1 * (numDerivatives + 1) * dim, geoP1, (numDerivatives + 1) * dim);
         geoPatch.basis().evalAllDers_into(d, dim, pt, numDerivatives, geoWorkingSpace, geoValuesAndDers);
         TensorBsplineBasisDeviceView dispBasis = displacement.basis(patch_idx);
         int P1 = dispBasis.knotsOrder(0) + 1;
-        double* dispWorkingSpace = dispWorkingSpaces.data() + GPIdx * P1 * (P1 + 4) * dim;
+        double* dispWorkingSpace = dispWorkingSpaces.data() + localGPIdx * P1 * (P1 + 4) * dim;
         DeviceMatrixView<double> dispValuesAndDers(dispValuesAndDerss.data() + GPIdx * P1 * (numDerivatives+1) * dim, P1, (numDerivatives+1)*dim);
         dispBasis.evalAllDers_into(d, dim, pt, numDerivatives, dispWorkingSpace, dispValuesAndDers);
     }
@@ -3698,24 +3699,7 @@ GPUAssembler::GPUAssembler(const MultiPatch &multiPatch,
         err = cudaDeviceSynchronize();
         assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler constructor during GP table computation");
 
-        m_geoValuesAndDerss.resize(m_geoP1 * m_totalGPs * (m_numDerivatives + 1) * m_domainDim);
-        m_dispValuesAndDerss.resize(m_dispP1 * m_totalGPs * (m_numDerivatives + 1) * m_domainDim);
-        DeviceArray<double> geoWorkingSpaces(m_totalGPs * m_geoP1 * (m_geoP1 + 4) * m_domainDim);
-        DeviceArray<double> dispWorkingSpaces(m_totalGPs * m_dispP1 * (m_dispP1 + 4) * m_domainDim);
-
-        int blockSize_evaluateValAbdDers;
-        cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize_evaluateValAbdDers, evaluateBasisValuesAndDerivativesAtGPsKernel, 0, m_totalGPs * m_domainDim);
-        gridSize = (m_totalGPs * m_domainDim + blockSize_evaluateValAbdDers - 1) / blockSize_evaluateValAbdDers;
-        evaluateBasisValuesAndDerivativesAtGPsKernel<<<gridSize, blockSize_evaluateValAbdDers>>>(
-            m_numDerivatives, m_totalGPs, 
-            m_domainDim, m_displacement.deviceView(),
-            m_multiPatch.deviceView(), 
-            m_GPTable.matrixView(m_domainDim, m_totalGPs), 
-            geoWorkingSpaces.vectorView(), dispWorkingSpaces.vectorView(),
-            m_geoValuesAndDerss.matrixView(m_geoP1, m_totalGPs * (m_numDerivatives + 1) * m_domainDim), 
-            m_dispValuesAndDerss.matrixView(m_dispP1, m_totalGPs * (m_numDerivatives + 1) * m_domainDim));
-        err = cudaDeviceSynchronize();
-        assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler constructor during basis values and derivatives evaluation at GPs");
+        evaluateBasisValuesAndDerivativesAtGPs();
     }
     
 }
@@ -6263,24 +6247,91 @@ void GPUAssembler::computeGPTable()
 
 void GPUAssembler::evaluateBasisValuesAndDerivativesAtGPs()
 {
-    m_geoValuesAndDerss.resize(m_geoP1 * m_totalGPs * (m_numDerivatives + 1) * m_domainDim);
-    m_dispValuesAndDerss.resize(m_dispP1 * m_totalGPs * (m_numDerivatives + 1) * m_domainDim);
-    DeviceArray<double> geoWorkingSpaces(m_totalGPs * m_geoP1 * (m_geoP1 + 4) * m_domainDim);
-    DeviceArray<double> dispWorkingSpaces(m_totalGPs * m_dispP1 * (m_dispP1 + 4) * m_domainDim);
+    const long long basisCols =
+        static_cast<long long>(m_totalGPs) * (m_numDerivatives + 1) *
+        m_domainDim;
+    const int basisColsInt = siga::gpuasm::checkedIntCount(
+        basisCols, "basis values and derivatives column count");
+    m_geoValuesAndDerss.resize(siga::gpuasm::checkedIntCount(
+        static_cast<long long>(m_geoP1) * basisCols,
+        "geometry basis values and derivatives"));
+    m_dispValuesAndDerss.resize(siga::gpuasm::checkedIntCount(
+        static_cast<long long>(m_dispP1) * basisCols,
+        "displacement basis values and derivatives"));
 
-    int minGrid, blockSize;
-    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, evaluateBasisValuesAndDerivativesAtGPsKernel, 0, m_totalGPs * m_domainDim);
-    int gridSize = (m_totalGPs * m_domainDim + blockSize - 1) / blockSize;
-    evaluateBasisValuesAndDerivativesAtGPsKernel<<<gridSize, blockSize>>>(
-            m_numDerivatives, m_totalGPs, 
-            m_domainDim, m_displacement.deviceView(),
-            m_multiPatch.deviceView(), 
-            m_GPTable.matrixView(m_domainDim, m_totalGPs), 
+    const long long geoWorkspacePerGP =
+        static_cast<long long>(m_geoP1) * (m_geoP1 + 4) * m_domainDim;
+    const long long dispWorkspacePerGP =
+        static_cast<long long>(m_dispP1) * (m_dispP1 + 4) * m_domainDim;
+    const unsigned long long workspaceBytesPerGP =
+        siga::gpuasm::bytesForCount(
+            geoWorkspacePerGP + dispWorkspacePerGP, sizeof(double));
+    const int maxGPsByIndex = std::min(
+        siga::gpuasm::checkedIntCount(
+            std::numeric_limits<int>::max() / std::max(1LL, geoWorkspacePerGP),
+            "geometry basis workspace chunk limit"),
+        siga::gpuasm::checkedIntCount(
+            std::numeric_limits<int>::max() / std::max(1LL, dispWorkspacePerGP),
+            "displacement basis workspace chunk limit"));
+
+    const bool reportMemory = siga::gpuasm::envFlag(
+        "SIGA_BASIS_MEMORY_REPORT",
+        siga::gpuasm::envFlag("SIGA_GPU_MEMORY_REPORT",
+                              siga::gpuasm::envFlag("SIGA_FLEXO_MEMORY_REPORT",
+                                                    true)));
+    const double memoryFraction = siga::gpuasm::envDouble(
+        "SIGA_BASIS_MEMORY_FRACTION",
+        siga::gpuasm::envDouble("SIGA_GPU_MEMORY_FRACTION",
+                                siga::gpuasm::envDouble(
+                                    "SIGA_FLEXO_MEMORY_FRACTION", 0.80)));
+    const int requestedChunkGPs = siga::gpuasm::envInt(
+        "SIGA_BASIS_CHUNK_GPS",
+        siga::gpuasm::envInt("SIGA_GPU_BASIS_CHUNK_GPS",
+                             siga::gpuasm::envInt(
+                                 "SIGA_FLEXO_BASIS_CHUNK_GPS", 0)));
+    const int chunkGPs = siga::gpuasm::chooseMemoryFittingChunkCount(
+        "geometry/displacement basis workspace", m_totalGPs,
+        workspaceBytesPerGP, maxGPsByIndex, memoryFraction,
+        requestedChunkGPs, reportMemory);
+
+    DeviceArray<double> geoWorkingSpaces(siga::gpuasm::checkedIntCount(
+        static_cast<long long>(chunkGPs) * geoWorkspacePerGP,
+        "geometry basis workspace chunk"));
+    DeviceArray<double> dispWorkingSpaces(siga::gpuasm::checkedIntCount(
+        static_cast<long long>(chunkGPs) * dispWorkspacePerGP,
+        "displacement basis workspace chunk"));
+
+    int minGrid = 0;
+    int blockSize = 0;
+    cudaOccupancyMaxPotentialBlockSize(
+        &minGrid, &blockSize, evaluateBasisValuesAndDerivativesAtGPsKernel,
+        0, chunkGPs * m_domainDim);
+    if (blockSize <= 0)
+        blockSize = 128;
+
+    for (int gpStart = 0; gpStart < m_totalGPs; gpStart += chunkGPs)
+    {
+        const int gpCount = std::min(chunkGPs, m_totalGPs - gpStart);
+        const int gridSize = (gpCount * m_domainDim + blockSize - 1) /
+                             blockSize;
+        evaluateBasisValuesAndDerivativesAtGPsKernel<<<gridSize, blockSize>>>(
+            m_numDerivatives, gpStart, gpCount, m_domainDim,
+            m_displacement.deviceView(), m_multiPatch.deviceView(),
+            m_GPTable.matrixView(m_domainDim, m_totalGPs),
             geoWorkingSpaces.vectorView(), dispWorkingSpaces.vectorView(),
-            m_geoValuesAndDerss.matrixView(m_geoP1, m_totalGPs * (m_numDerivatives + 1) * m_domainDim), 
-            m_dispValuesAndDerss.matrixView(m_dispP1, m_totalGPs * (m_numDerivatives + 1) * m_domainDim));
-    cudaError_t err = cudaDeviceSynchronize();
-    assert(err == cudaSuccess && "cudaDeviceSynchronize failed in GPUAssembler constructor during basis values and derivatives evaluation at GPs");
+            m_geoValuesAndDerss.matrixView(m_geoP1, basisColsInt),
+            m_dispValuesAndDerss.matrixView(m_dispP1, basisColsInt));
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess)
+            throw std::runtime_error(
+                std::string("CUDA launch failed during chunked basis evaluation: ") +
+                cudaGetErrorString(err));
+        err = cudaDeviceSynchronize();
+        if (err != cudaSuccess)
+            throw std::runtime_error(
+                std::string("CUDA synchronize failed during chunked basis evaluation: ") +
+                cudaGetErrorString(err));
+    }
 }
 
 void GPUAssembler::allocateGPData()

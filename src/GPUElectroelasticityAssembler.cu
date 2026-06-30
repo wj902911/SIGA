@@ -408,22 +408,23 @@ void computeEleMatrixCOOKernel(int totalNumElements, int* counter,
 
 __global__
 void evaluateEleBasisValuesAndDerivativesAtGPsKernel(int numDerivatives, 
-                            int totalNumGPs, int dim,
+                            int GPStartId, int numGPBatched, int dim,
                             MultiPatchDeviceView displacement,
                             MultiPatchDeviceView electricPotential,
                             DeviceMatrixView<double> pts,
                             DeviceVectorView<double> elecWorkingSpaces,
                             DeviceMatrixView<double> elecValuesAndDerss)
 {
-    for (int tidx = blockIdx.x * blockDim.x + threadIdx.x; tidx < totalNumGPs * dim; tidx += blockDim.x * gridDim.x) {
-        int GPIdx = tidx / dim;
+    for (int tidx = blockIdx.x * blockDim.x + threadIdx.x; tidx < numGPBatched * dim; tidx += blockDim.x * gridDim.x) {
+        int localGPIdx = tidx / dim;
+        int GPIdx = GPStartId + localGPIdx;
         int d = tidx % dim;
         int patch_idx(0);
         displacement.threadPatch(GPIdx, patch_idx);
         DeviceVectorView<double> pt(pts.data() + GPIdx * dim, dim);
         TensorBsplineBasisDeviceView eleBasis = electricPotential.basis(patch_idx);
         int P1 = eleBasis.knotsOrder(0) + 1;
-        double* elecWorkingSpace = elecWorkingSpaces.data() + GPIdx * P1 * (P1 + 4) * dim;
+        double* elecWorkingSpace = elecWorkingSpaces.data() + localGPIdx * P1 * (P1 + 4) * dim;
         DeviceMatrixView<double> elecValuesAndDers(elecValuesAndDerss.data() + GPIdx * P1 * (numDerivatives+1) * dim, P1, (numDerivatives+1)*dim);
         eleBasis.evalAllDers_into(d, dim, pt, numDerivatives, elecWorkingSpace, elecValuesAndDers);
     }
@@ -1537,18 +1538,68 @@ void GPUElectroelasticityAssembler::setDefaultOptions()
 
 void GPUElectroelasticityAssembler::evaluateElecBasisValuesAndDerivativesAtGPs()
 { 
-    m_elecValuesAndDerss.resize(m_elePotentialP1 * numGPs() * 2 * domainDim()); 
-    DeviceArray<double> elecWorkingSpaces(numGPs() * m_elePotentialP1 * (m_elePotentialP1 + 4) * domainDim());
-    int minGrid, blockSize;
-    cudaOccupancyMaxPotentialBlockSize(&minGrid, &blockSize, evaluateEleBasisValuesAndDerivativesAtGPsKernel, 0, numGPs() * domainDim());
-    int gridSize = (numGPs() * domainDim() + blockSize - 1) / blockSize;
-    evaluateEleBasisValuesAndDerivativesAtGPsKernel<<<gridSize, blockSize>>>(
-        1, numGPs(), domainDim(), 
-        displacementView(), 
-        m_electricPotentialPatch.deviceView(), 
-        gpTable(), 
-        elecWorkingSpaces.vectorView(), 
-        m_elecValuesAndDerss.matrixView(m_elePotentialP1, numGPs() * 2 * domainDim()));
+    const long long basisCols =
+        static_cast<long long>(numGPs()) * 2 * domainDim();
+    const int basisColsInt = siga::gpuasm::checkedIntCount(
+        basisCols, "electroelastic electric basis column count");
+    m_elecValuesAndDerss.resize(siga::gpuasm::checkedIntCount(
+        static_cast<long long>(m_elePotentialP1) * basisCols,
+        "electroelastic electric basis values and derivatives"));
+
+    const long long workspacePerGP =
+        static_cast<long long>(m_elePotentialP1) *
+        (m_elePotentialP1 + 4) * domainDim();
+    const unsigned long long workspaceBytesPerGP =
+        siga::gpuasm::bytesForCount(workspacePerGP, sizeof(double));
+    const int maxGPsByIndex = siga::gpuasm::checkedIntCount(
+        std::numeric_limits<int>::max() / std::max(1LL, workspacePerGP),
+        "electroelastic electric basis workspace chunk limit");
+    const bool reportMemory = siga::gpuasm::envFlag(
+        "SIGA_ELECTRO_MEMORY_REPORT",
+        siga::gpuasm::envFlag("SIGA_GPU_MEMORY_REPORT", true));
+    const double memoryFraction = siga::gpuasm::envDouble(
+        "SIGA_ELECTRO_BASIS_MEMORY_FRACTION",
+        siga::gpuasm::envDouble("SIGA_BASIS_MEMORY_FRACTION",
+                                siga::gpuasm::envDouble(
+                                    "SIGA_GPU_MEMORY_FRACTION", 0.80)));
+    const int requestedChunkGPs = siga::gpuasm::envInt(
+        "SIGA_ELECTRO_BASIS_CHUNK_GPS",
+        siga::gpuasm::envInt("SIGA_BASIS_CHUNK_GPS", 0));
+    const int chunkGPs = siga::gpuasm::chooseMemoryFittingChunkCount(
+        "electroelastic electric basis workspace", numGPs(),
+        workspaceBytesPerGP, maxGPsByIndex, memoryFraction,
+        requestedChunkGPs, reportMemory);
+
+    DeviceArray<double> elecWorkingSpaces(siga::gpuasm::checkedIntCount(
+        static_cast<long long>(chunkGPs) * workspacePerGP,
+        "electroelastic electric basis workspace chunk"));
+    int minGrid = 0;
+    int blockSize = 0;
+    cudaOccupancyMaxPotentialBlockSize(
+        &minGrid, &blockSize, evaluateEleBasisValuesAndDerivativesAtGPsKernel,
+        0, chunkGPs * domainDim());
+    if (blockSize <= 0)
+        blockSize = 128;
+    for (int gpStart = 0; gpStart < numGPs(); gpStart += chunkGPs)
+    {
+        const int gpCount = std::min(chunkGPs, numGPs() - gpStart);
+        const int gridSize =
+            (gpCount * domainDim() + blockSize - 1) / blockSize;
+        evaluateEleBasisValuesAndDerivativesAtGPsKernel<<<gridSize, blockSize>>>(
+            1, gpStart, gpCount, domainDim(), displacementView(),
+            m_electricPotentialPatch.deviceView(), gpTable(),
+            elecWorkingSpaces.vectorView(),
+            m_elecValuesAndDerss.matrixView(m_elePotentialP1,
+                                            basisColsInt));
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess)
+            throw std::runtime_error(std::string("CUDA launch failed while evaluating electroelastic potential basis: ") +
+                                     cudaGetErrorString(err));
+        err = cudaDeviceSynchronize();
+        if (err != cudaSuccess)
+            throw std::runtime_error(std::string("CUDA synchronize failed while evaluating electroelastic potential basis: ") +
+                                     cudaGetErrorString(err));
+    }
 }
 
 void GPUElectroelasticityAssembler::allocateGPElecData()
