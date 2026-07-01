@@ -132,6 +132,55 @@ bool parameterBool(const std::map<std::string, std::string>& parameters,
     return parseBool(it->second, key);
 }
 
+enum class BottomElectricGrounding
+{
+    SouthSide,
+    SouthwestCorner
+};
+
+BottomElectricGrounding parseBottomElectricGrounding(const std::string& value,
+                                                     const std::string& key)
+{
+    const std::string text = normalizedText(value);
+    if (text == "south" || text == "bottom" || text == "side" ||
+        text == "surface" || text == "bottom-side" ||
+        text == "bottom_side" || text == "south-side" ||
+        text == "south_side")
+        return BottomElectricGrounding::SouthSide;
+
+    if (text == "southwest" || text == "sw" || text == "bottom-left" ||
+        text == "bottom_left" || text == "corner" ||
+        text == "southwest-corner" || text == "southwest_corner")
+        return BottomElectricGrounding::SouthwestCorner;
+
+    throw std::invalid_argument(
+        "Expected " + key +
+        " to be south/bottom/side or southwest/bottom-left/corner.");
+}
+
+BottomElectricGrounding parameterBottomElectricGrounding(
+    const std::map<std::string, std::string>& parameters,
+    const std::string& key,
+    BottomElectricGrounding defaultValue)
+{
+    const auto it = parameters.find(key);
+    if (it == parameters.end())
+        return defaultValue;
+    return parseBottomElectricGrounding(it->second, key);
+}
+
+std::string bottomElectricGroundingName(BottomElectricGrounding grounding)
+{
+    switch (grounding)
+    {
+    case BottomElectricGrounding::SouthSide:
+        return "south side";
+    case BottomElectricGrounding::SouthwestCorner:
+        return "southwest corner";
+    }
+    return "unknown";
+}
+
 std::string boundarySideName(const BoxSide& side)
 {
     switch (side.index())
@@ -734,6 +783,8 @@ int main(int argc, char* argv[])
     bool printTiming = false;
     std::string outputPostfix = "default";
     std::string electrodeBoundary = "none";
+    BottomElectricGrounding bottomElectricGrounding =
+        BottomElectricGrounding::SouthSide;
     bool useTopElectrode = false;
     bool useTopElectrodeOptionSet = false;
 
@@ -787,6 +838,10 @@ int main(int argc, char* argv[])
         printTiming = parameterBool(parameters, "printTiming", printTiming);
         electrodeBoundary =
             parameterString(parameters, "electrodeBoundary", electrodeBoundary);
+        bottomElectricGrounding =
+            parameterBottomElectricGrounding(parameters,
+                                            "bottomElectricGrounding",
+                                            bottomElectricGrounding);
         const auto useTopElectrodeIt = parameters.find("useTopElectrode");
         if (useTopElectrodeIt != parameters.end())
         {
@@ -830,6 +885,10 @@ int main(int argc, char* argv[])
             useTopElectrodeOptionSet = true;
             useTopElectrode = parseBool(argv[26], "useTopElectrode");
         }
+        if (argc > 27)
+            bottomElectricGrounding =
+                parseBottomElectricGrounding(argv[27],
+                                             "bottomElectricGrounding");
         outputPostfix = "manual";
         for (int i = 1; i < argc; ++i)
             outputPostfix += "_" + std::string(argv[i]);
@@ -911,7 +970,9 @@ int main(int argc, char* argv[])
               << ", mu_S = " << muS << "\n";
     std::cout << "hbar flexoelectric correction: "
               << (includeHbarFlexoCorrection ? "on" : "off") << "\n";
-    std::cout << "Electrical BC: bottom side grounded";
+    std::cout << "Electrical BC: "
+              << bottomElectricGroundingName(bottomElectricGrounding)
+              << " grounded";
     if (useElectrodeBoundary)
         std::cout << ", " << boundarySideName(electrodeBoundarySide)
                   << " side equipotential electrode";
@@ -985,7 +1046,16 @@ int main(int argc, char* argv[])
     const std::vector<double> zeros{0.0, 0.0};
     bcInfo.addCondition(0, boundary::west, condition_type::dirichlet, zeros, 0);
     bcInfo.addCondition(0, boundary::southwest, condition_type::dirichlet, zeros, 1);
-    bcInfo.addCondition(0, boundary::south, condition_type::dirichlet, zeros, 2);
+    if (bottomElectricGrounding == BottomElectricGrounding::SouthSide)
+    {
+        bcInfo.addCondition(0, boundary::south, condition_type::dirichlet,
+                            zeros, 2);
+    }
+    else
+    {
+        bcInfo.addCondition(0, boundary::southwest, condition_type::dirichlet,
+                            zeros, 2);
+    }
     if (useElectrodeBoundary)
         bcInfo.addElectrodeBoundary(0, electrodeBoundarySide, 2);
 

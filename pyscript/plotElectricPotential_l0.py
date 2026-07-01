@@ -31,6 +31,8 @@ FLOAT_PATTERN = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
 class RunMetadata:
     beam_length: float
     height: float
+    num_elements_l: int
+    num_elements_h: int
     youngs_modulus: float
     poissons_ratio: float
     length_scale: float
@@ -52,10 +54,22 @@ class CurvatureResult:
 class PotentialResult:
     y: np.ndarray
     phi: np.ndarray
+    electric_field_2: np.ndarray
+    analytical_model: str
     lambda_e: float
     mu_e: float
+    cl: float
+    ct: float
     mu_eff: float
-    electric_field_2: float
+    h_l_star: float
+    h_t_star: float
+    boundary_layer_length: float | None
+    eta: float
+    a0: float
+    b0: float
+    voltage_reference: float
+    vacuum_permittivity: float
+    is_local_limit: bool
 
 
 @dataclass(frozen=True)
@@ -104,6 +118,13 @@ def parse_log(log_path: Path) -> RunMetadata:
         "beam height",
         log_path,
     )
+    num_elements = re.search(
+        r"\bNumber\s+of\s+elements\s*:\s*(\d+)\s*x\s*(\d+)",
+        text,
+        re.IGNORECASE,
+    )
+    if not num_elements:
+        raise ValueError(f"Cannot find 'Number of elements: <L> x <H>' in {log_path}")
 
     mechanical = re.search(
         rf"Mechanical\s+material\s*:\s*Y\s*=\s*({FLOAT_PATTERN})\s*,\s*"
@@ -139,6 +160,8 @@ def parse_log(log_path: Path) -> RunMetadata:
     return RunMetadata(
         beam_length=beam_length,
         height=height,
+        num_elements_l=int(num_elements.group(1)),
+        num_elements_h=int(num_elements.group(2)),
         youngs_modulus=float(mechanical.group(1)),
         poissons_ratio=float(mechanical.group(2)),
         length_scale=float(mechanical.group(3)),
@@ -436,6 +459,22 @@ def midspan_electric_potential_comparison(
     )
 
 
+def stable_sinh_over_cosh(x: np.ndarray, denominator_arg: float) -> np.ndarray:
+    denominator_arg = abs(float(denominator_arg))
+    x = np.asarray(x, dtype=float)
+    return (
+        np.exp(x - denominator_arg) - np.exp(-x - denominator_arg)
+    ) / (1.0 + math.exp(-2.0 * denominator_arg))
+
+
+def stable_cosh_over_cosh(x: np.ndarray, denominator_arg: float) -> np.ndarray:
+    denominator_arg = abs(float(denominator_arg))
+    x = np.asarray(x, dtype=float)
+    return (
+        np.exp(x - denominator_arg) + np.exp(-x - denominator_arg)
+    ) / (1.0 + math.exp(-2.0 * denominator_arg))
+
+
 def trimmed_slice(n: int, trim_fraction: float) -> slice:
     trim = int(round(n * trim_fraction))
     if trim < 1:
@@ -514,27 +553,200 @@ def analytical_potential(
     metadata: RunMetadata,
     curvature: float,
     npts: int,
+    vacuum_permittivity: float,
+    analytical_model: str,
 ) -> PotentialResult:
     nu = metadata.poissons_ratio
     young = metadata.youngs_modulus
     height = metadata.height
+    length_scale = metadata.length_scale
+    dielectric = metadata.dielectric_permittivity
+    model = analytical_model.lower()
+    if model not in {"bare", "transformed", "local"}:
+        raise ValueError(
+            "--analytical-model must be 'bare', 'transformed', or 'local'"
+        )
+    if abs(dielectric) <= 1.0e-30:
+        raise ValueError("Dielectric permittivity must be nonzero")
 
     lambda_e = young * nu / ((1.0 + nu) * (1.0 - 2.0 * nu))
     mu_e = young / (2.0 * (1.0 + nu))
-    mu_eff = metadata.mu_t - metadata.mu_l * lambda_e / (lambda_e + 2.0 * mu_e)
+    cl = lambda_e + 2.0 * mu_e
+    ct = lambda_e
+    beta = ct / cl
+    mu_eff = metadata.mu_t - metadata.mu_l * beta
 
-    electric_field_2 = curvature * mu_eff / metadata.dielectric_permittivity
     y = np.linspace(-height / 2.0, height / 2.0, npts)
-    phi = -electric_field_2 * (y + height / 2.0)
+    a0 = curvature * mu_eff / dielectric
+    h_l = cl * length_scale * length_scale
+    h_t = ct * length_scale * length_scale
+    h_l_star = h_l
+    h_t_star = h_t
+    boundary_layer_length: float | None = None
+    eta = 0.0
+    b0 = 0.0
+    is_local_limit = True
+
+    if model == "bare":
+        h_l_star = h_l + metadata.mu_l * metadata.mu_l / dielectric
+        h_t_star = h_t + metadata.mu_l * metadata.mu_t / dielectric
+    elif model == "transformed":
+        if abs(dielectric - vacuum_permittivity) <= 1.0e-30:
+            raise ValueError(
+                "dielectricPermittivity and --vacuum-permittivity are too close "
+                "for the transformed analytical solution"
+            )
+        h_l_star = h_l - (
+            vacuum_permittivity
+            * metadata.mu_l
+            * metadata.mu_l
+            / (dielectric * (dielectric - vacuum_permittivity))
+        )
+        h_t_star = h_t - (
+            vacuum_permittivity
+            * metadata.mu_l
+            * metadata.mu_t
+            / (dielectric * (dielectric - vacuum_permittivity))
+        )
+    else:
+        h_l_star = 0.0
+        h_t_star = 0.0
+
+    coefficient_scale = max(abs(h_l_star), abs(h_t_star), 1.0)
+    coefficient_tol = 1.0e-30 * coefficient_scale
+    if model != "local":
+        if h_l_star > coefficient_tol:
+            boundary_layer_length = math.sqrt(h_l_star / cl)
+            eta = h_t_star / h_l_star - beta
+            b0 = metadata.mu_l * curvature * boundary_layer_length * eta / dielectric
+            is_local_limit = abs(b0) <= 1.0e-30
+        elif abs(h_l_star) <= coefficient_tol and abs(h_t_star) <= coefficient_tol:
+            is_local_limit = True
+        else:
+            raise ValueError(
+                "The generalized-traction analytical solution is inadmissible because "
+                f"G_L = {h_l_star:.12e} is not positive."
+            )
+
+    if boundary_layer_length is None:
+        electric_field_2 = np.full_like(y, a0)
+        phi = -a0 * (y + height / 2.0)
+    else:
+        half_arg = height / (2.0 * boundary_layer_length)
+        y_arg = y / boundary_layer_length
+        sinh_over_half_cosh = stable_sinh_over_cosh(y_arg, half_arg)
+        cosh_over_half_cosh = stable_cosh_over_cosh(y_arg, half_arg)
+        phi = -a0 * (y + height / 2.0) + b0 * (
+            sinh_over_half_cosh + math.tanh(half_arg)
+        )
+        electric_field_2 = a0 - (b0 / boundary_layer_length) * cosh_over_half_cosh
 
     return PotentialResult(
         y=y,
         phi=phi,
+        electric_field_2=electric_field_2,
+        analytical_model=model,
         lambda_e=lambda_e,
         mu_e=mu_e,
+        cl=cl,
+        ct=ct,
         mu_eff=mu_eff,
-        electric_field_2=electric_field_2,
+        h_l_star=h_l_star,
+        h_t_star=h_t_star,
+        boundary_layer_length=boundary_layer_length,
+        eta=eta,
+        a0=a0,
+        b0=b0,
+        voltage_reference=0.0,
+        vacuum_permittivity=vacuum_permittivity,
+        is_local_limit=is_local_limit,
     )
+
+
+def shift_potential_reference(
+    potential: PotentialResult,
+    voltage_reference: float,
+) -> PotentialResult:
+    shift = voltage_reference - float(potential.phi[0])
+    return PotentialResult(
+        y=potential.y,
+        phi=potential.phi + shift,
+        electric_field_2=potential.electric_field_2,
+        analytical_model=potential.analytical_model,
+        lambda_e=potential.lambda_e,
+        mu_e=potential.mu_e,
+        cl=potential.cl,
+        ct=potential.ct,
+        mu_eff=potential.mu_eff,
+        h_l_star=potential.h_l_star,
+        h_t_star=potential.h_t_star,
+        boundary_layer_length=potential.boundary_layer_length,
+        eta=potential.eta,
+        a0=potential.a0,
+        b0=potential.b0,
+        voltage_reference=voltage_reference,
+        vacuum_permittivity=potential.vacuum_permittivity,
+        is_local_limit=potential.is_local_limit,
+    )
+
+
+def with_analytical_potential(
+    comparison: MidspanPotentialComparison,
+    potential: PotentialResult,
+) -> MidspanPotentialComparison:
+    return MidspanPotentialComparison(
+        y_numerical=comparison.y_numerical,
+        phi_numerical=comparison.phi_numerical,
+        y_analytical=potential.y,
+        phi_analytical=potential.phi,
+        x_reference=comparison.x_reference,
+        x_index=comparison.x_index,
+    )
+
+
+def bottom_midspan_numerical_potential(
+    comparison: MidspanPotentialComparison,
+) -> tuple[float, float]:
+    bottom_index = int(np.argmin(comparison.y_numerical))
+    return (
+        float(comparison.y_numerical[bottom_index]),
+        float(comparison.phi_numerical[bottom_index]),
+    )
+
+
+def metadata_annotation(
+    metadata: RunMetadata,
+    curvature: float | None = None,
+    x_reference: float | None = None,
+    potential: PotentialResult | None = None,
+) -> str:
+    lines = [
+        rf"$L={metadata.beam_length:.6g},\ H={metadata.height:.6g},\ \ell={metadata.length_scale:.6g}$",
+        rf"$E={metadata.youngs_modulus:.6g},\ \nu={metadata.poissons_ratio:.6g}$",
+        rf"$n_L={metadata.num_elements_l},\ n_H={metadata.num_elements_h}$",
+    ]
+    if potential is not None and abs(potential.vacuum_permittivity) > 0.0:
+        lines.append(rf"$\epsilon_0={potential.vacuum_permittivity:.6g}$")
+    if (
+        potential is not None
+        and potential.boundary_layer_length is not None
+        and not potential.is_local_limit
+    ):
+        lines.append(
+            rf"$\ell_b={potential.boundary_layer_length:.6g},\ \eta={potential.eta:.3e}$"
+        )
+    if curvature is not None:
+        lines.append(rf"$\kappa={curvature:.6e}$")
+    if x_reference is not None:
+        lines.append(rf"$X={x_reference:.6g}$")
+    if potential is not None and not math.isclose(
+        potential.voltage_reference,
+        0.0,
+        rel_tol=1.0e-12,
+        abs_tol=1.0e-14,
+    ):
+        lines.append(rf"$\phi_b={potential.voltage_reference:.6e}$")
+    return "\n".join(lines)
 
 
 def plot_potential(
@@ -565,17 +777,10 @@ def plot_potential(
     ax.set_title("Analytical Electric Potential")
     ax.grid(True, color="#d8d8d8", linewidth=0.75, alpha=0.85)
 
-    info = "\n".join(
-        [
-            f"H={metadata.height:.6g}, E={metadata.youngs_modulus:.6g}, nu={metadata.poissons_ratio:.6g}",
-            f"eps={metadata.dielectric_permittivity:.6g}, muL={metadata.mu_l:.6g}, muT={metadata.mu_t:.6g}",
-            f"kappa={curvature:.6e}",
-        ]
-    )
     ax.text(
         0.97,
         0.03,
-        info,
+        metadata_annotation(metadata, curvature=curvature, potential=potential),
         transform=ax.transAxes,
         ha="right",
         va="bottom",
@@ -596,6 +801,8 @@ def plot_potential(
 
 def plot_midspan_comparison(
     comparison: MidspanPotentialComparison,
+    metadata: RunMetadata,
+    potential: PotentialResult,
     output_path: Path,
     thickness_scale: float,
     potential_scale: float,
@@ -633,7 +840,11 @@ def plot_midspan_comparison(
     ax.text(
         0.97,
         0.03,
-        f"x={comparison.x_reference:.6g}",
+        metadata_annotation(
+            metadata,
+            x_reference=comparison.x_reference,
+            potential=potential,
+        ),
         transform=ax.transAxes,
         ha="right",
         va="bottom",
@@ -703,7 +914,7 @@ def parse_args() -> argparse.Namespace:
         description=(
             "Read a flexoelectric follower-moment result folder, compute the final-step "
             "beam curvature from ParaView .pvd/.vts output, read material parameters "
-            "from log.txt, and plot the zero-length-scale analytical electric potential."
+            "from log.txt, and plot the analytical electric potential."
         )
     )
     parser.add_argument(
@@ -798,6 +1009,27 @@ def parse_args() -> argparse.Namespace:
         help="Potential-axis unit label. Default: 'run voltage unit'.",
     )
     parser.add_argument(
+        "--vacuum-permittivity",
+        type=float,
+        default=0.0,
+        help=(
+            "Vacuum permittivity epsilon_0 used by --analytical-model transformed. "
+            "Default: 0."
+        ),
+    )
+    parser.add_argument(
+        "--analytical-model",
+        choices=["bare", "transformed", "local"],
+        default="bare",
+        help=(
+            "Analytical model. 'bare' uses G_L=C_L*ell^2+mu_L^2/epsilon and "
+            "G_T=C_T*ell^2+mu_L*mu_T/epsilon, matching includeHbarFlexoCorrection=0. "
+            "'transformed' uses the epsilon_0-corrected coefficients from the "
+            "Legendre-transformed form, matching includeHbarFlexoCorrection=1. "
+            "'local' uses the classical zero-boundary-layer limit. Default: bare."
+        ),
+    )
+    parser.add_argument(
         "--show",
         action="store_true",
         help="Show the Matplotlib window after saving the figure.",
@@ -823,10 +1055,24 @@ def main() -> None:
         if args.curvature_method == "circle"
         else curvature_result.finite_difference
     )
-    potential = analytical_potential(metadata, curvature, args.npts)
-    midspan_comparison = midspan_electric_potential_comparison(
+    potential = analytical_potential(
+        metadata,
+        curvature,
+        args.npts,
+        args.vacuum_permittivity,
+        args.analytical_model,
+    )
+    midspan_comparison_unshifted = midspan_electric_potential_comparison(
         curvature_result.vts_path,
         metadata,
+        potential,
+    )
+    bottom_midspan_y, bottom_midspan_phi = bottom_midspan_numerical_potential(
+        midspan_comparison_unshifted
+    )
+    potential = shift_potential_reference(potential, bottom_midspan_phi)
+    midspan_comparison = with_analytical_potential(
+        midspan_comparison_unshifted,
         potential,
     )
 
@@ -860,6 +1106,8 @@ def main() -> None:
     )
     plot_midspan_comparison(
         comparison=midspan_comparison,
+        metadata=metadata,
+        potential=potential,
         output_path=comparison_output_path,
         thickness_scale=args.thickness_scale,
         potential_scale=args.potential_scale,
@@ -880,8 +1128,22 @@ def main() -> None:
     print(f"Curvature used:                    {curvature:.12e}")
     print(f"lambda_e = {potential.lambda_e:.12e}")
     print(f"mu_e     = {potential.mu_e:.12e}")
-    print(f"mu_eff   = {potential.mu_eff:.12e}")
-    print(f"E2       = {potential.electric_field_2:.12e}")
+    print(f"analytical_model = {potential.analytical_model}")
+    print(f"mu_eff_bulk = {potential.mu_eff:.12e}")
+    print(f"G_L         = {potential.h_l_star:.12e}")
+    print(f"G_T         = {potential.h_t_star:.12e}")
+    if potential.boundary_layer_length is not None:
+        print(f"ell_b       = {potential.boundary_layer_length:.12e}")
+        print(f"eta         = {potential.eta:.12e}")
+        print(f"A0          = {potential.a0:.12e}")
+        print(f"B0          = {potential.b0:.12e}")
+    print(f"E2_min      = {np.min(potential.electric_field_2):.12e}")
+    print(f"E2_max      = {np.max(potential.electric_field_2):.12e}")
+    print(
+        "Numerical mid-span bottom potential: "
+        f"{bottom_midspan_phi:.12e} at Y={bottom_midspan_y:.12e}"
+    )
+    print(f"Analytical voltage reference:       {potential.voltage_reference:.12e}")
     print(f"phi_bottom = {potential.phi[0]:.12e}")
     print(f"phi_top    = {potential.phi[-1]:.12e}")
     print(f"Delta_phi  = {potential.phi[-1] - potential.phi[0]:.12e}")

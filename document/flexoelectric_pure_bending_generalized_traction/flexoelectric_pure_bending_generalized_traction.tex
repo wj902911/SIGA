@@ -1,0 +1,234 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{booktabs}
+
+\title{Small-Strain Flexoelectric Pure Bending with Generalized Traction}
+\author{}
+\date{}
+
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\eps}{\varepsilon}
+
+\begin{document}
+\maketitle
+
+\section{Setting}
+
+Consider a beam in small-strain pure bending.  The reference thickness coordinate is
+\[
+  Y \in [-a,a], \qquad a=\frac{H}{2}.
+\]
+The imposed axial bending strain is taken as
+\[
+  \eps_{11}(Y)=-\kappa Y,
+\]
+and the transverse strain is left unknown:
+\[
+  \eps_{22}(Y)=v(Y).
+\]
+This is the important difference from the simpler plane-stress-style derivation: the
+local transverse stress is not prescribed to be zero pointwise.  Instead, the free
+surface condition is imposed on the generalized traction.
+
+For an isotropic linear elastic solid,
+\[
+  C_L=\lambda+2\mu, \qquad C_T=\lambda,
+\]
+so the local transverse stress is
+\begin{equation}
+  \sigma_{22}=C_L v-C_T\kappa Y .
+  \label{eq:sigma22}
+\end{equation}
+
+\section{Open-Circuit Electric Field}
+
+Let a prime denote differentiation with respect to \(Y\).  The one-dimensional
+open-circuit electric displacement relation is written as
+\begin{equation}
+  D_2=\epsilon E_2+\mu_L v'-\mu_T\kappa .
+  \label{eq:D2}
+\end{equation}
+For the open-circuit through-thickness response,
+\[
+  D_2=0,
+\]
+and therefore
+\begin{equation}
+  E_2(Y)=\frac{\mu_T\kappa-\mu_L v'(Y)}{\epsilon}.
+  \label{eq:E2-eliminate}
+\end{equation}
+
+\section{Higher-Order Stress After Elimination}
+
+Before eliminating the electric field, the relevant higher-order stress component is
+\begin{equation}
+  S_{222}=H_L v'-H_T\kappa-\mu_L E_2 .
+\end{equation}
+Using Eq.~\eqref{eq:E2-eliminate},
+\begin{equation}
+  S_{222}=G_L v'-G_T\kappa ,
+  \label{eq:S222}
+\end{equation}
+where
+\begin{equation}
+  G_L=H_L+\frac{\mu_L^2}{\epsilon},
+  \qquad
+  G_T=H_T+\frac{\mu_L\mu_T}{\epsilon}.
+  \label{eq:G-general}
+\end{equation}
+
+The coefficients \(H_L,H_T\) depend on the strain-gradient/flexoelectric material
+form used in the numerical model.  Two useful cases are:
+\[
+\begin{array}{lll}
+\toprule
+\text{model} & H_L,\ H_T & G_L,\ G_T \\
+\midrule
+\text{bare} &
+C_L\ell^2,\ C_T\ell^2 &
+C_L\ell^2+\mu_L^2/\epsilon,\ C_T\ell^2+\mu_L\mu_T/\epsilon
+\\[2mm]
+\text{transformed} &
+C_L\ell^2-\dfrac{\mu_L^2}{\epsilon-\epsilon_0},\
+C_T\ell^2-\dfrac{\mu_L\mu_T}{\epsilon-\epsilon_0}
+&
+C_L\ell^2-\dfrac{\epsilon_0\mu_L^2}{\epsilon(\epsilon-\epsilon_0)},\
+C_T\ell^2-\dfrac{\epsilon_0\mu_L\mu_T}{\epsilon(\epsilon-\epsilon_0)}
+\\
+\bottomrule
+\end{array}
+\]
+The plotting script uses the bare model by default.  This matches a numerical run
+where the additional \(\bar H\) flexoelectric correction is not subtracted.  The
+transformed model is kept as an option for runs where that correction is included.
+
+\section{Generalized Free-Surface Conditions}
+
+The through-thickness equilibrium and ordinary traction condition are
+\[
+  \left(\sigma_{22}-S_{222}'\right)'=0,
+  \qquad
+  \left.\left(\sigma_{22}-S_{222}'\right)\right|_{Y=\pm a}=0 .
+\]
+Thus,
+\begin{equation}
+  \sigma_{22}-S_{222}'=0 .
+  \label{eq:generalized-traction}
+\end{equation}
+Using Eqs.~\eqref{eq:sigma22} and \eqref{eq:S222}, this becomes
+\begin{equation}
+  C_L v-C_T\kappa Y-G_L v''=0 .
+\end{equation}
+Equivalently,
+\begin{equation}
+  v-\xi^2 v''=\beta\kappa Y,
+  \qquad
+  \xi=\sqrt{\frac{G_L}{C_L}},
+  \qquad
+  \beta=\frac{C_T}{C_L}.
+  \label{eq:ode}
+\end{equation}
+
+The higher-order traction is also free at the top and bottom surfaces:
+\[
+  S_{222}(\pm a)=0.
+\]
+Therefore,
+\begin{equation}
+  v'(\pm a)=\gamma\kappa,
+  \qquad
+  \gamma=\frac{G_T}{G_L}.
+  \label{eq:higher-bc}
+\end{equation}
+Equations~\eqref{eq:ode} and \eqref{eq:higher-bc} are the replacement for the
+pointwise assumption \(\sigma_{22}=0\).
+
+\section{Closed Form}
+
+Define
+\[
+  \eta=\gamma-\beta=\frac{G_T}{G_L}-\frac{C_T}{C_L}.
+\]
+The solution of Eq.~\eqref{eq:ode} satisfying Eq.~\eqref{eq:higher-bc} is
+\begin{equation}
+  v(Y)=\beta\kappa Y
+  +\kappa\xi\eta\,
+  \frac{\sinh(Y/\xi)}{\cosh(a/\xi)} ,
+  \label{eq:v}
+\end{equation}
+and
+\begin{equation}
+  v'(Y)=\beta\kappa
+  +\kappa\eta\,
+  \frac{\cosh(Y/\xi)}{\cosh(a/\xi)} .
+  \label{eq:vprime}
+\end{equation}
+
+The local transverse stress is then
+\[
+  \sigma_{22}
+  =C_L\kappa\xi\eta\,
+  \frac{\sinh(Y/\xi)}{\cosh(a/\xi)} .
+\]
+It is generally not zero.  However, this is exactly balanced by \(S_{222}'\), so
+the generalized traction \(\sigma_{22}-S_{222}'\) vanishes.
+
+\section{Electric Potential}
+
+Substitution of Eq.~\eqref{eq:vprime} into Eq.~\eqref{eq:E2-eliminate} gives
+\begin{equation}
+  E_2(Y)=
+  \frac{\kappa}{\epsilon}
+  \left[
+    \mu_T-\mu_L\beta
+    -\mu_L\eta\,
+    \frac{\cosh(Y/\xi)}{\cosh(a/\xi)}
+  \right].
+  \label{eq:E2}
+\end{equation}
+Let
+\[
+  A_0=\frac{\kappa}{\epsilon}\left(\mu_T-\mu_L\beta\right),
+  \qquad
+  B_0=\frac{\mu_L\kappa\xi\eta}{\epsilon}.
+\]
+Since \(E_2=-\phi'\), and choosing the bottom surface gauge
+\[
+  \phi(-a)=0,
+\]
+the electric potential is
+\begin{equation}
+  \boxed{
+  \phi(Y)=
+  -A_0(Y+a)
+  +B_0
+  \left[
+    \frac{\sinh(Y/\xi)}{\cosh(a/\xi)}
+    +\tanh(a/\xi)
+  \right]
+  }.
+  \label{eq:phi}
+\end{equation}
+
+When \(G_L=0\), the boundary-layer length \(\xi\) disappears and the reduced local
+solution is
+\[
+  v(Y)=\beta\kappa Y,\qquad
+  E_2=A_0,\qquad
+  \phi(Y)=-A_0(Y+a).
+\]
+If \(G_L<0\), the boundary-layer length is not real, so this closed form is not an
+admissible real-valued solution.
+
+\section{Implementation Notes}
+
+The plotting script implements Eq.~\eqref{eq:phi}.  It reads
+\(H,L,E,\nu,\ell,\epsilon,\mu_L,\mu_T\) from \texttt{log.txt}, extracts
+\(\kappa\) from the selected ParaView step, and uses the bottom-surface gauge
+\(\phi(-H/2)=0\).  Its default analytical model is \texttt{bare};
+\texttt{transformed} and \texttt{local} are available through
+\texttt{--analytical-model}.
+
+\end{document}

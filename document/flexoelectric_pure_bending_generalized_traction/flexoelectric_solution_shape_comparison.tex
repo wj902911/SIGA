@@ -1,0 +1,336 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+
+\title{Why the Two Flexoelectric Potential Formulas Look the Same}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Short Answer}
+
+The two potential expressions have the same visible shape because both come from
+integrating a through-thickness electric field of the form
+\[
+  E_2(Y)=\hbox{constant}
+  +\hbox{constant}\,
+  \frac{\cosh(Y/\ell_b)}{\cosh(a/\ell_b)},
+  \qquad a=\frac{H}{2}.
+\]
+After integration, both potentials must have the form
+\[
+  \phi(Y)
+  =
+  \hbox{linear term}
+  +
+  \hbox{sinh boundary-layer term}
+  +
+  \hbox{constant}.
+\]
+Therefore, the visual form of the final potential is not enough to identify the
+mechanical assumption used in the derivation.  The difference is mainly in the
+coefficients that define the boundary-layer length and amplitude.
+
+\section{Same Shape, Different Voltage Reference}
+
+The older expression may be written as
+\begin{equation}
+  \phi_{\mathrm{old}}(Y)
+  =
+  -A_0^{\mathrm{old}}Y
+  +
+  B_0^{\mathrm{old}}
+  \frac{\sinh(Y/\ell_b)}{\cosh(a/\ell_b)}
+  +
+  \phi_0 .
+  \label{eq:old-shape}
+\end{equation}
+Here \(\phi_0\) is arbitrary because electric potential is defined only up to a
+constant.
+
+The new generalized-traction expression was written with the bottom surface as
+the voltage reference:
+\[
+  \phi_{\mathrm{new}}(-a)=0.
+\]
+It is
+\begin{equation}
+  \phi_{\mathrm{new}}(Y)
+  =
+  -A_0^{\mathrm{new}}(Y+a)
+  +
+  B_0^{\mathrm{new}}
+  \left[
+    \frac{\sinh(Y/\xi)}{\cosh(a/\xi)}
+    +
+    \tanh(a/\xi)
+  \right].
+  \label{eq:new-bottom-gauge}
+\end{equation}
+Expanding Eq.~\eqref{eq:new-bottom-gauge} gives
+\begin{equation}
+  \phi_{\mathrm{new}}(Y)
+  =
+  -A_0^{\mathrm{new}}Y
+  +
+  B_0^{\mathrm{new}}
+  \frac{\sinh(Y/\xi)}{\cosh(a/\xi)}
+  +
+  \left[
+    -A_0^{\mathrm{new}}a
+    +
+    B_0^{\mathrm{new}}\tanh(a/\xi)
+  \right].
+  \label{eq:new-expanded}
+\end{equation}
+Thus Eq.~\eqref{eq:new-bottom-gauge} is the same shape as
+Eq.~\eqref{eq:old-shape}.  The extra \(\tanh(a/\xi)\) term only fixes the
+constant so that \(\phi(-a)=0\).  It is not an additional physical field.
+
+\section{Where the Shorthand Definitions Differ}
+
+The two derivations use the same kind of basis function, but they do not
+necessarily use the same coefficients.  The safest way to compare the formulas
+is not to start from \(\ell_b\) and \(\xi\).  Instead, compare the coefficients
+from which those lengths are built.
+
+Define
+\[
+  C_L=\lambda+2\mu,\qquad
+  C_T=\lambda,\qquad
+  \beta=\frac{C_T}{C_L}.
+\]
+Then the bulk part of the electric field gives
+\[
+  A_0=\frac{\kappa}{\epsilon}\left(\mu_T-\mu_L\beta\right).
+\]
+This part is common.  The difference is in the shorthand used for the
+boundary-layer part.
+
+\[
+\begin{array}{>{\raggedright\arraybackslash}p{0.20\linewidth}
+                >{\raggedright\arraybackslash}p{0.36\linewidth}
+                >{\raggedright\arraybackslash}p{0.36\linewidth}}
+\toprule
+Quantity & Older shorthand & New generalized-traction shorthand \\
+\midrule
+Primary coefficient &
+\[
+  H_L^*
+  =
+  C_L\ell^2
+  -
+  \frac{\epsilon_0\mu_L^2}
+       {\epsilon(\epsilon-\epsilon_0)}
+\]
+&
+\[
+  G_L
+  =
+  H_L+\frac{\mu_L^2}{\epsilon}
+\]
+\\
+Transverse coefficient &
+\[
+  H_T^*
+  =
+  C_T\ell^2
+  -
+  \frac{\epsilon_0\mu_L\mu_T}
+       {\epsilon(\epsilon-\epsilon_0)}
+\]
+&
+\[
+  G_T
+  =
+  H_T+\frac{\mu_L\mu_T}{\epsilon}
+\]
+\\
+Bare model substitution &
+\[
+  \begin{aligned}
+  H_L^*&=C_L\ell^2,\\
+  H_T^*&=C_T\ell^2
+  \quad(\epsilon_0=0)
+  \end{aligned}
+\]
+&
+\[
+  \begin{aligned}
+  G_L&=C_L\ell^2+\frac{\mu_L^2}{\epsilon},\\
+  G_T&=C_T\ell^2+\frac{\mu_L\mu_T}{\epsilon}
+  \end{aligned}
+\]
+\\
+\bottomrule
+\end{array}
+\]
+
+The starred quantities \(H_L^*,H_T^*\) are the coefficients used in the older
+reduced formula.  The quantities \(G_L,G_T\) are the effective coefficients that
+appear in the higher-order stress after the electric field is eliminated from
+the open-circuit condition \(D_2=0\):
+\begin{equation}
+  G_L=H_L+\frac{\mu_L^2}{\epsilon},
+  \qquad
+  G_T=H_T+\frac{\mu_L\mu_T}{\epsilon}.
+  \label{eq:G}
+\end{equation}
+For the default bare generalized-traction model used by the plotting script,
+\begin{equation}
+  H_L=C_L\ell^2,\qquad H_T=C_T\ell^2,
+\end{equation}
+so
+\begin{equation}
+  G_L=C_L\ell^2+\frac{\mu_L^2}{\epsilon},
+  \qquad
+  G_T=C_T\ell^2+\frac{\mu_L\mu_T}{\epsilon}.
+  \label{eq:G-bare}
+\end{equation}
+Therefore \(H_L^*\) and \(G_L\) are not just two symbols for the same definition.
+In the bare case with \(\ell=0\),
+\[
+  H_L^*=0,
+  \qquad
+  G_L=\frac{\mu_L^2}{\epsilon}.
+\]
+So the older shorthand gives no real boundary-layer length from \(H_L^*\), while
+the generalized-traction shorthand still gives a finite length if \(\mu_L\ne0\).
+
+\section{How the Different Coefficients Propagate}
+
+Once \(H_L^*,H_T^*\) or \(G_L,G_T\) are chosen, the rest of the shorthand follows.
+This is where the formulas look deceptively similar:
+
+\[
+\begin{array}{>{\raggedright\arraybackslash}p{0.20\linewidth}
+                >{\raggedright\arraybackslash}p{0.36\linewidth}
+                >{\raggedright\arraybackslash}p{0.36\linewidth}}
+\toprule
+Quantity & Older expression & New generalized-traction expression \\
+\midrule
+Boundary length &
+\[
+  \ell_b=\sqrt{\frac{H_L^*}{C_L}}
+\]
+&
+\[
+  \xi=\sqrt{\frac{G_L}{C_L}}
+\]
+\\
+Boundary mismatch &
+\[
+  \eta_{\mathrm{old}}
+  =
+  \frac{H_T^*}{H_L^*}
+  -
+  \frac{C_T}{C_L}
+\]
+&
+\[
+  \eta_{\mathrm{new}}
+  =
+  \frac{G_T}{G_L}
+  -
+  \frac{C_T}{C_L}
+\]
+\\
+Potential amplitude &
+\[
+  B_0^{\mathrm{old}}
+  =
+  \frac{\mu_L\kappa\ell_b}{\epsilon}
+  \eta_{\mathrm{old}}
+\]
+&
+\[
+  B_0^{\mathrm{new}}
+  =
+  \frac{\mu_L\kappa\xi}{\epsilon}
+  \eta_{\mathrm{new}}
+\]
+\\
+\bottomrule
+\end{array}
+\]
+
+The structural similarity is the source of the confusion.  If a reader sees only
+this second table, it is tempting to think \(\ell_b\) and \(\xi\) are the same.
+They are the same only if the underlying definitions also give
+\[
+  H_L^*=G_L,\qquad H_T^*=G_T.
+\]
+That is a special coefficient choice, not a consequence of the potential formula
+itself.
+
+\section{Mechanical Difference}
+
+If one imposes the local condition
+\[
+  \sigma_{22}=0
+\]
+pointwise as the whole transverse equilibrium statement, then
+\[
+  C_L v-C_T\kappa Y=0,
+  \qquad
+  v(Y)=\beta\kappa Y,
+  \qquad
+  v'(Y)=\beta\kappa .
+\]
+Substitution into the open-circuit electric relation gives a constant electric
+field,
+\[
+  E_2
+  =
+  \frac{\kappa}{\epsilon}
+  \left(\mu_T-\mu_L\beta\right),
+\]
+and therefore the potential is only linear in \(Y\).  There is no sinh
+boundary-layer term.
+
+This is why a formula that contains a sinh term should not be interpreted as the
+pure pointwise \(\sigma_{22}=0\) solution.  It already contains a higher-order
+boundary-layer correction.  The issue is subtler: the older reduced expression
+uses a plane-stress-like transverse closure for the bulk response and then adds a
+boundary-layer correction through \(H_L^*,H_T^*\).  The new derivation instead
+solves the generalized traction condition directly,
+\begin{equation}
+  \sigma_{22}-S_{222}'=0,
+  \label{eq:generalized-traction}
+\end{equation}
+with the higher-order free-surface condition
+\begin{equation}
+  S_{222}(\pm a)=0 .
+\end{equation}
+Therefore the local stress \(\sigma_{22}\) is allowed to be nonzero inside the
+beam.  It is balanced by \(S_{222}'\), so the generalized traction is zero.
+
+\section{Practical Consequence}
+
+The two formulas become exactly the same if their coefficient sets are also the
+same:
+\[
+  \ell_b=\xi,\qquad
+  \eta_{\mathrm{old}}=\eta_{\mathrm{new}},\qquad
+  B_0^{\mathrm{old}}=B_0^{\mathrm{new}},
+\]
+and if the voltage constants are chosen consistently.  Otherwise they can look
+nearly identical on paper while producing different numerical curves.
+
+For the current plotting script, this is the main distinction:
+\[
+  \hbox{old comparison: coefficients based on } H_L^*,H_T^*,
+\]
+\[
+  \hbox{new default comparison: coefficients based on } G_L,G_T.
+\]
+In particular, in the bare generalized-traction model, even when the mechanical
+length scale \(\ell=0\), the term \(\mu_L^2/\epsilon\) can still make
+\(G_L>0\), giving a finite effective boundary-layer length.
+
+\end{document}
