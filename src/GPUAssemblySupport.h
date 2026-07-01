@@ -74,6 +74,83 @@ inline unsigned long long bytesForCount(long long count,
     return static_cast<unsigned long long>(count) * elementSize;
 }
 
+inline int checkedIntCount(long long count, const char* label)
+{
+    if (count < 0)
+        throw std::runtime_error(std::string(label) +
+                                 " requested a negative device-array size.");
+    if (count > std::numeric_limits<int>::max())
+        throw std::runtime_error(
+            std::string(label) +
+            " is too large for the current DeviceArray int-sized storage. Requested " +
+            std::to_string(count) + " entries.");
+    return static_cast<int>(count);
+}
+
+inline int chooseMemoryFittingChunkCount(
+    const std::string& label, int totalCount, unsigned long long bytesPerItem,
+    int maxCountByIndex, double memorySafetyFraction, int requestedCount,
+    bool report)
+{
+    if (totalCount <= 0)
+        return 0;
+    if (bytesPerItem == 0)
+        return totalCount;
+
+    memorySafetyFraction =
+        std::min(1.0, std::max(0.10, memorySafetyFraction));
+
+    size_t freeMem = 0;
+    size_t totalMem = 0;
+    cudaError_t err = cudaMemGetInfo(&freeMem, &totalMem);
+    if (err != cudaSuccess)
+        throw std::runtime_error(std::string(
+            "cudaMemGetInfo failed while sizing ") + label + ": " +
+                                 cudaGetErrorString(err));
+
+    const unsigned long long available =
+        static_cast<unsigned long long>(
+            static_cast<double>(freeMem) * memorySafetyFraction);
+    int chunkCount = totalCount;
+    if (requestedCount > 0)
+        chunkCount = std::min(chunkCount, requestedCount);
+    if (maxCountByIndex > 0)
+        chunkCount = std::min(chunkCount, maxCountByIndex);
+    if (available > 0)
+    {
+        const unsigned long long byMemory =
+            std::max(1ULL, available / bytesPerItem);
+        chunkCount = std::min(
+            chunkCount,
+            static_cast<int>(
+                std::min<unsigned long long>(
+                    byMemory,
+                    static_cast<unsigned long long>(
+                        std::numeric_limits<int>::max()))));
+    }
+    chunkCount = std::max(1, chunkCount);
+
+    const unsigned long long required =
+        static_cast<unsigned long long>(chunkCount) * bytesPerItem;
+    if (required > available && chunkCount == 1)
+        throw std::runtime_error(
+            label + " cannot fit even a one-item chunk. Required " +
+            gibString(required) + ", available with safety margin " +
+            gibString(available) + ".");
+
+    if (report)
+    {
+        std::cout << "Assembly chunk sizing [" << label << "]: "
+                  << chunkCount << " of " << totalCount
+                  << " items/chunk, workspace " << gibString(required)
+                  << " (" << required << " bytes), memory target "
+                  << gibString(available) << " (" << available
+                  << " bytes)\n";
+    }
+
+    return chunkCount;
+}
+
 template <typename T>
 unsigned long long vectorBytes(DeviceVectorView<T> view)
 {
